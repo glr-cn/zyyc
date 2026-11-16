@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 - 佐雍云仓数据中心</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="login-body">
+  <div class="login-bg" aria-hidden="true"></div>
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="login-logo">佐</span>
+      <div class="login-brand-text">
+        <h1>佐雍云仓数据中心</h1>
+        <p>仓储 · 物流 · 数据一体化管理平台</p>
+      </div>
+    </div>
+    <form id="loginForm">
+      <label>账号<input name="username" autocomplete="username" placeholder="请输入账号" required></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required></label>
+      <button type="submit" class="primary">登录</button>
+      <div id="err" class="err"></div>
+    </form>
+    <div class="login-foot">佐雍云仓数据中心 · 内部系统，请勿外传</div>
+  </div>
+  <script src="js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# 构建上下文排除项（数据安全铁律：镜像里绝不能有库文件）
+node_modules
+data
+.git
+.workbuddy
+scripts
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+jwt.secret
+npm-debug.log*
+*.log

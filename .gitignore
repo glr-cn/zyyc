@@ -1,0 +1,10 @@
+node_modules/
+data/
+*.db
+.env
+jwt.secret
+# 测试临时产物（Chrome profile / 临时库）
+scripts/_*_prof/
+# 本地平台元数据（不含业务代码）
+.workbuddy/
+.wbapp_*.genie

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>佐雍云仓数据中心</title>
+  <link rel="stylesheet" href="css/style.css?v=4">
+</head>
+<body>
+  <div id="app" class="layout" style="display:none">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-logo">佐</span>
+        <span class="brand-name">佐雍云仓数据中心</span>
+      </div>
+      <nav id="nav"></nav>
+    </aside>
+    <div id="mega" class="mega-panel"></div>
+    <div class="main">
+      <!-- 单行顶部 Header：左 Tab 标签栏 | 右 用户信息 + 退出（品牌区已移除，避免与首个 Tab 混淆） -->
+      <header class="app-header">
+        <div class="tabbar" id="tabbar"></div>
+        <div class="user"><span id="cloudState" class="cloud-state" title="云空间状态">云空间检测中…</span><span id="uname"></span><button id="logout">退出</button></div>
+      </header>
+      <section class="content" id="content"></section>
+    </div>
+  </div>
+  <!-- 云服务 SDK（CDN 全局 WorkBuddyCloud；npm 安装失败时按技能规范回退 CDN 形态） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
+  <!-- 静态资源版本串：菜单结构 v3（日志中心）。每次改菜单/渲染逻辑 +1，强制浏览器拉新脚本 -->
+  <script src="js/api.js?v=3"></script>
+  <!-- 全局日期范围选择组件：需在 consume 它的页面脚本之前加载 -->
+  <script src="js/date-range-picker.js?v=2"></script>
+  <script src="js/cloud.js?v=3"></script>
+  <script src="js/signoff.js?v=3"></script>
+  <script src="js/customers.js?v=3"></script>
+  <script src="js/orders.js?v=3"></script>
+  <script src="js/inventory.js?v=3"></script>
+  <script src="js/workhours.js?v=7"></script>
+  <script src="js/charts.js?v=3"></script>
+  <script src="js/analytics.js?v=3"></script>
+  <script src="js/dashboard.js?v=3"></script>
+  <script src="js/users.js?v=3"></script>
+  <script src="js/roles.js?v=4"></script>
+  <script src="js/logistics-quotes.js?v=3"></script>
+  <script src="js/smart-quote.js?v=3"></script>
+  <script src="js/smart-quote-history.js?v=3"></script>
+  <script src="js/permission-tree.js?v=4"></script>
+  <script src="js/log-center.js?v=3"></script>
+  <script src="js/menu.js?v=3"></script>
+  <script src="js/tabs.js?v=3"></script>
+  <script src="js/app.js?v=3"></script>
+</body>
+</html>

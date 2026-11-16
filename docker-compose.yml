@@ -1,0 +1,24 @@
+# 本地/自有服务器验证用（Northflank 上按下面的参数在控制台创建即可）
+services:
+  erp:
+    build: .
+    container_name: zyyc-erp
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      ERP_DB_PATH: /data/erp.db
+      # 必须固定，否则每次重建容器会导致所有登录态失效
+      ERP_JWT_SECRET: "please-change-me-to-a-long-random-string"
+    volumes:
+      - erp-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+volumes:
+  erp-data:

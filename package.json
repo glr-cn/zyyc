@@ -1,0 +1,21 @@
+{
+  "name": "light-erp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "佐雍云仓数据中心（仓储/发货服务企业）",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "migrate:logs": "node scripts/migrate_audit_logs.js",
+    "verify:data": "node scripts/verify_data_integrity.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.0",
+    "node-sqlite3-wasm": "^0.8.61",
+    "xlsx": "^0.18.5"
+  },
+  "comment": "数据库驱动双运行时：Node 22+ 用内置 node:sqlite；Node 20（部署运行时无该内置模块）自动回退 node-sqlite3-wasm。建表 SQL 与业务 SQL 完全一致（见 src/db/driver.js）。"
+}
