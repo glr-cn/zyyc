@@ -199,7 +199,7 @@
           '<div class="drp-day-main">' +
             '<div class="drp-nav"><button type="button" data-nav="-1" title="上一月">‹</button><button type="button" data-nav="0" title="回到本月">今天</button><button type="button" data-nav="1" title="下一月">›</button></div>' +
             '<div class="drp-cals">' + months.map((m) => this._calHtml(m)).join('') + '</div>' +
-            '<div class="drp-foot"><span class="drp-hint">开始：' + (this.draft.start || '—') + '　结束：' + (this.draft.end || '—') + '</span>' +
+            '<div class="drp-foot">' +
               '<button type="button" data-act="clear">清空</button><button type="button" class="primary" data-act="ok">确定</button></div>' +
           '</div>' +
         '</div>';
