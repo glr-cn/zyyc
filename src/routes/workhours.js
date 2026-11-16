@@ -48,6 +48,18 @@ router.use((req, res, next) => {
   next();
 });
 
+// 当前登录人展示名（提交人落库口径：display_name 优先，回退 username）
+function operatorName(req) {
+  const u = (req && req.user) || {};
+  return u.display_name || u.username || '未知用户';
+}
+
+// 管理员口径（与前端 state.isAdmin 一致）：admin / super_admin
+function isAdminUser(req) {
+  const u = (req && req.user) || {};
+  return u.role_code === 'admin' || u.role_code === 'super_admin';
+}
+
 // 本期口径：优先用页面 dateFrom/dateTo；未传则默认当前月（与发货 trend=month 一致）
 function resolvePeriod(dateFrom, dateTo) {
   if (dateFrom && dateTo) return { from: dateFrom, to: dateTo };
@@ -156,6 +168,7 @@ router.get('/', (req, res) => {
                w.unit, w.date, w.ship_orders, w.cartons, w.tons, w.cubic, w.pallets, w.project,
                w.main_hours, w.other_hours, w.shared_hours, w.total_hours,
                w.efficiency, w.unit_cost, w.doc_cost, w.remark, w.owner_user_id,
+               w.status, w.submitter, w.submit_time,
                ${STATUS} AS customer_status, 1 AS filled, '' AS suggest_date, 0 AS need_backfill
           FROM work_hours w ${JOIN} ${filledWhere}
         UNION ALL
@@ -164,6 +177,7 @@ router.get('/', (req, res) => {
                '' AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, '' AS project,
                0 AS main_hours, 0 AS other_hours, 0 AS shared_hours, 0 AS total_hours,
                0 AS efficiency, 0 AS unit_cost, 0 AS doc_cost, '' AS remark, c.owner_user_id,
+               'pending' AS status, NULL AS submitter, NULL AS submit_time,
                ${CUST_STATUS} AS customer_status, 0 AS filled,
                ? AS suggest_date, ? AS need_backfill
           FROM customers c
@@ -253,17 +267,99 @@ router.post('/archive', (req, res) => {
 
   db.exec('BEGIN');
   try {
-    const upd = db.prepare("UPDATE work_hours SET status='archived' WHERE work_id=? AND status='pending'");
+    const submitter = operatorName(req);
+    const upd = db.prepare(
+      "UPDATE work_hours SET status='archived', submitter=?, submit_time=datetime('now','localtime') WHERE work_id=? AND status='pending'"
+    );
     let n = 0;
-    for (const id of targetIds) n += upd.run(id).changes;
+    for (const id of targetIds) n += upd.run(submitter, id).changes;
     db.exec('COMMIT');
     writeAudit(req, 'archive', 0, { scope: b.all ? 'all' : 'ids', ids: targetIds },
-      { archived: n, warehouse, work_type: workType });
-    res.json({ archived: n, ids: targetIds });
+      { archived: n, submitter, warehouse, work_type: workType });
+    res.json({ archived: n, ids: targetIds, submitter });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (_) { /* ignore */ }
     res.status(500).json({ error: '归档失败：' + e.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 单条「提交归档」：pending → archived，写入当前登录人 submitter + 当前时间 submit_time。
+// 只改状态字段，绝不物理删除、绝不改动业务数据；审计 action=submit（日志中心显示「提交归档」）。
+// 权限：本仓菜单权限（顶层 router 门禁）+ 行级归属（ensureOwn）。
+// ---------------------------------------------------------------------------
+router.post('/:id/submit', (req, res) => {
+  const b = req.body || {};
+  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
+  if (!old) return res.status(404).json({ error: '工时记录不存在' });
+  if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权提交他人负责的工时记录' });
+  if (b.warehouse && b.warehouse !== old.warehouse) {
+    return res.status(403).json({ error: '禁止跨仓提交：该记录属于' + old.warehouse });
+  }
+  if (old.status === 'archived') return res.status(400).json({ error: '该记录已归档，无需重复提交' });
+
+  const submitter = operatorName(req);
+  const info = db.prepare(
+    "UPDATE work_hours SET status='archived', submitter=?, submit_time=datetime('now','localtime') WHERE work_id=? AND status='pending'"
+  ).run(submitter, old.work_id);
+  if (!info.changes) return res.status(409).json({ error: '提交失败：记录状态已变化，请刷新后重试' });
+
+  const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(old.work_id);
+  writeAudit(req, 'submit', old.work_id, old, row);
+  res.json({ data: svc.calcRow(row.work_type, row) });
+});
+
+// ---------------------------------------------------------------------------
+// 「撤回」：archived → pending，清空 submitter / submit_time，记录可再次行内编辑。
+// 权限（双重校验）：
+//   1) 提交人本人（submitter 与当前登录人展示名一致）；
+//   2) 或管理员（admin / super_admin）。
+// 审计 action=withdraw（日志中心显示「撤回」+ 操作人），可追溯到是谁撤回的。
+// ---------------------------------------------------------------------------
+router.post('/:id/withdraw', (req, res) => {
+  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
+  if (!old) return res.status(404).json({ error: '工时记录不存在' });
+  if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权撤回他人负责的工时记录' });
+  if (old.status !== 'archived') return res.status(400).json({ error: '该记录未归档，无需撤回' });
+
+  const me = operatorName(req);
+  if (!isAdminUser(req) && String(old.submitter || '') !== me) {
+    return res.status(403).json({ error: '仅提交人本人或管理员可撤回该记录' });
+  }
+
+  const info = db.prepare(
+    "UPDATE work_hours SET status='pending', submitter=NULL, submit_time=NULL WHERE work_id=? AND status='archived'"
+  ).run(old.work_id);
+  if (!info.changes) return res.status(409).json({ error: '撤回失败：记录状态已变化，请刷新后重试' });
+
+  const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(old.work_id);
+  writeAudit(req, 'withdraw', old.work_id, old, row);
+  res.json({ data: svc.calcRow(row.work_type, row) });
+});
+
+// ---------------------------------------------------------------------------
+// 「修改提交人」：仅管理员；仅对已归档记录；提交人必须是系统内真实用户（防错别字/脏数据）。
+// 只改 submitter，submit_time 保持原值；审计 action=update（before/after 对比完整留痕）。
+// ---------------------------------------------------------------------------
+router.put('/:id/submitter', (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: '仅管理员可修改提交人' });
+  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
+  if (!old) return res.status(404).json({ error: '工时记录不存在' });
+  if (old.status !== 'archived') return res.status(400).json({ error: '仅已归档记录可修改提交人' });
+
+  const name = String((req.body || {}).submitter || '').trim();
+  if (!name) return res.status(400).json({ error: '提交人不能为空' });
+  if (name.length > 50) return res.status(400).json({ error: '提交人姓名过长（最多 50 字）' });
+  const user = db.prepare('SELECT 1 FROM users WHERE display_name=? OR username=? LIMIT 1').get(name, name);
+  if (!user) return res.status(400).json({ error: '提交人必须是系统内的用户' });
+  if (name === String(old.submitter || '')) return res.json({ data: svc.calcRow(old.work_type, old) });
+
+  db.prepare('UPDATE work_hours SET submitter=? WHERE work_id=?').run(name, old.work_id);
+  const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(old.work_id);
+  writeAudit(req, 'update', old.work_id, old, row, { content: {
+    before: { submitter: old.submitter }, after: { submitter: row.submitter }, note: '修改提交人',
+  } });
+  res.json({ data: svc.calcRow(row.work_type, row) });
 });
 
 // GET /template：日期预填当月 1 号，客户名称列预填本仓全部货主。
@@ -349,8 +445,10 @@ router.post('/', (req, res) => {
     .prepare(
       `INSERT INTO work_hours
         (warehouse,work_type,customer_id,customer_name,unit,date,ship_orders,cartons,tons,cubic,pallets,project,
-         main_hours,other_hours,shared_hours,total_hours,efficiency,unit_cost,doc_cost,remark,owner_user_id,status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         main_hours,other_hours,shared_hours,total_hours,efficiency,unit_cost,doc_cost,remark,owner_user_id,status,
+         submitter,submit_time)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+               CASE WHEN ?='archived' THEN datetime('now','localtime') ELSE NULL END)`
     )
     .run(
       r.warehouse, r.work_type, r.customer_id, r.customer_name, r.unit, r.date,
@@ -364,7 +462,9 @@ router.post('/', (req, res) => {
       r.efficiency != null ? r.efficiency : null,
       r.unit_cost != null ? r.unit_cost : null,
       r.doc_cost != null ? r.doc_cost : null,
-      r.remark, req.user.user_id, r.status
+      r.remark, req.user.user_id, r.status,
+      autoArchive ? operatorName(req) : null, // 提交人：行内提交即归档时落当前登录人
+      r.status                                 // CASE 判据：archived 才写 submit_time
     );
   const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(info.lastInsertRowid);
   writeAudit(req, 'create', info.lastInsertRowid, null, row);
@@ -377,6 +477,10 @@ router.put('/:id', (req, res) => {
   const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
   if (!old) return res.status(404).json({ error: '工时记录不存在' });
   if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权修改他人负责的工时记录' });
+  // 归档不可变：已归档记录必须先在「已归档」视图撤回，回到 pending 后才可编辑。
+  if (old.status === 'archived') {
+    return res.status(403).json({ error: '已归档记录不可直接修改，请先撤回后再编辑' });
+  }
 
   const workType = (b.work_type || old.work_type).trim();
   // 跨仓改写防护：记录归属仓库只由库内原值决定，禁止借编辑把记录迁到其他仓
@@ -462,6 +566,10 @@ router.delete('/:id', (req, res) => {
   const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
   if (!old) return res.status(404).json({ error: '工时记录不存在' });
   if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权删除他人负责的工时记录' });
+  // 已归档记录默认不可删：管理员也请先撤回；仅超级管理员可走 /force 物理删除。
+  if (old.status === 'archived' && (!req.user || req.user.role_code !== 'super_admin')) {
+    return res.status(403).json({ error: '已归档记录不可直接删除，请先撤回（或联系超级管理员）' });
+  }
   db.prepare('DELETE FROM work_hours WHERE work_id=?').run(old.work_id);
   writeAudit(req, 'delete', old.work_id, old, null);
   res.json({ ok: true });
@@ -624,10 +732,12 @@ router.post('/import', upload.single('file'), (req, res) => {
 });
 
 // 审计：统一走全局日志服务（新旧字段双写，模块=工时管理）
-function writeAudit(req, action, recordId, before, after) {
+// extra：可传 { content } 覆盖 before/after 对比内容（如「修改提交人」只记该字段）
+function writeAudit(req, action, recordId, before, after, extra) {
   require('../services/auditLog').writeLog(req, {
     table: 'work_hours', module: '工时管理', action,
     targetId: recordId, before, after,
+    ...(extra || {}),
   });
 }
 

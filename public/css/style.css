@@ -624,6 +624,8 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-inline-grid tr.wh-gap-row td.ops,
 .grid.wh-inline-grid tr.wh-gap-row:hover td.ops { background:#fff8e1; }
 .grid.wh-inline-grid td.ops .ops-none { color:#b8bec9; font-size:13px; }
+/* 行内表格操作列：提交 / 删除 两个按钮在固定列宽内完整显示（不换行、不被裁切） */
+.grid.wh-inline-grid td.ops button { padding:4px 6px; margin-right:3px; font-size:12px; }
 .wh-gap-row [data-out] { font-weight:600; color:#2e7d32; }
 
 /* ===== 全局日期范围选择组件 ERP.DateRangePicker ===== */

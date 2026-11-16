@@ -28,14 +28,20 @@ const MODULE_BY_TABLE = {
 };
 
 const MODULES = ['客户资料', '工时管理', '物流报价', '智能测单', '系统/权限', '其他业务'];
-const ACTION_LABELS = { create: '新增', update: '修改', delete: '删除', import: '导入' };
+const ACTION_LABELS = {
+  create: '新增', update: '修改', delete: '删除', import: '导入',
+  submit: '提交归档', withdraw: '撤回', archive: '归档',
+};
 
-// 兼容中文/英文/历史别名，收敛为 4 个受控枚举值，杜绝脏 action
+// 兼容中文/英文/历史别名，收敛为受控枚举值，杜绝脏 action
 const ACTION_ENUM = {
   create: 'create', 新增: 'create', add: 'create',
   update: 'update', 修改: 'update', edit: 'update',
   delete: 'delete', 删除: 'delete', remove: 'delete',
   import: 'import', 导入: 'import',
+  submit: 'submit', 提交: 'submit', 提交归档: 'submit',
+  withdraw: 'withdraw', 撤回: 'withdraw',
+  archive: 'archive', 归档: 'archive',
 };
 
 function toEnum(action) {

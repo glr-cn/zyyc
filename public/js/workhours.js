@@ -31,6 +31,7 @@ function createWorkhoursPage(warehouse) {
         { key: 'ship_orders', label: '发货单量', num: true, trend: true }, { key: 'main_hours', label: '主工时', num: true, trend: true },
         { key: 'efficiency', label: '时效', num: true, trend: true }, { key: 'other_hours', label: '其他工时', num: true },
         { key: 'remark', label: '备注' },
+        { key: 'submitter', label: '提交人' },
         // 已隐藏冗余列：shared_hours 公摊工时 / total_hours 总工时 / unit_cost 单均成本（仅展示层隐藏，数据与计算逻辑不变）
       ],
       收货: [
@@ -39,23 +40,26 @@ function createWorkhoursPage(warehouse) {
         { key: 'tons', label: '吨', num: true }, { key: 'cubic', label: '方', num: true }, { key: 'pallets', label: '托盘', num: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'doc_cost', label: '单据成本', num: true },
+        { key: 'submitter', label: '提交人' },
       ],
       库内: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目' }, { key: 'unit', label: '单位' },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
+        { key: 'submitter', label: '提交人' },
       ],
       后勤: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目' },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
+        { key: 'submitter', label: '提交人' },
       ],
     };
 
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    const state = { warehouse: warehouse, workType: '发货', trend: 'month', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: '', dateTo: '', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false };
+    const state = { warehouse: warehouse, workType: '发货', trend: 'month', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: '', dateTo: '', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
 
     function todayStr() {
       const d = new Date();
@@ -78,13 +82,20 @@ function createWorkhoursPage(warehouse) {
     async function refreshRole() {
       try {
         const me = await API.get('/auth/me');
-        const code = me && me.user && me.user.role_code;
+        const u = (me && me.user) || {};
+        const code = u.role_code;
         state.isSuper = code === 'super_admin';
+        state.isAdmin = code === 'super_admin' || code === 'admin';
+        state.meName = u.display_name || u.username || '';
         // 顺手把最新用户快照写回，其他页面读 localStorage 也能拿到新角色
         localStorage.setItem('erp_user', JSON.stringify(me.user));
       } catch (e) {
         // /me 不可达时回退本地快照：宁可少显示按钮（后端仍强校验），不可越权显示
         state.isSuper = isSuperAdmin();
+        state.isAdmin = state.isSuper || (function () {
+          try { return JSON.parse(localStorage.getItem('erp_user') || '{}').role === '管理员'; } catch (x) { return false; }
+        })();
+        try { const u = JSON.parse(localStorage.getItem('erp_user') || '{}'); state.meName = u.display_name || u.username || ''; } catch (x) { state.meName = ''; }
       }
     }
 
@@ -147,6 +158,13 @@ function createWorkhoursPage(warehouse) {
       bindToolbar();
       initDateRange();
       $('whBody').addEventListener('click', onBodyClick);
+      // 点「提交」时 pointerdown 先于 blur：打标记让 blur 不再触发一次自动保存，
+      // 由提交逻辑统一读取当前输入值保存并归档（避免重复写入 / 旧值覆盖）。
+      $('whBody').addEventListener('pointerdown', (e) => {
+        const b = e.target.closest && e.target.closest('[data-act="submit"]');
+        const tr = b && b.closest('tr');
+        if (tr) tr.dataset.skipBlurSave = '1';
+      }, true);
       load();
     }
 
@@ -348,9 +366,9 @@ function createWorkhoursPage(warehouse) {
       }
     }
 
-    // 发货行内直编的列宽（px）：勾选34 / 日期96 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注130 / 操作84
+    // 发货行内直编的列宽（px）：勾选34 / 日期96 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
     // 用 table-layout:fixed + colgroup 锁定，输入框 width:100% 贴合列宽，杜绝撑破；操作列 sticky 贴右。
-    const INLINE_WIDTHS = { 发货: [34, 96, 150, 62, 80, 78, 72, 84, 130, 84] };
+    const INLINE_WIDTHS = { 发货: [34, 96, 150, 62, 80, 78, 72, 84, 116, 72, 96] };
 
     function renderHead() {
       const cols = COLUMNS[state.workType];
@@ -438,6 +456,8 @@ function createWorkhoursPage(warehouse) {
           if (col.key === 'main_hours')  return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="请输入主工时"></td>`;
           if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
           if (col.key === 'remark')      return `<td><input data-if="remark" class="wh-cell-txt" type="text" value="${escapeAttr(r.remark || '')}" placeholder="请输入备注"></td>`;
+          // 未归档：提交人列固定显示 -（尚未提交，不冒充已有提交人）
+          if (col.key === 'submitter')   return '<td class="muted">-</td>';
           // 时效：单量与主工时都 >0 才显示计算值，否则 -（与行内 recalc 口径一致，不显示 0.000）
           if (col.key === 'efficiency') {
             const m = Number(r.main_hours) || 0, s = Number(r.ship_orders) || 0;
@@ -446,6 +466,8 @@ function createWorkhoursPage(warehouse) {
           return '<td class="muted">—</td>';
         }
         if (col.trend && trend) return trendCell(r[col.key], trend[col.key]);
+        // 提交人：已归档显示真实提交人，未归档（含无值）显示 -
+        if (col.key === 'submitter') return `<td>${escapeHtml(r.submitter || '-')}</td>`;
         if (col.num) return `<td class="num">${num(r[col.key])}</td>`;
         if (col.key === 'customer_name') {
           const name = escapeHtml(r.customer_name == null ? '' : r.customer_name);
@@ -456,19 +478,31 @@ function createWorkhoursPage(warehouse) {
         }
         return `<td>${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
       }).join('');
-      // 操作列（发货未归档行内视图）——铁律 3：按登录用户真实角色动态渲染，严禁越权：
-      // - 角色：以 load() 里 refreshRole()（/api/auth/me 库内最新 role_code）写入的 state.isSuper 为准，
-      //   不读 localStorage 旧快照（快照过期曾导致真超管整列空白）。后端 /workhours/:id/force 仍做强校验兜底。
-      // - 超管 + 已填行(wid>0)：渲染红色「删除」按钮（物理删除）。
-      // - 非超管 / 缺口行(wid=0)：显示灰色占位「—」（缺口行库中本无记录可删），
-      //   保持操作列不空白、不同角色列宽一致。
-      const delBtn = (!isGap && state.isSuper)
-        ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条记录（不可恢复）">删除</button>`
-        : '<span class="ops-none" title="仅超级管理员可删除记录">—</span>';
-      const ops = inline
-        ? delBtn
-        : `<button data-act="edit" data-id="${r.work_id}">${state.status === 'archived' ? '查看' : '编辑'}</button>
-           ${state.status === 'pending' ? `<button data-act="del" data-id="${r.work_id}">删除</button>` : ''}`; // 其他 tab 保持原删除逻辑
+      // 操作列 —— 铁律 3：按「行状态 + 登录用户真实角色」动态渲染，严禁越权：
+      //  - archived：查看（只读）/ 撤回（本人或管理员）/ 修改提交人（管理员）/ 删除（仅超管）
+      //  - pending + 行内直编（发货）：提交（蓝色，保存并归档）/ 删除（红色，仅超管物理删除）
+      //  - pending + 非行内（收货/库内/后勤）：编辑 / 提交 / 删除
+      // 角色取自 load() 里 refreshRole()（/api/auth/me 库内最新 role_code），不读 localStorage 旧快照。
+      const archived = String(r.status || (state.status === 'archived' ? 'archived' : 'pending')) === 'archived';
+      let ops;
+      if (archived) {
+        // 撤回：提交人本人或管理员；修改提交人：仅管理员；删除：仅超管
+        const canWithdraw = state.isAdmin || (!!state.meName && r.submitter === state.meName);
+        ops = `<button data-act="view" data-id="${wid}" title="查看归档详情（只读）">查看</button>`
+          + (canWithdraw ? `<button data-act="withdraw" data-id="${wid}" title="撤回到未归档，撤回后可重新编辑">撤回</button>` : '')
+          + (state.isAdmin ? `<button data-act="editSubmitter" data-id="${wid}" title="修改该记录的提交人">修改提交人</button>` : '')
+          + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条记录（不可恢复）">删除</button>` : '');
+      } else if (inline) {
+        const submitBtn = `<button data-act="submit" data-id="${wid}" class="primary" title="保存当前行并提交归档">提交</button>`;
+        const delBtn = (!isGap && state.isSuper)
+          ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条记录（不可恢复）">删除</button>`
+          : '<span class="ops-none" title="仅超级管理员可删除记录">—</span>';
+        ops = submitBtn + delBtn;
+      } else {
+        ops = `<button data-act="edit" data-id="${r.work_id}">编辑</button>
+               <button data-act="submit" data-id="${r.work_id}" class="primary" title="提交归档">提交</button>
+               <button data-act="del" data-id="${r.work_id}">删除</button>`;
+      }
       return `<tr class="${isGap ? 'wh-gap-row' : ''}" ${inline ? rowAttrs : ''}>${ck}${cells}<td class="ops">${ops}</td></tr>`;
     }
 
@@ -483,6 +517,30 @@ function createWorkhoursPage(warehouse) {
       const act = e.target.dataset.act, id = e.target.dataset.id;
       if (!act || !id) return;
       if (act === 'edit') openModal(id);
+      // 归档详情：只读查看（归档数据不可直接改，需先撤回）
+      if (act === 'view') openModal(id, null, { readonly: true });
+      // 提交归档：行内视图走行内保存（带当前输入值）；其他 tab 直接提交
+      if (act === 'submit') {
+        const tr = e.target.closest('tr');
+        if (tr && typeof tr.__submit === 'function') { tr.__submit(); return; }
+        if (!confirm('确定要提交归档吗？归档后不可直接修改。')) return;
+        const btn = e.target; btn.disabled = true;
+        API.post('/workhours/' + id + '/submit', { warehouse: state.warehouse, work_type: state.workType })
+          .then(() => { alert('已提交归档'); load(); })
+          .catch((ex) => { btn.disabled = false; alert('提交失败：' + ex.message); });
+        return;
+      }
+      // 撤回：archived → pending，撤回后回到「未归档」可继续行内编辑
+      if (act === 'withdraw') {
+        if (!confirm('确定要撤回该条记录吗？撤回后可重新编辑。')) return;
+        const btn = e.target; btn.disabled = true;
+        API.post('/workhours/' + id + '/withdraw', { warehouse: state.warehouse, work_type: state.workType })
+          .then(() => { alert('已撤回，可在「未归档」中继续编辑'); load(); })
+          .catch((ex) => { btn.disabled = false; alert('撤回失败：' + ex.message); });
+        return;
+      }
+      // 修改提交人：管理员弹下拉选择系统内用户
+      if (act === 'editSubmitter') { openSubmitterModal(id); return; }
       // 普通删除（其他 tab，原逻辑）
       if (act === 'del' && confirm('确认删除该工时记录？此操作将写入审计日志。')) {
         API.req('DELETE', '/workhours/' + id).then(load).catch((ex) => alert(ex.message));
@@ -502,9 +560,9 @@ function createWorkhoursPage(warehouse) {
       }
     }
 
-    // 行内直编：实时计算时效 + 失焦/回车自动保存。
-    // 缺口行(wid=0) → POST /workhours (auto_archive=true, 保存后归档并移出未填列表)
-    // 已填行(wid>0) → PUT /workhours/:wid 更新原记录（绝不产生重复）
+    // 行内直编：实时计算时效 + 失焦/回车自动保存为 pending 草稿；「提交」按钮保存并归档。
+    // 缺口行(wid=0) → POST /workhours（草稿待提交；提交时 auto_archive=true）
+    // 已填行(wid>0) → PUT /workhours/:wid，提交时再 POST /:id/submit（写提交人 + 提交时间）
     function bindInlineRow(tr) {
       const el = (k) => tr.querySelector('[data-if="' + k + '"]');
       const val = (k) => { const e = el(k); return e ? e.value : ''; };
@@ -522,64 +580,90 @@ function createWorkhoursPage(warehouse) {
         const u = el('unit'); if (u) u.value = '';
         recalc();
       };
-
-      async function saveRow() {
-        if (tr.dataset.saving === '1') return;   // 防 blur+Enter 重复触发
-        const ship = Number(val('ship_orders')) || 0;
-        const main = Number(val('main_hours')) || 0;
-        const wid = Number(tr.dataset.rowWid) || 0;
-        // 防呆核心（铁律级）：单量>0 且 主工时>0 才允许保存（与「时效必须可计算」口径一致）。
-        // 空值/0 一律取消保存，绝不入库全 0 或缺主工时的脏记录。
-        // 缺口行(wid=0)：复位成真正未填态；已填行(wid>0)：重新载入恢复数据库原值，避免 UI 空格与库值不一致。
-        if (!(ship > 0) || !(main > 0)) {
-          tr.dataset.saving = '0';
-          if (wid > 0) load(); else resetRow();
-          return;
-        }
-        tr.dataset.saving = '1';
+      // 当前行输入 → 后端 payload（行内编辑的唯一取数口径）
+      function payloadOf() {
         const cid = tr.dataset.rowCid;
-        // 单位真空时默认按「单」提交（后端必填校验口径），但 UI 保持空不冒充已填
-        const unit = val('unit') || '单';
-        const payload = {
+        return {
           warehouse: state.warehouse, work_type: '发货',
           customer_id: cid != null && cid !== '' ? Number(cid) : null,
           customer_name: tr.dataset.rowCname || null,
           date: tr.dataset.rowDate || todayStr(),
-          unit: unit,
-          ship_orders: ship,
-          main_hours: main,
+          // 单位真空时默认按「单」提交（后端必填校验口径），但 UI 保持空不冒充已填
+          unit: val('unit') || '单',
+          ship_orders: Number(val('ship_orders')) || 0,
+          main_hours: Number(val('main_hours')) || 0,
           other_hours: Number(val('other_hours')) || 0,
           shared_hours: 0,
           remark: (val('remark') || '').trim() || null,
         };
-        if (wid > 0) {
-          payload.warehouse = state.warehouse;
-          payload.work_type = '发货';
-        } else {
-          payload.auto_archive = true;           // 缺口行保存即归档
-        }
-        try {
-          if (wid > 0) await API.put('/workhours/' + wid, payload);
-          else await API.post('/workhours', payload);
-          await load();                           // 重绘：缺口行消失 / 已填行显示最新值
-        } catch (ex) {
-          tr.dataset.saving = '0';
-          alert('保存失败：' + ex.message);
-        }
       }
+      // archive=false：失焦草稿（pending，仍留在未归档列表）
+      // archive=true ：提交归档（缺口行 POST auto_archive；已填行 PUT + /submit）
+      async function persist(archive, explicit) {
+        const ship = Number(val('ship_orders')) || 0;
+        const main = Number(val('main_hours')) || 0;
+        // 防呆核心（铁律级）：单量>0 且 主工时>0 才允许保存（与「时效必须可计算」口径一致）。
+        // 空值/0 一律取消保存，绝不入库全 0 或缺主工时的脏记录。
+        if (!(ship > 0) || !(main > 0)) {
+          if (explicit) { alert('请先填写发货单量（>0）和主工时（>0）后再提交'); return false; }
+          const w = Number(tr.dataset.rowWid) || 0;
+          if (w > 0) load(); else resetRow();   // 已填行恢复库值；缺口行复位成真空态
+          return false;
+        }
+        // 串行化：若上一次保存仍在进行，先等它完成，防止重复 POST / 旧值覆盖新值
+        if (tr.__saving) { try { await tr.__saving; } catch (e) { /* 交给本轮重试 */ } }
+        const wid = Number(tr.dataset.rowWid) || Number(tr.__savedWid) || 0;
+        const payload = payloadOf();
+        const run = (async () => {
+          if (wid > 0) {
+            await API.put('/workhours/' + wid, payload);
+            if (archive) await API.post('/workhours/' + wid + '/submit', { warehouse: state.warehouse, work_type: '发货' });
+          } else if (archive) {
+            payload.auto_archive = true;      // 缺口行提交：保存即归档（后端写 submitter / submit_time）
+            const res = await API.post('/workhours', payload);
+            tr.__savedWid = res && res.data && res.data.work_id;
+          } else {
+            const res = await API.post('/workhours', payload);  // 失焦草稿：pending
+            tr.__savedWid = res && res.data && res.data.work_id;
+          }
+        })();
+        tr.__saving = run;
+        try {
+          await run;
+        } catch (ex) {
+          alert((archive ? '提交失败：' : '保存失败：') + ex.message);
+          return false;
+        } finally {
+          tr.__saving = null;
+        }
+        if (archive) alert('已提交归档');
+        await load();
+        return true;
+      }
+
+      // 操作列「提交」：二次确认 → 保存当前行 → 归档（不再触发 blur 自动保存）
+      tr.__submit = async () => {
+        if (!confirm('确定要提交归档吗？归档后不可直接修改。')) return;
+        await persist(true, true);
+      };
 
       tr.querySelectorAll('[data-if]').forEach((e) => {
         e.addEventListener('input', recalc);
-        e.addEventListener('blur', saveRow);
-        e.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveRow(); } });
+        e.addEventListener('blur', () => {
+          // 点「提交」时 pointerdown 已打好标记：跳过本次自动保存，由提交逻辑统一处理
+          if (tr.dataset.skipBlurSave === '1') { delete tr.dataset.skipBlurSave; return; }
+          persist(false, false);
+        });
+        e.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); persist(false, false); } });
       });
       recalc();
     }
 
     // ---------- 弹窗（按 work_type 动态表单；归属仓库锁定为当前页面仓库） ----------
     // preset：缺口行"填写"传入的预选客户 { customer_id, customer_name, date }
-    async function openModal(id, preset) {
+    async function openModal(id, preset, opts) {
       const isEdit = !!id;
+      const readonly = !!(opts && opts.readonly); // 已归档只读查看：禁用输入、隐藏保存
       preset = preset || {};
       let cur = {};
       if (isEdit) {
@@ -639,7 +723,7 @@ function createWorkhoursPage(warehouse) {
       modal.className = 'modal-overlay';
       modal.innerHTML = `
       <div class="modal">
-        <div class="modal-head"><span>${isEdit ? '编辑工时' : '新增工时'}（${workType} · ${state.warehouse}）</span><button class="close" type="button">×</button></div>
+        <div class="modal-head"><span>${readonly ? '查看' : (isEdit ? '编辑' : '新增')}工时（${workType} · ${state.warehouse}）</span><button class="close" type="button">×</button></div>
         <div class="modal-body">${fields.join('')}
           <div class="full" style="display:flex;gap:24px;color:var(--muted);font-size:13px">
             <span>总工时：<b id="f_total" style="color:var(--text)">0.000</b> 小时</span>
@@ -651,6 +735,11 @@ function createWorkhoursPage(warehouse) {
       </div>`;
       document.body.appendChild(modal);
       modal.querySelectorAll('.close').forEach((b) => (b.onclick = () => modal.remove()));
+      if (readonly) {
+        // 归档数据只读：全部控件禁用，移除保存按钮（修改需先撤回）
+        modal.querySelectorAll('input,select,textarea').forEach((e) => { e.disabled = true; });
+        const sb = modal.querySelector('#saveBtn'); if (sb) sb.remove();
+      }
 
       function numV(id) { const v = modal.querySelector(id).value; return v === '' ? null : Number(v); }
       function preview() {
@@ -707,6 +796,44 @@ function createWorkhoursPage(warehouse) {
           else await API.post('/workhours', payload);
           modal.remove(); load();
         } catch (ex) { errEl.textContent = ex.message; }
+      };
+    }
+
+    // 修改提交人（仅管理员）：下拉选择系统内真实用户，保存后写审计（只记 submitter 前后值）
+    async function openSubmitterModal(id) {
+      let users = [];
+      try { users = (await API.get('/users')).data || []; } catch (ex) { alert('读取用户列表失败：' + ex.message); return; }
+      const names = [...new Set(users.map((u) => u.display_name || u.username).filter(Boolean))];
+      if (!names.length) { alert('系统内暂无可选用户'); return; }
+      const row = state.lastRows.find((x) => Number(x.work_id) === Number(id)) || {};
+      const cur = row.submitter || '';
+      const opts = names.map((n) => `<option value="${escapeAttr(n)}" ${n === cur ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `<div class="modal" style="max-width:420px">
+        <div class="modal-head"><span>修改提交人</span><button class="close" type="button">×</button></div>
+        <div class="modal-body">
+          <label>提交人<select id="spName">${opts}</select></label>
+          <div class="err" id="spErr"></div>
+        </div>
+        <div class="modal-foot"><button type="button" class="sp-cancel">取消</button><button type="button" class="primary sp-ok">保存</button></div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const close = () => overlay.remove();
+      overlay.querySelector('.close').onclick = close;
+      overlay.querySelector('.sp-cancel').onclick = close;
+      overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+      overlay.querySelector('.sp-ok').onclick = async () => {
+        const name = overlay.querySelector('#spName').value;
+        const btn = overlay.querySelector('.sp-ok');
+        btn.disabled = true;
+        try {
+          await API.put('/workhours/' + id + '/submitter', { submitter: name });
+          close(); await load();
+        } catch (ex) {
+          overlay.querySelector('#spErr').textContent = ex.message;
+          btn.disabled = false;
+        }
       };
     }
 

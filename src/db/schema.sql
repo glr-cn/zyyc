@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS work_hours (
   doc_cost       REAL,                          -- 单据成本（收货:总工时/箱数）
   remark         TEXT,                          -- 备注
   status         TEXT NOT NULL DEFAULT 'pending',-- 归档状态：pending 待提交/未归档、archived 已归档；历史行默认 pending
+  submitter      TEXT,                          -- 提交人（点击「提交」时的登录用户名字快照；未提交为 NULL）
+  submit_time    TEXT,                          -- 提交归档时间（datetime('now','localtime')；撤回后清空）
   owner_user_id  INTEGER REFERENCES users(user_id),  -- 行级隔离（沿用阶段5）
   created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );

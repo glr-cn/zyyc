@@ -133,6 +133,10 @@ require('./migrateCustomerLink').run(_conn);
 // 历史行自动全部设为「未归档」。幂等、全事务、迁移前后校验原有列指纹，失败即回滚阻止启动。
 require('./migrateWorkhoursStatus').run(_conn);
 
+// 工时提交归档字段迁移：旧库补 work_hours.submitter / submit_time（可空，历史行保持 NULL）。
+// 幂等、全事务、迁移前后校验原有列指纹，失败即回滚阻止启动。
+require('./migrateWorkhoursSubmitter').run(_conn);
+
 // 角色种子数据（仅首次；schema.sql 的 role_code 为 NOT NULL UNIQUE 无默认值，
 // 种子必须带齐 role_code/data_scope/is_readonly/is_system，否则全新库启动即崩）
 const roleCount = _conn.prepare('SELECT COUNT(*) AS c FROM roles').get().c;

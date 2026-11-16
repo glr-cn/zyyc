@@ -107,7 +107,7 @@ function req(method, url, token, body) {
     })})()`);
   ok('发货表格启用 wh-inline-grid', layout.fixedCls === true, layout);
   ok('table-layout=fixed', layout.layout === 'fixed', layout);
-  ok('colgroup 锁定 10 列宽', layout.colCount === 10 && layout.colWidths.every((w) => /px$/.test(w)), layout);
+  ok('colgroup 锁定 11 列宽', layout.colCount === 11 && layout.colWidths.every((w) => /px$/.test(w)), layout);
   ok('操作列表头 sticky 贴右', layout.opsSticky === 'sticky' && layout.opsRight === '0px', layout);
 
   // 2. 输入框不撑破：输入框宽度 <= 列宽

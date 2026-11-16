@@ -148,10 +148,16 @@ SELECT
     WHEN 'update' THEN '修改'
     WHEN 'delete' THEN '删除'
     WHEN 'import' THEN '导入'
+    WHEN 'submit' THEN '提交归档'
+    WHEN 'withdraw' THEN '撤回'
+    WHEN 'archive' THEN '归档'
     WHEN '新增' THEN '新增'
     WHEN '修改' THEN '修改'
     WHEN '删除' THEN '删除'
     WHEN '导入' THEN '导入'
+    WHEN '提交' THEN '提交归档'
+    WHEN '撤回' THEN '撤回'
+    WHEN '归档' THEN '归档'
     ELSE '历史未知操作'
   END AS action,
   COALESCE(a.target_id, a.record_id) AS target_id,
