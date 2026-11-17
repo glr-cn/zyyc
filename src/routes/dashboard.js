@@ -116,7 +116,10 @@ function fetchArchivedRows({ req, warehouse, workType, startDate, endDate }) {
   return db.prepare(sql).all(...params);
 }
 
-// ========== 汇总：库内公摊工时总额（用于发货组分摊） ==========
+// ========== 汇总：库内工时总额（作为公摊分摊给发货客户） ==========
+// 业务口径：库内工时的 main_hours + other_hours 都算作"公摊成本"，
+// 按发货客户单量比例分摊出去（shared_hours 字段原本是独立的公摊工时录入列，
+// 但库内录入页从未暴露此字段，所以改为用 main+other 汇总）
 function fetchTotalInternalShared({ req, warehouse, startDate, endDate }) {
   const scope = ownerScope(req);
   const clauses = ["status = 'archived'", "work_type = '库内'"];
@@ -126,9 +129,14 @@ function fetchTotalInternalShared({ req, warehouse, startDate, endDate }) {
   clauses.push('date >= ?'); params.push(startDate);
   clauses.push('date <= ?'); params.push(endDate);
   const row = db.prepare(
-    `SELECT COALESCE(SUM(shared_hours),0) AS t FROM work_hours WHERE ${clauses.join(' AND ')}`
+    `SELECT COALESCE(SUM(main_hours + other_hours), 0) AS t_main,
+            COALESCE(SUM(shared_hours), 0)            AS t_shared,
+            COUNT(*)                                   AS cnt
+     FROM work_hours WHERE ${clauses.join(' AND ')}`
   ).get(...params);
-  return Number(row.t) || 0;
+  const total = (Number(row.t_main) || 0) + (Number(row.t_shared) || 0);
+  console.log(`[看板分摊-库内公摊] ${warehouse} ${startDate}~${endDate} | 行=${row.cnt} main+other=${row.t_main} shared=${row.t_shared} => TOTAL=${total}`);
+  return total;
 }
 
 // ========== 聚合：按 (customer_id, customer_name) ==========
@@ -259,6 +267,8 @@ function buildShippingList({ req, warehouse, curStart, curEnd, prevStart, prevEn
   const prevTotalPublicShared = fetchTotalInternalShared({ warehouse, startDate: prevStart, endDate: prevEnd, req });
   const curQualSumQty  = out.filter(o => o.cur_ship_qty  > 100).reduce((s, o) => s + o.cur_ship_qty,  0);
   const prevQualSumQty = out.filter(o => o.prev_ship_qty > 100).reduce((s, o) => s + o.prev_ship_qty, 0);
+  console.log(`[看板分摊-分母] curPeriod curQualSumQty=${curQualSumQty} curTotalShared=${curTotalPublicShared} | prevPeriod prevQualSumQty=${prevQualSumQty} prevTotalShared=${prevTotalPublicShared}`);
+  console.log(`[看板分摊-参与客户] cur>100客户名单=${out.filter(o=>o.cur_ship_qty>100).map(o=>o.customer_name+'('+o.cur_ship_qty+')').join(',')||'(无)'}`);
 
   for (const o of out) {
     let curSharedNew  = 0;
