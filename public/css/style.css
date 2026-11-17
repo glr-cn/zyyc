@@ -778,17 +778,18 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
   border-bottom:1px solid #eef1f6; white-space:nowrap;
 }
 .db-table tr:last-child td { border-bottom:none; }
-.db-table tr:hover td { background:#f8fbff; }
+.db-table tbody tr:nth-child(even) td { background:#f9f9f9; }
+.db-table tr:hover td { background:#eef4ff !important; }
 .db-table td.num, .db-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .db-table td.cust, .db-table th.cust { font-weight:600; }
 
 .db-table th.ops-head { width:100px; }
 
-/* 环比颜色 */
-.wow { display:inline-block; min-width:54px; text-align:right; font-weight:600; }
-.wow.pos { color:#16a34a; }
-.wow.neg { color:#dc2626; }
-.wow.muted { color:var(--muted); }
+/* 环比颜色（增强语义） */
+.wow { display:inline-block; min-width:68px; text-align:right; font-weight:600; letter-spacing:0.2px; }
+.wow.pos { color:#52c41a; }
+.wow.neg { color:#f5222d; }
+.wow.muted { color:var(--muted); font-weight:400; }
 
 .db-empty-row td { text-align:center; color:var(--muted); padding:28px; }
 .db-err { padding:24px; text-align:center; color:#dc2626; font-size:13px; }

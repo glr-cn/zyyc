@@ -82,8 +82,18 @@ const API = {
     if (!res.ok) await this._fail(res);
     return res.json();
   },
-  get(u) {
-    return this.req('GET', u);
+  get(u, params) {
+    let url = u;
+    // 可选第二参数：普通对象 → 自动拼 query string（null/undefined 跳过）
+    if (params && typeof params === 'object' && !Array.isArray(params)) {
+      const sp = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) {
+        if (v != null && v !== '') sp.append(k, String(v));
+      }
+      const qs = sp.toString();
+      if (qs) url += (u.indexOf('?') >= 0 ? '&' : '?') + qs;
+    }
+    return this.req('GET', url);
   },
   post(u, b) {
     return this.req('POST', u, b);

@@ -116,9 +116,12 @@ function dashboardPage(host) {
    * 数值 → 渲染为 "12.500%" 并按正负着色（green 正 / red 负 / muted 零）
    */
   function wowCell(v) {
-    if (v == null) return `<span class="muted">-</span>`;
-    const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'muted';
-    return `<span class="wow ${cls}">${v > 0 ? '+' : ''}${Number(v).toFixed(3)}%</span>`;
+    if (v == null) return `<span class="wow muted">-</span>`;
+    const n = Number(v);
+    if (n === 0) return `<span class="wow muted">0.000%</span>`;
+    const cls = n > 0 ? 'pos' : 'neg';
+    const arrow = n > 0 ? '↑' : '↓';
+    return `<span class="wow ${cls}">${arrow} ${Math.abs(n).toFixed(3)}%</span>`;
   }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
