@@ -35,6 +35,7 @@
   function pxToMm(px, zoom) { return Number(px) / (PX_PER_MM * (zoom == null ? 1 : zoom)); }
 
   const LABEL_PRESETS = [
+    { name: '100 × 60 mm（默认）', widthMm: 100, heightMm: 60 },
     { name: '40 × 30 mm', widthMm: 40, heightMm: 30 },
     { name: '50 × 30 mm', widthMm: 50, heightMm: 30 },
     { name: '60 × 40 mm', widthMm: 60, heightMm: 40 },
@@ -240,14 +241,33 @@
   // ============================================================
   //  二、页面
   // ============================================================
+  /**
+   * 默认画布模板：100 × 60 mm，仅保留「条形码 + 二维码」两个组件
+   * 布局对齐参考稿：条形码通栏居中（含大字内容），二维码贴右下角，四周留 2~3mm 安全边距
+   */
+  function defaultTemplate() {
+    const M = window.ERP_BC_MODEL;
+    const label = M.createLabel({ widthMm: 100, heightMm: 60 });
+    const barcode = M.createElement('barcode', {
+      x: 2, y: 2, w: 96, h: 36,
+      text: 'B01-01', fontSize: 26, includetext: true, symbology: 'code128',
+    });
+    const qr = M.createElement('qrcode', {
+      x: 79, y: 40, w: 18, h: 18, text: 'B01-01', symbology: 'qrcode',
+    });
+    label.elements = [barcode, qr];
+    return label;
+  }
+
   function createPage() {
     const M = window.ERP_BC_MODEL;
 
     const state = {
-      label: M.createLabel(),
+      label: defaultTemplate(),
       selectedId: null,
-      zoom: 1.5,
-      grid: true,
+      zoom: 1,
+      autoFit: true,               // 自适应缩放：手动改缩放后置 false，调纸张后恢复
+      grid: false,                 // 默认不显示网格：与参考稿一致，白底更干净
       dataMode: 'text',            // text | batch | series
       singleValue: '',
       batchRows: [],
@@ -342,7 +362,8 @@
           textcolor: String(el.color || '#000000').replace('#', ''),
         };
         if (el.type === 'barcode') {
-          opts.height = Math.max(6, Math.min(60, Number(el.h) || 15));
+          // 条高占元素高度的一半左右，剩余空间留给人眼可读文字（BWIPP 限制 textsize < 25）
+          opts.height = Math.max(6, Math.min(60, (Number(el.h) || 15) * 0.55));
           opts.includetext = !!el.includetext;
           if (el.includetext) {
             opts.textxalign = 'center';
@@ -350,13 +371,21 @@
           }
         }
         let svg = window.bwipjs.toSVG(opts);
-        // 让矢量条码填满元素盒子：去掉固定宽高，保留 viewBox
+        // 让矢量条码完整缩放填满元素盒子：保留/补出 viewBox，去掉固定宽高
+        // （bwip-js 的部分码制输出不带 viewBox，直接改宽高会导致内容按原始像素绘制而被裁切）
         svg = svg.replace(/<svg([^>]*)>/, function (m, attrs) {
+          const wm = /width="([\d.]+)/.exec(attrs);
+          const hm = /height="([\d.]+)/.exec(attrs);
+          const vb = /viewBox="([^"]+)"/.exec(attrs);
           const cleaned = attrs
             .replace(/\swidth="[^"]*"/g, '')
             .replace(/\sheight="[^"]*"/g, '')
+            .replace(/\sviewBox="[^"]*"/g, '')
             .replace(/\spreserveAspectRatio="[^"]*"/g, '');
-          return '<svg' + cleaned + ' width="100%" height="100%" preserveAspectRatio="none">';
+          let viewBox = vb ? vb[1] : (wm && hm ? '0 0 ' + wm[1] + ' ' + hm[1] : '');
+          return '<svg' + cleaned +
+            (viewBox ? ' viewBox="' + viewBox + '"' : '') +
+            ' width="100%" height="100%" preserveAspectRatio="none">';
         });
         return svg;
       } catch (e) {
@@ -418,11 +447,11 @@
       const html = label.elements.map((el) => elementHtml(el, values, { selected: el.id === state.selectedId })).join('');
       $('bcElements').innerHTML = html;
       renderOverlay();
-      // 画布缩放用 transform 实现，这里同步占位尺寸，避免高倍缩放被滚动容器裁掉
+      // 画布缩放用 transform 实现，占位尺寸 = 缩放后尺寸（外层 padding 负责留白），避免高倍缩放被裁掉
       const inner = $('bcCanvasInner');
       if (inner) {
-        inner.style.width = (M.mmToPx(label.widthMm, 1) * state.zoom + 48) + 'px';
-        inner.style.height = (M.mmToPx(label.heightMm, 1) * state.zoom + 48) + 'px';
+        inner.style.width = (M.mmToPx(label.widthMm, 1) * state.zoom) + 'px';
+        inner.style.height = (M.mmToPx(label.heightMm, 1) * state.zoom) + 'px';
       }
       $('bcZoomLabel').textContent = Math.round(state.zoom * 100) + '%';
     }
@@ -455,11 +484,9 @@
       $('bcPosH').value = el.h;
       $('bcRotation').value = el.rotation || 0;
 
-      // 按类型显示属性区
-      $('bcTextProps').style.display = el.type === 'text' ? '' : 'none';
-      $('bcCodeProps').style.display = (el.type === 'barcode' || el.type === 'qrcode' || el.type === 'pdf417' || el.type === 'datamatrix') ? '' : 'none';
-      $('bcShapeProps').style.display = (el.type === 'rect' || el.type === 'ellipse' || el.type === 'line') ? '' : 'none';
-      $('bcImageProps').style.display = el.type === 'image' ? '' : 'none';
+      // 仅保留条码 / 二维码属性区（其余元素类型已从工具箱移除）
+      const isCode = ['barcode', 'qrcode', 'pdf417', 'datamatrix'].indexOf(el.type) >= 0;
+      $('bcCodeProps').style.display = isCode ? '' : 'none';
 
       $('bcLocked').checked = !!el.locked;
       $('bcElTypeLabel').textContent = ({
@@ -467,17 +494,7 @@
         datamatrix: 'DataMatrix', rect: '矩形', ellipse: '椭圆', line: '线条', image: '图片',
       })[el.type] || el.type;
 
-      if (el.type === 'text') {
-        $('bcText').value = el.text || '';
-        $('bcFontSize').value = el.fontSize || 10;
-        $('bcFontFamily').value = el.fontFamily || FONT_OPTIONS[0].value;
-        $('bcBold').checked = el.fontWeight === 'bold';
-        $('bcFontColor').value = el.color || '#111111';
-        $('bcAlign').value = el.align || 'center';
-        $('bcLetterSpacing').value = el.letterSpacing || 0;
-        $('bcLineHeight').value = el.lineHeight || 1.2;
-        $('bcIsVar').checked = !!el.isVar;
-      } else if (el.type === 'barcode' || el.type === 'qrcode' || el.type === 'pdf417' || el.type === 'datamatrix') {
+      if (isCode) {
         $('bcSymbology').value = el.symbology;
         $('bcSymbology').disabled = el.type !== 'barcode';
         $('bcCodeText').value = el.text || '';
@@ -489,17 +506,6 @@
         const err = M.validateContent(el.symbology, el.text || '');
         $('bcCodeError').style.display = err ? '' : 'none';
         $('bcCodeError').textContent = err || '';
-      } else if (el.type === 'rect' || el.type === 'ellipse') {
-        $('bcFill').value = el.fill || '#ffffff';
-        $('bcStroke').value = el.stroke || '#333333';
-        $('bcStrokeWidth').value = el.strokeWidth || 0.3;
-        $('bcStrokeRow').style.display = '';
-      } else if (el.type === 'line') {
-        $('bcStroke').value = el.stroke || '#333333';
-        $('bcStrokeWidth').value = el.strokeWidth || 0.3;
-        $('bcStrokeRow').style.display = '';
-      } else if (el.type === 'image') {
-        $('bcImageInfo').textContent = el.src ? '已选择图片' : '未选择图片';
       }
     }
 
@@ -830,52 +836,77 @@
       toast('已删除');
     }
 
-    // ---------- 缩放 / 网格 ----------
-    function setZoom(z) {
-      state.zoom = Math.min(4, Math.max(0.3, Math.round(Number(z) * 100) / 100));
-      $('bcZoomSelect').value = String(state.zoom);
-      $('bcSurfaceWrap').style.transform = 'scale(' + state.zoom + ')';
+    // ---------- 缩放 / 网格 / 自适应 ----------
+    function applyZoom() {
+      const wrap = $('bcSurfaceWrap');
+      if (wrap) wrap.style.transform = 'scale(' + state.zoom + ')';
       renderSurface();
+    }
+
+    /** 同步缩放下拉框；isFit=true 时把自适应比例作为临时选项显示 */
+    function syncZoomSelect(isFit) {
+      const sel = $('bcZoomSelect');
+      if (!sel) return;
+      const old = sel.querySelector('option[data-fit="1"]');
+      if (old) old.remove();
+      if (isFit && !sel.querySelector('option[value="' + state.zoom + '"]')) {
+        const o = document.createElement('option');
+        o.value = String(state.zoom);
+        o.dataset.fit = '1';
+        o.textContent = Math.round(state.zoom * 100) + '%（自适应）';
+        sel.appendChild(o);
+      }
+      sel.value = String(state.zoom);
+    }
+
+    function setZoom(z) {
+      state.autoFit = false;
+      state.zoom = Math.min(4, Math.max(0.3, Math.round(Number(z) * 100) / 100));
+      syncZoomSelect(false);
+      applyZoom();
+    }
+
+    /** 自适应画布：让整张标签完整落在可视框内（不溢出、不留过多空白） */
+    function fitToView() {
+      const scroller = host && host.querySelector('.bc-canvas-scroll');
+      if (!scroller) return;
+      const cw = scroller.clientWidth;
+      const ch = scroller.clientHeight;
+      // 标签页首次渲染时视图为 display:none，尺寸为 0；此时不计算，等 ResizeObserver 回调再适配
+      if (cw < 120 || ch < 120) return;
+      const availW = cw - 56;
+      const availH = ch - 56;
+      const w = M.mmToPx(state.label.widthMm, 1);
+      const h = M.mmToPx(state.label.heightMm, 1);
+      if (!w || !h) return;
+      const fit = Math.min(availW / w, availH / h);
+      state.autoFit = true;
+      state.zoom = Math.min(3, Math.max(0.3, Math.floor(fit * 100) / 100));
+      syncZoomSelect(true);
+      applyZoom();
+    }
+
+    let resizeTimer = null;
+    function onResize() {
+      if (!state.autoFit) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(fitToView, 180);
     }
 
     // ---------- 模板字符串 ----------
     function pageHtml() {
       const presetOpts = M.LABEL_PRESETS.map((p) => '<option value="' + p.widthMm + 'x' + p.heightMm + '">' + p.name + '</option>').join('');
       const symOpts = M.SYMBOLOGIES.map((s) => '<option value="' + s.id + '">' + s.name + '</option>').join('');
-      const fontOpts = M.FONT_OPTIONS.map((f) => '<option value="' + esc(f.value) + '">' + f.label + '</option>').join('');
       return `
       <div class="bc-designer">
-        <!-- 左侧：添加元素 -->
+        <!-- 左侧：添加元素（仅保留条形码 / 二维码） -->
         <aside class="bc-side">
-          <div class="bc-group-title">添加文件</div>
-          <div class="bc-tile-row">
-            <button type="button" class="bc-tile" id="bcAddImage">上传图片</button>
-          </div>
-          <input type="file" id="bcImageFile" accept="image/*" style="display:none">
-
-          <div class="bc-group-title">添加文字</div>
-          <div class="bc-tile-row">
-            <button type="button" class="bc-tile" data-add="text" data-preset="title">标题</button>
-            <button type="button" class="bc-tile" data-add="text" data-preset="subtitle">副标题</button>
-            <button type="button" class="bc-tile" data-add="text" data-preset="body">正文</button>
-          </div>
-
           <div class="bc-group-title">添加组件</div>
           <div class="bc-tile-row">
             <button type="button" class="bc-tile" data-add="barcode">条形码</button>
             <button type="button" class="bc-tile" data-add="qrcode">二维码</button>
           </div>
-          <div class="bc-tile-row">
-            <button type="button" class="bc-tile" data-add="pdf417">PDF417</button>
-            <button type="button" class="bc-tile" data-add="datamatrix">DataMatrix</button>
-          </div>
-
-          <div class="bc-group-title">形状</div>
-          <div class="bc-tile-row">
-            <button type="button" class="bc-tile" data-add="rect">矩形</button>
-            <button type="button" class="bc-tile" data-add="ellipse">椭圆</button>
-            <button type="button" class="bc-tile" data-add="line">线条</button>
-          </div>
+          <div class="bc-hint">内容可在右侧修改；条形码支持 Code128 / Code39 / EAN / UPC / ITF 等 9 种码制。</div>
 
           <div class="bc-group-title">纸张（mm）</div>
           <div class="bc-paper">
@@ -901,12 +932,13 @@
                 <option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option>
               </select>
             </label>
-            <label class="bc-inline"><input type="checkbox" id="bcGridToggle" checked> 网格</label>
+            <label class="bc-inline"><input type="checkbox" id="bcGridToggle"> 网格</label>
             <span class="bc-sep"></span>
             <button type="button" class="ghost" id="bcDup" title="复制 (Ctrl+D)">复制</button>
             <button type="button" class="ghost" id="bcLayerUp">上移一层</button>
             <button type="button" class="ghost" id="bcLayerDown">下移一层</button>
             <button type="button" class="ghost" id="bcDelete">删除</button>
+            <button type="button" class="ghost" id="bcFit" title="按可视区域自动缩放，让整张标签完整显示">适应画布</button>
             <span class="bc-zoom-text" id="bcZoomLabel"></span>
           </div>
           <div class="bc-canvas-scroll">
@@ -961,61 +993,19 @@
               <label>旋转 <input type="number" id="bcRotation" step="1"></label>
             </div>
 
-            <!-- 文字属性 -->
-            <div id="bcTextProps" class="bc-prop-section">
-              <label class="bc-block">内容
-                <textarea id="bcText" rows="2"></textarea>
-              </label>
-              <div class="bc-field-grid">
-                <label>字号(pt) <input type="number" id="bcFontSize" step="0.5" min="4" max="200"></label>
-                <label>字间距 <input type="number" id="bcLetterSpacing" step="0.1"></label>
-                <label>行间距 <input type="number" id="bcLineHeight" step="0.1" min="0.6"></label>
-              </div>
-              <label class="bc-block">字体<select id="bcFontFamily">${fontOpts}</select></label>
-              <div class="bc-field-grid">
-                <label>颜色 <input type="color" id="bcFontColor"></label>
-                <label class="bc-check"><input type="checkbox" id="bcBold"> 加粗</label>
-                <label class="bc-check"><input type="checkbox" id="bcIsVar"> 作为批量变量</label>
-              </div>
-              <label class="bc-block">对齐
-                <select id="bcAlign">
-                  <option value="left">左对齐</option>
-                  <option value="center">居中</option>
-                  <option value="right">右对齐</option>
-                </select>
-              </label>
-            </div>
-
-            <!-- 条码属性 -->
+            <!-- 条码 / 二维码属性 -->
             <div id="bcCodeProps" class="bc-prop-section">
               <label class="bc-block">码制<select id="bcSymbology">${symOpts}</select></label>
               <label class="bc-block">内容<input type="text" id="bcCodeText" spellcheck="false"></label>
               <div class="bc-error" id="bcCodeError" style="display:none"></div>
               <div class="bc-field-grid">
                 <label>条码颜色 <input type="color" id="bcCodeColor"></label>
-                <label>字号(pt) <input type="number" id="bcCodeFontSize" step="0.5" min="4" max="40"></label>
+                <label>字号(pt) <input type="number" id="bcCodeFontSize" step="0.5" min="4" max="24"></label>
               </div>
               <div class="bc-field-grid" id="bcIncludeTextRow">
                 <label class="bc-check"><input type="checkbox" id="bcIncludeText"> 显示文字</label>
               </div>
               <label class="bc-check"><input type="checkbox" id="bcIsVar"> 作为批量变量</label>
-            </div>
-
-            <!-- 形状属性 -->
-            <div id="bcShapeProps" class="bc-prop-section">
-              <div class="bc-field-grid" id="bcFillRow">
-                <label>填充 <input type="color" id="bcFill"></label>
-              </div>
-              <div class="bc-field-grid" id="bcStrokeRow">
-                <label>边框 <input type="color" id="bcStroke"></label>
-                <label>线宽(mm) <input type="number" id="bcStrokeWidth" step="0.1" min="0" max="5"></label>
-              </div>
-            </div>
-
-            <!-- 图片属性 -->
-            <div id="bcImageProps" class="bc-prop-section">
-              <div class="bc-inline-info" id="bcImageInfo">未选择图片</div>
-              <button type="button" class="ghost" id="bcReplaceImage">替换图片</button>
             </div>
           </div>
 
@@ -1068,52 +1058,9 @@
 
     // ---------- 事件绑定 ----------
     function bindOnce() {
-      // 添加元素
+      // 添加元素（工具箱仅保留条形码 / 二维码）
       host.querySelectorAll('[data-add]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const type = btn.dataset.add;
-          const preset = btn.dataset.preset;
-          const before = state.label.elements.length;
-          addElement(type);
-          const el = state.label.elements[state.label.elements.length - 1];
-          if (!el || state.label.elements.length === before) return;
-          // 文字预设：标题 / 副标题 / 正文
-          if (type === 'text' && preset) {
-            if (preset === 'title') Object.assign(el, { text: '标题', fontSize: 18, fontWeight: 'bold', h: 12 });
-            if (preset === 'subtitle') Object.assign(el, { text: '副标题', fontSize: 12, h: 9 });
-            if (preset === 'body') Object.assign(el, { text: '正文内容', fontSize: 8, h: 7 });
-            renderAll();
-          }
-        });
-      });
-
-      // 图片上传 / 替换
-      const pickImage = () => $('bcImageFile').click();
-      $('bcAddImage').addEventListener('click', () => {
-        state._imgTarget = null;
-        pickImage();
-      });
-      $('bcReplaceImage').addEventListener('click', () => {
-        state._imgTarget = state.selectedId;
-        pickImage();
-      });
-      $('bcImageFile').addEventListener('change', (e) => {
-        const file = e.target.files && e.target.files[0];
-        e.target.value = '';
-        if (!file) return;
-        if (!/^image\//.test(file.type)) { toast('请选择图片文件'); return; }
-        if (file.size > 5 * 1024 * 1024) { toast('图片超过 5MB，请先压缩'); return; }
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (state._imgTarget) {
-            patchSelected({ src: reader.result });
-          } else {
-            addElement('image');
-            const el = state.label.elements[state.label.elements.length - 1];
-            if (el && el.type === 'image') { el.src = reader.result; renderAll(); }
-          }
-        };
-        reader.readAsDataURL(file);
+        btn.addEventListener('click', () => addElement(btn.dataset.add));
       });
 
       // 纸张
@@ -1141,6 +1088,7 @@
       $('bcLayerUp').addEventListener('click', () => { if (!state.selectedId) return; snapshot(); state.label.elements = M.moveLayer(state.label.elements, state.selectedId, 'up'); renderAll(); });
       $('bcLayerDown').addEventListener('click', () => { if (!state.selectedId) return; snapshot(); state.label.elements = M.moveLayer(state.label.elements, state.selectedId, 'down'); renderAll(); });
       $('bcDelete').addEventListener('click', deleteSelected);
+      $('bcFit').addEventListener('click', fitToView);
 
       // 对齐
       host.querySelectorAll('[data-align]').forEach((btn) => {
@@ -1173,28 +1121,13 @@
       // 元素锁定
       $('bcLocked').addEventListener('change', (e) => patchSelected({ locked: e.target.checked }));
 
-      // 文字属性
-      $('bcText').addEventListener('input', (e) => patchSelected({ text: e.target.value }, { silent: true }));
-      $('bcFontSize').addEventListener('change', (e) => patchSelected({ fontSize: Number(e.target.value) || 10 }));
-      $('bcLetterSpacing').addEventListener('change', (e) => patchSelected({ letterSpacing: Number(e.target.value) || 0 }));
-      $('bcLineHeight').addEventListener('change', (e) => patchSelected({ lineHeight: Number(e.target.value) || 1.2 }));
-      $('bcFontFamily').addEventListener('change', (e) => patchSelected({ fontFamily: e.target.value }));
-      $('bcFontColor').addEventListener('input', (e) => patchSelected({ color: e.target.value }, { silent: true }));
-      $('bcBold').addEventListener('change', (e) => patchSelected({ fontWeight: e.target.checked ? 'bold' : 'normal' }));
-      $('bcAlign').addEventListener('change', (e) => patchSelected({ align: e.target.value }));
-      $('bcIsVar').addEventListener('change', (e) => { patchSelected({ isVar: e.target.checked }); updateDataStats(); });
-
-      // 条码属性
+      // 条码 / 二维码属性
       $('bcSymbology').addEventListener('change', (e) => patchSelected({ symbology: e.target.value }));
       $('bcCodeText').addEventListener('input', (e) => patchSelected({ text: e.target.value }, { silent: true }));
       $('bcCodeColor').addEventListener('input', (e) => patchSelected({ color: e.target.value }, { silent: true }));
       $('bcCodeFontSize').addEventListener('change', (e) => patchSelected({ fontSize: Number(e.target.value) || 8 }));
       $('bcIncludeText').addEventListener('change', (e) => patchSelected({ includetext: e.target.checked }));
-
-      // 形状属性
-      $('bcFill').addEventListener('input', (e) => patchSelected({ fill: e.target.value }, { silent: true }));
-      $('bcStroke').addEventListener('input', (e) => patchSelected({ stroke: e.target.value }, { silent: true }));
-      $('bcStrokeWidth').addEventListener('change', (e) => patchSelected({ strokeWidth: Number(e.target.value) || 0 }));
+      $('bcIsVar').addEventListener('change', (e) => { patchSelected({ isVar: e.target.checked }); updateDataStats(); });
 
       // 数据源
       $('bcTab-text').addEventListener('click', () => switchDataMode('text'));
@@ -1259,6 +1192,7 @@
       $('bcWidth').value = w;
       $('bcHeight').value = h;
       renderAll();
+      fitToView();
       toast('纸张已设为 ' + w + ' × ' + h + ' mm');
     }
 
@@ -1300,13 +1234,34 @@
       // 初始纸张
       $('bcWidth').value = state.label.widthMm;
       $('bcHeight').value = state.label.heightMm;
-      $('bcZoomSelect').value = String(state.zoom);
-      $('bcSurfaceWrap').style.transform = 'scale(' + state.zoom + ')';
+      $('bcPreset').value = state.label.widthMm + 'x' + state.label.heightMm;
 
       bindOnce();
       bindCanvas();
       renderTemplates();
       renderAll();
+      syncZoomSelect(false);   // 缩放下拉框与当前比例对齐（默认 100%）
+
+      // 等布局稳定后按可视区域自适应缩放（保证整张标签完整落在框内）
+      requestAnimationFrame(() => { fitToView(); });
+      window.addEventListener('resize', onResize);
+
+      // 标签页从隐藏变为可见、或窗口/分栏尺寸变化时，重新自适应
+      if (typeof ResizeObserver !== 'undefined') {
+        let lastW = 0;
+        let lastH = 0;
+        const ro = new ResizeObserver(() => {
+          const s = host.querySelector('.bc-canvas-scroll');
+          if (!s) return;
+          const w = s.clientWidth;
+          const h = s.clientHeight;
+          if (w === lastW && h === lastH) return;
+          lastW = w;
+          lastH = h;
+          if (state.autoFit) fitToView();
+        });
+        ro.observe(host.querySelector('.bc-canvas-scroll'));
+      }
 
       // 预加载条码引擎（失败不阻塞页面，打印时再提示）
       ensureBwip().then(() => renderSurface()).catch(() => { /* 静默，打印时会提示 */ });
