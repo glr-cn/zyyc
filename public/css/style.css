@@ -598,13 +598,67 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .wh-gap-row:hover { background:#fff3d1; }
 .wh-gap-row .muted { color:#b0a99a; font-style:italic; }
 .gap-label { display:inline-block; margin-right:6px; padding:1px 6px; font-size:11px; font-weight:600; color:#b26a00; background:#ffe9c7; border:1px solid #f0d3a0; border-radius:4px; vertical-align:middle; }
-.imp-confirm .modal-body { max-height:60vh; overflow:auto; }
-.imp-hint { margin-bottom:10px; padding:8px 10px; font-size:13px; color:var(--muted); background:var(--bg); border-radius:4px; }
-.imp-grid th, .imp-grid td { padding:6px 8px; font-size:13px; white-space:nowrap; }
-.imp-grid .imp-dup { background:#fff8e1; }
-.imp-grid .imp-new { color:#2e7d32; font-weight:600; }
-.imp-grid label { margin-right:10px; cursor:pointer; }
-.imp-errors { margin-top:10px; padding:8px 10px; font-size:12px; color:#b26a00; background:#fff8e1; border-radius:4px; line-height:1.7; }
+
+/* ===== 导入预览弹窗（重构版） ===== */
+/* 扩大到 90% / max-width 1200px，释放列空间；整弹窗一列布局，取消左右分栏 */
+.modal.imp-confirm { width: 90vw; max-width: 1200px; display: flex; flex-direction: column; max-height: 92vh; }
+.modal.imp-confirm .modal-body { display: block; padding: 14px 18px 10px; overflow: hidden; max-height: none; }
+.modal.imp-confirm .modal-head { padding: 12px 18px; }
+.modal.imp-confirm .modal-foot { padding: 12px 18px; }
+/* 顶部 Alert 提示条（淡蓝） */
+.imp-alert {
+  margin-bottom: 10px; padding: 9px 14px; font-size: 13px; color: #0b4a78;
+  background: #e6f2fb; border: 1px solid #bfdff5; border-radius: 6px;
+  line-height: 1.6;
+}
+.imp-alert b { color: #0b4a78; }
+/* 统计条 */
+.imp-summary {
+  display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 10px;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: 6px;
+  font-size: 13px; color: var(--text);
+}
+.imp-summary .cnt { font-weight: 600; }
+.imp-summary .cnt-dup { color: #b26a00; }
+.imp-summary .cnt-new { color: #2e7d32; }
+/* 批量操作按钮：紧凑胶囊式，贴合统计条 */
+.imp-batch {
+  padding: 3px 10px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  color: var(--text); cursor: pointer; transition: all .15s;
+}
+.imp-batch:hover { border-color: #7fb3e6; color: var(--text); background: var(--bg-elev); }
+.imp-batch[data-batch="skip"]:hover { border-color: #e0b36b; color: #b26a00; }
+.imp-batch[data-batch="overwrite"]:hover { border-color: #e28b8b; color: #c62828; }
+/* 表格容器：固定表头 + 内部滚动 */
+.imp-grid-wrap { max-height: 56vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.imp-grid { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+.imp-grid thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--panel); color: var(--text); font-weight: 600;
+  padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--line);
+  white-space: nowrap;
+}
+.imp-grid tbody td {
+  padding: 7px 10px; border-bottom: 1px solid var(--line);
+  white-space: nowrap; vertical-align: middle;
+}
+.imp-grid tbody tr:hover td { background: var(--bg-elev); }
+.imp-grid .imp-dup td { background: #fff8e1; }
+.imp-grid .imp-dup:hover td { background: #fff2c7; }
+.imp-grid .imp-new-tag { display: inline-block; padding: 2px 8px; font-size: 12px; font-weight: 600; color: #2e7d32; background: #e8f5e9; border-radius: 10px; }
+.imp-grid .imp-new-tag-empty { display: inline-block; padding: 2px 8px; font-size: 12px; color: var(--muted); background: var(--bg-elev); border-radius: 10px; }
+.imp-grid .imp-decide { display: inline-flex; gap: 6px; align-items: center; }
+.imp-grid .imp-decide label { display: inline-flex; gap: 3px; align-items: center; margin-right: 0; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; cursor: pointer; color: var(--muted); background: var(--bg); transition: all .15s; }
+.imp-grid .imp-decide label:hover { border-color: #7fb3e6; color: var(--text); }
+.imp-grid .imp-decide input { display: none; }
+.imp-grid .imp-decide input:checked + span { color: var(--text); font-weight: 600; }
+.imp-grid .imp-decide input[value="skip"]:checked + span { color: #b26a00; }
+.imp-grid .imp-decide input[value="overwrite"]:checked + span { color: #c62828; }
+.imp-grid .imp-decide label:has(input:checked) { background: var(--bg-elev); border-color: #7fb3e6; }
+.imp-errors { margin-top: 10px; padding: 8px 12px; font-size: 12px; color: #b26a00; background: #fff8e1; border: 1px solid #f0d3a0; border-radius: 6px; line-height: 1.7; max-height: 120px; overflow: auto; }
+.modal.imp-confirm .modal-foot .primary:disabled { opacity: .55; cursor: not-allowed; }
 
 /* ===== 工时发货缺口行：行内填报 / 实时计算 / 待补标记 ===== */
 .bk-tag { display:inline-block; margin-left:5px; padding:1px 5px; font-size:11px; font-weight:700; color:#d32f2f; background:#fdecea; border:1px solid #f5c6c0; border-radius:4px; vertical-align:middle; }
@@ -612,9 +666,15 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .wh-inline-date { white-space:nowrap; }
 /* 行内输入控件：宽度 100% 贴合 colgroup 锁定的列宽，绝不撑破表格；placeholder 用浅灰，绝不看起来像已填数据 */
 .wh-cell-num, .wh-cell-txt, .wh-cell-sel { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:3px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); font-size:13px; }
+/* ★ Bug#5 修复：date input 也必须 width:100%，否则收货行内表格日期列错位 */
+.wh-cell-date { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:2px 3px; font-size:13px; }
 .wh-cell-num::placeholder, .wh-cell-txt::placeholder { color:#b8bec9; font-weight:400; opacity:1; }
+/* ★ Bug#2 修复：表头必填星号红色高亮 */
+.req-star { color:#e53935; font-weight:700; margin-right:2px; }
+/* ★ Bug#1+#5 修复：收货客户 datalist input 与普通 text input 样式一致 */
+.wh-cust-sel { padding:4px 6px; }
 /* 发货行内直编表格：固定列宽布局，输入框不再撑破；操作列 sticky 贴右完整显示 */
-.grid.wh-inline-grid { table-layout:fixed; width:100%; min-width:920px; }
+.grid.wh-inline-grid { table-layout:fixed; width:100%; min-width:780px; }
 .grid.wh-inline-grid th, .grid.wh-inline-grid td { padding:6px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .grid.wh-inline-grid th.ops-head, .grid.wh-inline-grid td.ops {
   position:sticky; right:0; z-index:3; background:var(--panel);
@@ -624,8 +684,9 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-inline-grid tr.wh-gap-row td.ops,
 .grid.wh-inline-grid tr.wh-gap-row:hover td.ops { background:#fff8e1; }
 .grid.wh-inline-grid td.ops .ops-none { color:#b8bec9; font-size:13px; }
-/* 行内表格操作列：提交 / 删除 两个按钮在固定列宽内完整显示（不换行、不被裁切） */
-.grid.wh-inline-grid td.ops button { padding:4px 6px; margin-right:3px; font-size:12px; }
+/* ★ Bug#5 修复：操作列按钮 flex 横向并排（submit + cancel/delete 不换行、不被裁切） */
+.grid.wh-inline-grid td.ops .ops-inner { display:flex; gap:6px; align-items:center; }
+.grid.wh-inline-grid td.ops button { padding:4px 6px; font-size:12px; white-space:nowrap; flex:0 0 auto; }
 .wh-gap-row [data-out] { font-weight:600; color:#2e7d32; }
 
 /* ===== 全局日期范围选择组件 ERP.DateRangePicker ===== */

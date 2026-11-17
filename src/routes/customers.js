@@ -149,7 +149,8 @@ router.get('/active', (req, res) => {
             company_name AS customer_name,
             COALESCE(NULLIF(short_name,''), company_name) AS owner_name,
             '启用' AS status,
-            owner_user_id
+            owner_user_id,
+            COALESCE(default_unit, '单') AS default_unit
        FROM customers WHERE ${where.join(' AND ')} ORDER BY sort_order ASC, company_name`
   ).all(...params);
   res.json({ data: rows });
@@ -173,7 +174,8 @@ router.get('/options', (req, res) => {
             company_name,
             COALESCE(NULLIF(short_name,''), company_name) AS owner_name,
             warehouse, customer_type, coop_status, is_deleted,
-            ${CUST_STATUS_SQL} AS status
+            ${CUST_STATUS_SQL} AS status,
+            COALESCE(default_unit, '单') AS default_unit
        FROM customers ${whereSql}
       ORDER BY ${CUST_STATUS_SQL} DESC, sort_order ASC, company_name`
   ).all(...params);

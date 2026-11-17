@@ -170,16 +170,18 @@ router.get('/', (req, res) => {
                w.efficiency, w.unit_cost, w.doc_cost, w.remark, w.owner_user_id,
                w.status, w.submitter, w.submit_time,
                COALESCE(cl.sort_order, 9999) AS sort_order,
+               COALESCE(cl.default_unit, '单') AS default_unit,
                ${STATUS} AS customer_status, 1 AS filled, '' AS suggest_date, 0 AS need_backfill
           FROM work_hours w ${JOIN} ${filledWhere}
         UNION ALL
         SELECT 0 AS work_id, ? AS warehouse, '发货' AS work_type, c.customer_id,
                c.company_name AS customer_name,   -- 与已填行 COALESCE(cl.company_name,...) 口径一致：填前填后名字不变
-               '' AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, '' AS project,
+               COALESCE(c.default_unit, '单') AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, '' AS project,
                0 AS main_hours, 0 AS other_hours, 0 AS shared_hours, 0 AS total_hours,
                0 AS efficiency, 0 AS unit_cost, 0 AS doc_cost, '' AS remark, c.owner_user_id,
                'pending' AS status, NULL AS submitter, NULL AS submit_time,
                COALESCE(c.sort_order, 9999) AS sort_order,
+               COALESCE(c.default_unit, '单') AS default_unit,
                ${CUST_STATUS} AS customer_status, 0 AS filled,
                ? AS suggest_date, ? AS need_backfill
           FROM customers c
@@ -286,6 +288,44 @@ router.post('/archive', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// 「批量提交」：一次性把勾选的 pending 记录置为 archived（单条 SQL IN 更新，避免 N 次状态往返）。
+// 铁律：只影响传入且属于当前仓库/工时类型、状态仍为 pending、且当前用户有权处理的记录；
+//       其余（不存在 / 跨仓跨类型 / 他人负责 / 已归档）一律跳过，绝不回退或破坏已归档数据。
+// ---------------------------------------------------------------------------
+router.post('/batch-submit', (req, res) => {
+  const b = req.body || {};
+  const warehouse = String(b.warehouse || '').trim();
+  const workType = String(b.work_type || '').trim();
+  if (!warehouse || !workType) return res.status(400).json({ error: '批量提交需带 warehouse / work_type' });
+  const ids = Array.isArray(b.ids)
+    ? [...new Set(b.ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))]
+    : [];
+  if (!ids.length) return res.status(400).json({ error: '请先勾选需要提交的数据' });
+
+  const allowed = [];
+  for (const id of ids) {
+    const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
+    if (!row) continue;                                            // 已被删除：跳过
+    if (row.warehouse !== warehouse || row.work_type !== workType) continue; // 跨仓/跨类型：跳过（防越权）
+    if (!ensureOwn(req, row)) continue;                            // 他人负责：跳过
+    if (row.status !== 'pending') continue;                        // 已归档：跳过，绝不重复提交
+    allowed.push(id);
+  }
+  if (!allowed.length) return res.json({ submitted: 0, skipped: ids.length, ids: [] });
+
+  const submitter = operatorName(req);
+  const holders = allowed.map(() => '?').join(',');
+  const info = db.prepare(
+    `UPDATE work_hours SET status='archived', submitter=?, submit_time=datetime('now','localtime')
+      WHERE work_id IN (${holders}) AND status='pending'`
+  ).run(submitter, ...allowed);
+
+  writeAudit(req, 'submit', 0, { scope: 'batch', ids: allowed },
+    { submitted: info.changes, submitter, warehouse, work_type: workType });
+  res.json({ submitted: info.changes, skipped: ids.length - info.changes, ids: allowed, submitter });
+});
+
+// ---------------------------------------------------------------------------
 // 单条「提交归档」：pending → archived，写入当前登录人 submitter + 当前时间 submit_time。
 // 只改状态字段，绝不物理删除、绝不改动业务数据；审计 action=submit（日志中心显示「提交归档」）。
 // 权限：本仓菜单权限（顶层 router 门禁）+ 行级归属（ensureOwn）。
@@ -374,7 +414,7 @@ router.get('/template', (req, res) => {
   const owners = ownersOfWarehouse(req, warehouse, true); // 模板只预填合作中货主，与缺口清单一致
   const d = new Date();
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // 默认今天
-  const aoa = [IMPORT_HEADER, ...owners.map((o) => [date, o.company_name, '单', '', '', '', ''])]; // 单位默认「单」
+  const aoa = [IMPORT_HEADER, ...owners.map((o) => [date, o.company_name, o.default_unit || '单', '', '', '', ''])]; // 单位：按客户 default_unit 带出（兜底 '单'）
   const ws = xlsx.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 24 }];
   const wb = xlsx.utils.book_new();
@@ -560,7 +600,12 @@ router.delete('/:id/force', (req, res) => {
   if (!req.user || req.user.role_code !== 'super_admin') {
     return res.status(403).json({ error: '仅超级管理员可永久删除工时记录' });
   }
-  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
+  const id = Number(req.params.id);
+  // 铁律：前端虚拟行（无 work_id 的缺口行 wid=0）严禁调后端删除；这里兜底拦截 id<=0
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: '非法记录 id（虚拟行不能调后端删除，请前端过滤）' });
+  }
+  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
   if (!old) return res.status(404).json({ error: '工时记录不存在' });
   db.prepare('DELETE FROM work_hours WHERE work_id=?').run(old.work_id);
   writeAudit(req, 'force_delete', old.work_id, old, null);
@@ -568,7 +613,11 @@ router.delete('/:id/force', (req, res) => {
 });
 
 router.delete('/:id', (req, res) => {
-  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: '非法记录 id（虚拟行不能调后端删除，请前端过滤）' });
+  }
+  const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
   if (!old) return res.status(404).json({ error: '工时记录不存在' });
   if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权删除他人负责的工时记录' });
   // 已归档记录默认不可删：管理员也请先撤回；仅超级管理员可走 /force 物理删除。
@@ -590,7 +639,8 @@ function ownersOfWarehouse(req, warehouse, activeOnly) {
   if (activeOnly) where.push("coop_status='合作中'");
   if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
   return db.prepare(
-    `SELECT customer_id, company_name, COALESCE(NULLIF(short_name,''),company_name) AS owner_name, coop_status, sort_order
+    `SELECT customer_id, company_name, COALESCE(NULLIF(short_name,''),company_name) AS owner_name, coop_status, sort_order,
+            COALESCE(default_unit, '单') AS default_unit
        FROM customers WHERE ${where.join(' AND ')} ORDER BY sort_order ASC, company_name`
   ).all(...params);
 }
@@ -623,8 +673,14 @@ function parseImportRows(buf, warehouse, req) {
     if (!name) { errors.push({ line, error: '客户名称为空' }); return; }
     const owner = byName.get(name);
     if (!owner) { errors.push({ line, error: `客户「${name}」不属于本仓或已删除` }); return; }
-    if (!(Number(shipOrders) > 0)) { errors.push({ line, error: '发货单量必须 > 0' }); return; }
+    // 放宽导入校验：ship_orders / main_hours / remark 三者任意有值即允许导入（支持"无单量仅备注"场景）；
+    // 三者全空/全0 才判为无效行。
+    const shipVal = Number(shipOrders);
+    const shipOK = shipVal > 0;
     const mh = Number(mainHours) || 0;
+    const remarkOK = !!String(cell(r, '备注', 'remark') || '').trim();
+    if (!shipOK && !(mh > 0) && !remarkOK) { errors.push({ line, error: '发货单量、主工时、备注至少填写一项' }); return; }
+    if (shipOrders !== '' && shipOrders != null && Number(shipOrders) < 0) { errors.push({ line, error: '发货单量不得为负' }); return; }
     if (mh < 0) { errors.push({ line, error: '主工时不得为负' }); return; }
     parsed.push({
       line, date, customer_name: owner.company_name, customer_id: owner.customer_id,
@@ -665,6 +721,8 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
 });
 
 // POST /import：按 decisions（行号 → overwrite / skip）落库，事务 + 审计
+// 导入数据 = 员工已确认的工时记录 → 直接置 archived + 写入 submitter / submit_time（当前导入人），
+// 不进入"待提交"队列；覆盖/跳过重复校验保留。
 router.post('/import', upload.single('file'), (req, res) => {
   // warehouse 优先取 query（RBAC 门禁在 multer 之前执行，也读 query），兼容 multipart body
   const warehouse = ((req.query && req.query.warehouse) || (req.body && req.body.warehouse) || '').trim();
@@ -676,16 +734,16 @@ router.post('/import', upload.single('file'), (req, res) => {
   try { ({ parsed, errors } = parseImportRows(req.file.buffer, warehouse, req)); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
+  const submitter = operatorName(req);
   let created = 0, overwritten = 0, skipped = 0;
   const log = [];
   db.exec('BEGIN');
   try {
     for (const p of parsed) {
-      // 找同日同客户 pending 记录（覆盖或新建）
+      // 重复检测按 pending（已归档不影响导入，导入完成立即归档）
       const existing = db.prepare(
         `SELECT * FROM work_hours WHERE warehouse=? AND work_type='发货' AND status='pending' AND customer_id=? AND date=? ORDER BY work_id LIMIT 1`
       ).get(warehouse, p.customer_id, p.date);
-      // import 自己按当前库判定重复（不能依赖 preview 的 p.duplicate——两次调用间数据可能变化）
       const decision = decisions[p.line] || (existing ? 'skip' : 'create');
       if (decision === 'skip') { skipped++; continue; }
       if (decision === 'overwrite' && existing) {
@@ -696,31 +754,33 @@ router.post('/import', upload.single('file'), (req, res) => {
           main_hours: p.main_hours, other_hours: p.other_hours, shared_hours: 0,
         };
         svc.calcRow('发货', r);
+        // overwrite 也置 archived + 写入当前导入人（与新建口径一致）
         db.prepare(
           `UPDATE work_hours SET customer_id=?,customer_name=?,unit=?,date=?,ship_orders=?,
-            main_hours=?,other_hours=?,shared_hours=?,total_hours=?,efficiency=?,unit_cost=?,remark=?
+            main_hours=?,other_hours=?,shared_hours=?,total_hours=?,efficiency=?,unit_cost=?,remark=?,
+            status='archived', submitter=?, submit_time=datetime('now','localtime')
             WHERE work_id=?`
         ).run(r.customer_id, r.customer_name, r.unit, r.date, r.ship_orders,
           r.main_hours, r.other_hours, r.shared_hours, r.total_hours, r.efficiency, r.unit_cost,
-          p.remark || null, existing.work_id);
+          p.remark || null, submitter, existing.work_id);
         overwritten++;
         log.push({ line: p.line, action: 'overwrite', work_id: existing.work_id });
       } else {
-        // 新建：停用货主允许补报历史（导入是"补报"语义），已删除已被 parseImportRows 排除
         const r = {
           warehouse, work_type: '发货', customer_id: p.customer_id, customer_name: p.customer_name,
           unit: p.unit, date: p.date, ship_orders: p.ship_orders,
           main_hours: p.main_hours, other_hours: p.other_hours, shared_hours: 0,
         };
         svc.calcRow('发货', r);
+        // 新建直接 archived + 写入 submitter / submit_time
         const info = db.prepare(
           `INSERT INTO work_hours
             (warehouse,work_type,customer_id,customer_name,unit,date,ship_orders,main_hours,other_hours,shared_hours,
-             total_hours,efficiency,unit_cost,remark,owner_user_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             total_hours,efficiency,unit_cost,remark,owner_user_id,status,submitter,submit_time)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'archived', ?, datetime('now','localtime'))`
         ).run(warehouse, '发货', r.customer_id, r.customer_name, r.unit, r.date, r.ship_orders,
           r.main_hours, r.other_hours, r.shared_hours, r.total_hours, r.efficiency, r.unit_cost,
-          p.remark || null, req.user.user_id);
+          p.remark || null, req.user.user_id, submitter);
         created++;
         log.push({ line: p.line, action: 'create', work_id: Number(info.lastInsertRowid) });
       }

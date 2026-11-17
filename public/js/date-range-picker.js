@@ -51,7 +51,7 @@
       const w = isoWeekNum(mon);
       out.push({ label: w.year + ' 第' + w.week + '周 · ' + md(mon) + '~' + md(sun), startDate: iso(mon), endDate: iso(sun) });
     }
-    return out;
+    return out.reverse();
   }
   function buildMonths() {
     const cur = startOfMonth(new Date());
@@ -60,7 +60,7 @@
       const m = addMonths(cur, i);
       out.push({ label: m.getFullYear() + '年' + (m.getMonth() + 1) + '月', startDate: iso(startOfMonth(m)), endDate: iso(endOfMonth(m)) });
     }
-    return out;
+    return out.reverse();
   }
 
   const openInstances = new Set();
@@ -229,6 +229,7 @@
 
     _renderList(list, cls) {
       const cur = this.value.startDate;
+      const hasSel = !!cur;
       this.panel.innerHTML = '<div class="drp-list ' + cls + '">' + list.map((it) =>
         '<button type="button" class="drp-list-item' + (it.startDate === cur ? ' active' : '') + '" data-s="' + it.startDate + '" data-e="' + it.endDate + '">' + it.label + '</button>'
       ).join('') + '</div>';
@@ -237,6 +238,20 @@
         this.draft = { start: '', end: '' };
         this._sync(); this._close(); this._fire();
       }));
+      // 滚动定位：让 active 项（当前选中的周/月）在下拉容器内居中可见
+      if (hasSel) {
+        const root = this.panel.querySelector('.drp-list');
+        const activeEl = root && root.querySelector('.drp-list-item.active');
+        if (activeEl && root) {
+          // 等 DOM 布局稳定后再算 scrollTop
+          requestAnimationFrame(() => {
+            const h = root.clientHeight;
+            const t = activeEl.offsetTop;
+            const eh = activeEl.offsetHeight;
+            root.scrollTop = Math.max(0, t - h / 2 + eh / 2);
+          });
+        }
+      }
     }
 
     _pickDay(s) {

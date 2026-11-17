@@ -141,6 +141,11 @@ require('./migrateWorkhoursSubmitter').run(_conn);
 // 并按固定名单刷入排序号 1..38；名单外/未匹配保持默认 9999。幂等、全事务、失败即回滚。
 require('./migrateCustomersSortOrder').run(_conn);
 
+// customers.default_unit 字段迁移：旧库补 customers.default_unit（NOT NULL DEFAULT '单'），
+// 并按规则刷入特定客户的默认单位（绵羊-线下 → 箱，西玛系列 → 件，华尊-京东送仓 → 单）。
+// 已归档历史数据的 unit 列独立存储，不受此默认值影响。幂等、全事务、失败即回滚。
+require('./migrateCustomersDefaultUnit').run(_conn);
+
 // 角色种子数据（仅首次；schema.sql 的 role_code 为 NOT NULL UNIQUE 无默认值，
 // 种子必须带齐 role_code/data_scope/is_readonly/is_system，否则全新库启动即崩）
 const roleCount = _conn.prepare('SELECT COUNT(*) AS c FROM roles').get().c;

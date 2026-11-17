@@ -137,7 +137,12 @@ function validateByType(name, b, db, opts = {}) {
       return '不能选择「' + cust.status + '」客户录入新工时';
     if (!opts.allowInactiveCust && !customerBelongs(cust, b.warehouse))
       return '客户「' + cust.customer_name + '」不属于' + b.warehouse + '，禁止跨仓录入';
-    if (!(Number(b.ship_orders) > 0)) return '发货单量必须大于 0';
+    // 放宽校验：ship_orders / main_hours / remark 三者任意有值即允许保存（支持"无单量仅备注"场景）；
+    // 只有三者全空/全0 才算脏数据并拦截。
+    const ship = Number(b.ship_orders) || 0;
+    const mh = Number(b.main_hours) || 0;
+    const rk = (b.remark || '').trim();
+    if (!(ship > 0) && !(mh > 0) && !rk) return '发货单量、主工时、备注至少填写一项';
   } else if (name === '收货') {
     if (!b.customer_name && (b.customer_id == null || b.customer_id === '')) return '客户名称必填';
     const cust = resolveCustomer(db, b);

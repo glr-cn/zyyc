@@ -35,12 +35,13 @@ function createWorkhoursPage(warehouse) {
         // 已隐藏冗余列：shared_hours 公摊工时 / total_hours 总工时 / unit_cost 单均成本（仅展示层隐藏，数据与计算逻辑不变）
       ],
       收货: [
-        { key: 'date', label: '日期' }, { key: 'customer_name', label: '客户名称' }, { key: 'unit', label: '单位' },
-        { key: 'cartons', label: '箱数', num: true }, { key: 'efficiency', label: '时效', num: true },
+        { key: 'date', label: '日期' }, { key: 'customer_name', label: '客户名称' },
+        { key: 'cartons', label: '箱数', num: true },
         { key: 'tons', label: '吨', num: true }, { key: 'cubic', label: '方', num: true }, { key: 'pallets', label: '托盘', num: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
-        { key: 'remark', label: '备注' }, { key: 'doc_cost', label: '单据成本', num: true },
+        { key: 'remark', label: '备注' },
         { key: 'submitter', label: '提交人' },
+        // 已隐藏冗余列：unit/效率/单据成本（仅 UI 层删，后端数据 calc 不变）
       ],
       库内: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目' }, { key: 'unit', label: '单位' },
@@ -59,11 +60,38 @@ function createWorkhoursPage(warehouse) {
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
+    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
 
     function todayStr() {
       const d = new Date();
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    // 轻提示：优先用全局 ERP.toast，未加载时降级为 alert
+    function toast(msg) {
+      if (window.ERP && typeof window.ERP.toast === 'function') window.ERP.toast(msg);
+      else alert(msg);
+    }
+
+    // 虚拟行屏蔽：超管「删除」缺口行时，把 customer_id + date 组合存入 localStorage；
+    // 下次 load() 时对当前仓库的缺口行自动过滤。键按仓库隔离（不同仓屏蔽互不影响）。
+    const GAP_BLOCK_KEY = 'erp_gap_block_v1';
+    function gapKeyOf(r) {
+      // 屏蔽键只对缺口行（filled=0 + wid=0）生效；用 customer_id 或 customer_name + suggest_date/date
+      const cid = r.customer_id != null && r.customer_id !== '' ? String(r.customer_id) : '_';
+      const date = r.suggest_date || r.date || '';
+      return cid + '|' + date;
+    }
+    function readGapBlocks(wh) {
+      try { const all = JSON.parse(localStorage.getItem(GAP_BLOCK_KEY) || '{}'); return new Set(all[wh] || []); }
+      catch (e) { return new Set(); }
+    }
+    function addGapBlock(wh, key) {
+      try {
+        const all = JSON.parse(localStorage.getItem(GAP_BLOCK_KEY) || '{}');
+        (all[wh] = all[wh] || []).push(key);
+        localStorage.setItem(GAP_BLOCK_KEY, JSON.stringify(all));
+      } catch (e) { /* ignore */ }
     }
 
     // 超级管理员判断（原生 JS 无 v-if，用条件渲染控制「删除」按钮显隐）
@@ -135,7 +163,7 @@ function createWorkhoursPage(warehouse) {
           <button id="importBtn" title="导入工时（重复项可确认覆盖/跳过）">导入工时</button>
         </span>
         <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
-        <button id="archiveBtn" title="将勾选或当前筛选的工时归档">归档</button>
+        <button id="archiveBtn" title="批量提交勾选的工时（未填写行自动跳过）">批量提交</button>
         <button id="addBtn" class="primary">+ 新增工时</button>
       </div>
       <div class="wh-archive-tip" id="archiveTip" style="display:none"></div>
@@ -213,11 +241,42 @@ function createWorkhoursPage(warehouse) {
         state.status = e.target.value; state.page = 1; state.checked.clear();
         syncTabUI(); load();
       };
-      $('addBtn').onclick = () => openModal(null);
+      $('addBtn').onclick = () => {
+        if (state.status !== 'pending') { openModal(null); return; }
+        const type = state.workType;
+        const today = todayStr();
+        const base = {
+          // ★ Bug#1 修复：给虚拟行加唯一 tempId（时间戳+随机），DOM 不再靠 work_id=0 做 key
+          tempId: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+          work_id: 0, filled: 1, status: 'pending', submitter: null, submit_time: null,
+          warehouse: state.warehouse, work_type: type, date: today, suggest_date: today, need_backfill: 0,
+          remark: '', main_hours: '', other_hours: '', total_hours: '', efficiency: '',
+        };
+        if (type === '发货' || type === '收货') {
+          base.customer_id = ''; base.customer_name = ''; base.customer_status = '启用';
+          base.unit = '';
+          if (type === '发货') base.ship_orders = '';
+          if (type === '收货') { base.cartons = ''; base.tons = ''; base.cubic = ''; base.pallets = ''; }
+        } else {
+          base.project = '';
+          if (type === '库内') base.unit = '';
+        }
+        // ★ Bug#3 修复：每次展开全新独立对象，绝不用共用引用
+        state.lastRows.unshift({ ...base });
+        renderRows();
+      };
       $('templateBtn').onclick = onDownloadTemplate;
       $('importBtn').onclick = () => $('importFile').click();
       $('importFile').onchange = onImportFile;
-      $('archiveBtn').onclick = onArchive;
+      $('archiveBtn').onclick = onBatchSubmit;
+      // 点「批量提交」时 pointerdown 先于 blur：有勾选时跳过聚焦行的失焦自动保存，
+      // 交由批量提交统一读取当前输入值再保存（避免重复写入 / 旧值覆盖）
+      $('archiveBtn').addEventListener('pointerdown', () => {
+        if (!state.checked.size) return;
+        const a = document.activeElement;
+        const tr = a && a.closest ? a.closest('tr[data-row-wid]') : null;
+        if (tr) tr.dataset.skipBlurSave = '1';
+      }, true);
       ['q'].forEach((id) => ($(id).onkeydown = (e) => { if (e.key === 'Enter') { syncDates(); readFilters(); state.page = 1; load(); } }));
       syncTabUI();
     }
@@ -249,67 +308,159 @@ function createWorkhoursPage(warehouse) {
       openImportConfirm(pendingImport);
     }
 
-    // 归档：优先勾选行；无勾选时归档当前筛选（需二次确认）
-    async function onArchive() {
-      const ids = [...state.checked].map(Number);
-      const body = { warehouse: state.warehouse, work_type: state.workType, dateFrom: state.dateFrom, dateTo: state.dateTo, q: state.q };
-      if (ids.length) body.ids = ids;
-      else body.all = true;
-      const msg = ids.length
-        ? `确认归档勾选的 ${ids.length} 条工时记录？归档后将不在未归档列表显示。`
-        : '当前未勾选任何记录，确认归档「当前筛选结果」中的全部未归档工时？';
-      if (!confirm(msg)) return;
-      try {
-        const r = await API.post('/workhours/archive', body);
-        state.checked.clear();
-        alert('已归档 ' + (r.archived || 0) + ' 条');
-        load();
-      } catch (ex) { alert('归档失败：' + ex.message); }
+    // 批量提交：勾选行 → 过滤未填写 → 保存行内当前输入 → 一次性归档
+    // 铁律：只处理「被勾选且已填写」的记录；未勾选记录与已归档记录一律不受影响。
+    // 与 bindInlineRow.persist() 的 hasAny 口径一致，避免前端批量提交与单行保存规则冲突。
+    function rowFilled(id) {
+      const type = state.workType;
+      const tr = $('whBody').querySelector('tr[data-row-wid="' + id + '"]');
+      if (tr) {
+        const v = (k) => (tr.querySelector('[data-if="' + k + '"]') || {}).value || '';
+        const main = Number(v('main_hours')) || 0, other = Number(v('other_hours')) || 0, remark = v('remark').trim();
+        if (type === '发货') {
+          const ship = Number(v('ship_orders')) || 0;
+          return (ship > 0) || (main > 0) || !!remark;
+        }
+        if (type === '收货') {
+          const c = Number(v('cartons')) || 0, t = Number(v('tons')) || 0, cu = Number(v('cubic')) || 0, p = Number(v('pallets')) || 0;
+          return (c > 0) || (t > 0) || (cu > 0) || (p > 0) || (main > 0) || !!remark;
+        }
+        if (type === '库内' || type === '后勤') {
+          const proj = v('project');
+          return !!proj || (main > 0) || (other > 0) || !!remark;
+        }
+      }
+      // 兜底：从 state.lastRows 读（发货批量提交的非 inline 场景）
+      const row = (state.lastRows || []).find((x) => Number(x.work_id) === Number(id));
+      if (!row) return true;
+      const ship = Number(row.ship_orders) || 0, m = Number(row.main_hours) || 0, rk = (row.remark || '').trim();
+      return (ship > 0) || (m > 0) || !!rk;
     }
 
-    // 导入确认弹窗：逐行展示，重复行可选「覆盖 / 跳过」，新行固定「新建」
+    async function onBatchSubmit() {
+      const ids = [...state.checked].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      if (!ids.length) { alert('请先勾选需要提交的数据'); return; }
+      const validIds = ids.filter(rowFilled);
+      const skipped = ids.length - validIds.length;
+      if (!validIds.length) { alert('勾选的数据尚未填写，无法提交'); return; }
+      if (!confirm(`确认批量提交勾选的 ${validIds.length} 条工时记录？提交后将归档，不再显示在未归档列表。`)) return;
+      try {
+        // 1) 逐条保存行内当前输入（各行值不同，必须逐行写；只写勾选且有效的行）
+        for (const id of validIds) {
+          const tr = $('whBody').querySelector('tr[data-row-wid="' + id + '"]');
+          if (tr && tr.querySelector('[data-if="ship_orders"]')) {
+            await API.put('/workhours/' + id, inlinePayloadOf(tr));
+          }
+        }
+        // 2) 一次批量归档（后端 UPDATE ... WHERE work_id IN (...)，避免 N 次状态更新往返）
+        const r = await API.post('/workhours/batch-submit', {
+          warehouse: state.warehouse, work_type: state.workType, ids: validIds,
+        });
+        const n = Number(r.submitted) || 0;
+        const y = skipped + (Number(r.skipped) || 0);
+        state.checked.clear();
+        toast(`成功批量提交 ${n} 条记录，已自动跳过 ${y} 条未填写记录`);
+        load();
+      } catch (ex) { alert('批量提交失败：' + ex.message); }
+    }
+
+    // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
     function openImportConfirm(ctx) {
       const { rows, errors, preview } = ctx;
-      const dupCnt = preview.duplicateCount || 0;
+      const dupCnt = preview.duplicateCount || rows.filter((r) => r.duplicate).length;
+      const newCnt = rows.length - dupCnt;
+
       const rowsHtml = rows.map((r) => {
         const dup = r.duplicate;
         const ex = r.existing;
-        const choice = dup
-          ? `<label><input type="radio" name="dec_${r.line}" value="skip" checked> 跳过</label>
-             <label><input type="radio" name="dec_${r.line}" value="overwrite"> 覆盖</label>`
-          : '<span class="imp-new">新建</span>';
+        const decide = dup
+          ? `<div class="imp-decide">
+              <label><input type="radio" name="dec_${r.line}" value="skip" checked><span>跳过</span></label>
+              <label><input type="radio" name="dec_${r.line}" value="overwrite"><span>覆盖</span></label>
+            </div>`
+          : `<span class="imp-new-tag">新增</span>`;
         const existTxt = dup && ex ? `已有：${ex.ship_orders} 单 / ${ex.main_hours}h` : '';
         return `<tr class="${dup ? 'imp-dup' : ''}">
-          <td>${r.line}</td><td>${escapeHtml(r.date)}</td><td>${escapeHtml(r.customer_name)}</td>
-          <td>${r.ship_orders}</td><td>${r.main_hours}</td>
-          <td>${dup ? '<span class="cust-tag cust-tag-stop">重复</span> ' + escapeHtml(existTxt) : ''}</td>
-          <td>${choice}</td></tr>`;
+          <td>${r.line}</td>
+          <td>${escapeHtml(r.date)}</td>
+          <td>${escapeHtml(r.customer_name)}</td>
+          <td>${r.ship_orders}</td>
+          <td>${r.main_hours}</td>
+          <td>${dup ? '<span class="cust-tag cust-tag-stop">重复</span> ' + escapeHtml(existTxt) : '<span class="imp-new-tag-empty">—</span>'}</td>
+          <td>${decide}</td>
+        </tr>`;
       }).join('');
+
       const errHtml = errors.length
         ? `<div class="imp-errors"><b>${errors.length} 行被忽略：</b><br>` + errors.map((x) => `第 ${x.line} 行：${escapeHtml(x.error)}`).join('<br>') + '</div>'
         : '';
+
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
-      overlay.innerHTML = `<div class="modal imp-confirm" style="max-width:820px">
-        <div class="modal-head"><span>导入预览 · 共 ${rows.length} 行（${dupCnt} 行重复）</span><button class="close" type="button">×</button></div>
-        <div class="modal-body">
-          <div class="imp-hint">重复行请逐条选择「覆盖」或「跳过」，未选择时默认跳过。确认后写入，导入过程可事务回滚。</div>
-          <table class="grid imp-grid"><thead><tr>
-            <th>行号</th><th>日期</th><th>客户名称</th><th>发货单量</th><th>主工时</th><th>重复提示</th><th>处理</th>
-          </tr></thead><tbody>${rowsHtml}</tbody></table>
-          ${errHtml}
-        </div>
-        <div class="modal-foot">
-          <button type="button" class="imp-cancel">取消</button>
-          <button type="button" class="primary imp-ok">确认导入</button>
-        </div>
-      </div>`;
+      overlay.innerHTML = `
+        <div class="modal imp-confirm">
+          <div class="modal-head">
+            <span>导入预览 · 共 ${rows.length} 行</span>
+            <button class="close" type="button">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="imp-alert">
+              <b>注意：</b>重复行请逐条选择「覆盖」或「跳过」，未选择时默认 <b style="color:#b26a00">跳过</b>。
+              确认导入后，后端将在单个数据库事务内写入，任意一行失败则整体回滚。
+            </div>
+            <div class="imp-summary">
+              <span>共 <span class="cnt">${rows.length}</span> 行</span>
+              <span>重复 <span class="cnt cnt-dup">${dupCnt}</span> 行</span>
+              <span>新增 <span class="cnt cnt-new">${newCnt}</span> 行</span>
+              <span class="muted">重复行默认跳过，可在表格内改为覆盖</span>
+              ${dupCnt ? `<span style="margin-left:auto;display:inline-flex;gap:6px">
+                <button type="button" class="imp-batch" data-batch="skip">全部跳过</button>
+                <button type="button" class="imp-batch" data-batch="overwrite">全部覆盖</button>
+              </span>` : ''}
+            </div>
+            <div class="imp-grid-wrap">
+              <table class="imp-grid">
+                <thead><tr>
+                  <th style="width:52px">行号</th>
+                  <th style="width:100px">日期</th>
+                  <th>客户名称</th>
+                  <th style="width:90px">发货单量</th>
+                  <th style="width:90px">主工时</th>
+                  <th>重复提示</th>
+                  <th style="width:150px">处理方式</th>
+                </tr></thead>
+                <tbody>${rowsHtml}</tbody>
+              </table>
+            </div>
+            ${errHtml}
+          </div>
+          <div class="modal-foot">
+            <button type="button" class="imp-cancel">取消</button>
+            <button type="button" class="primary imp-ok">确认导入</button>
+          </div>
+        </div>`;
       document.body.appendChild(overlay);
+
       const close = () => overlay.remove();
       overlay.querySelector('.close').onclick = close;
       overlay.querySelector('.imp-cancel').onclick = close;
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+
+      // 批量操作：一键把所有重复行的处理方式统一为 skip 或 overwrite
+      // 只改 DOM radio.checked；单行 radio 原生 group 逻辑继续生效，批量操作后仍可逐行微调
+      overlay.querySelectorAll('.imp-batch').forEach((btn) => {
+        btn.onclick = () => {
+          const target = btn.dataset.batch;   // 'skip' | 'overwrite'
+          rows.forEach((r) => {
+            if (!r.duplicate) return;         // 只影响重复行
+            const input = overlay.querySelector(`input[name="dec_${r.line}"][value="${target}"]`);
+            if (input) input.checked = true;  // radio group 会自动互斥，同时同步选中态
+          });
+        };
+      });
+
       overlay.querySelector('.imp-ok').onclick = async () => {
+        // 1) 收集 decisions（只有 duplicate 行才收集；未选默认 skip）
         const decisions = {};
         rows.forEach((r) => {
           if (!r.duplicate) return;
@@ -319,15 +470,19 @@ function createWorkhoursPage(warehouse) {
         const fd = new FormData();
         fd.append('file', ctx.file);
         fd.append('decisions', JSON.stringify(decisions));
+
         const btn = overlay.querySelector('.imp-ok');
-        btn.disabled = true; btn.textContent = '导入中…';
+        btn.disabled = true; btn.textContent = 'Loading…';
         try {
           const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
           close();
-          alert(`导入完成：新建 ${res.created || 0} 条，覆盖 ${res.overwritten || 0} 条，跳过 ${res.skipped || 0} 条` +
-            (res.errors && res.errors.length ? `\n忽略 ${res.errors.length} 行（格式/客户不匹配）` : ''));
+          toast(`成功导入并归档 ${(res.created || 0) + (res.overwritten || 0)} 条记录（跳过 ${res.skipped || 0} 条）` +
+            (res.errors && res.errors.length ? `，忽略 ${res.errors.length} 行格式不匹配` : ''));
           state.page = 1; load();
-        } catch (ex) { btn.disabled = false; btn.textContent = '确认导入'; alert('导入失败：' + ex.message); }
+        } catch (ex) {
+          btn.disabled = false; btn.textContent = '确认导入';
+          alert('导入失败：' + ex.message);
+        }
       };
     }
     function readFilters() {
@@ -336,51 +491,101 @@ function createWorkhoursPage(warehouse) {
     }
 
     async function load() {
-      // 渲染前刷新真实角色：删除按钮按库内最新 role_code 门控（铁律 3）
       await refreshRole();
+      // ★ Bug#4 保护：查询/日期筛选刷新前，先把当前 pending 列表里所有未入库的虚拟行
+      // （tempId 非空 + work_id=0）捕获出来；load 完成后重新 unshift 到新列表顶部。
+      // 这样不管用户怎么切筛选条件，草稿都不会被覆盖。
+      const drafts = (state.status === 'pending')
+        ? state.lastRows.filter((r) => r.tempId && Number(r.work_id) === 0)
+        : [];
       const params = new URLSearchParams({ warehouse: state.warehouse, work_type: state.workType, status: state.status, page: state.page, pageSize: state.pageSize });
       if (state.q) params.set('q', state.q);
       if (state.dateFrom) params.set('dateFrom', state.dateFrom);
       if (state.dateTo) params.set('dateTo', state.dateTo);
-      const r = await API.get('/workhours?' + params.toString());
+      const [r, cResp] = await Promise.all([
+        API.get('/workhours?' + params.toString()),
+        API.get('/customers/options?warehouse=' + encodeURIComponent(state.warehouse)).catch(() => ({ data: [] })),
+      ]);
       state.lastRows = r.data || [];
       state.lastTotal = r.total || 0;
+      state.customers = cResp.data || [];
+      // ★ Bug#4 保护：把之前捕获的草稿重新合并到顶部
+      if (drafts.length && state.status === 'pending') {
+        // 先过滤掉后端返回里可能已经存在的草稿（极端情况：用户在另一标签页保存了草稿）
+        state.lastRows = drafts.concat(state.lastRows);
+      }
       renderRows();
       renderPager(state.lastTotal, r.page || 1, r.pageSize || state.pageSize);
     }
 
-    // 统一渲染表头+表体（load 与行内编辑局部重绘共用）
-    function renderRows() {
-      renderHead();
-      const rows = state.lastRows;
-      const span = COLUMNS[state.workType].length + 2; // +勾选列 +操作列
-      $('whBody').innerHTML = rows.length ? rows.map(rowHtml).join('')
-        : `<tr><td colspan="${span}" class="empty">${state.status === 'archived' ? '暂无已归档记录' : '暂无工时记录'}</td></tr>`;
-      // 发货未归档：每行都是可编辑输入行，逐行绑定实时计算 + 失焦/回车自动保存
-      if (state.workType === '发货' && state.status === 'pending') {
-        $('whBody').querySelectorAll('tr[data-row-cid]').forEach(bindInlineRow);
+      // 统一渲染表头+表体（load 与行内编辑局部重绘共用）
+      function renderRows() {
+        renderHead();
+        let rows = state.lastRows;
+        // 虚拟行屏蔽：只读当前仓的 gap_block 集合，过滤掉已超管屏蔽的发货缺口行
+        if (state.workType === '发货' && state.status === 'pending') {
+          const blocks = readGapBlocks(state.warehouse);
+          if (blocks.size) rows = rows.filter((r) => !(r.filled === 0 && blocks.has(gapKeyOf(r))));
+        }
+        state._shownRows = rows;
+        const span = COLUMNS[state.workType].length + (state.workType === '发货' && state.status === 'pending' ? 2 : 1);
+        // 传 idx 给 rowHtml，rowHtml 在 inline 分支加 data-row-idx 属性
+        $('whBody').innerHTML = rows.length
+          ? rows.map((r) => rowHtml(r, state._shownRows.indexOf(r))).join('')
+          : `<tr><td colspan="${span}" class="empty">${state.status === 'archived' ? '暂无已归档记录' : '暂无工时记录，点击右上角「新增工时」开始录入'}</td></tr>`;
+        // 所有 pending 行都行内直编（含收货/库内/后勤）；已归档行只读
+        if (state.status === 'pending') {
+          $('whBody').querySelectorAll('tr[data-row-idx]').forEach(bindInlineRow);
+        }
       }
-    }
 
-    // 发货行内直编的列宽（px）：勾选34 / 日期96 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
-    // 用 table-layout:fixed + colgroup 锁定，输入框 width:100% 贴合列宽，杜绝撑破；操作列 sticky 贴右。
-    const INLINE_WIDTHS = { 发货: [34, 96, 150, 62, 80, 78, 72, 84, 116, 72, 96] };
+    // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
+    // 发货：勾选34 / 日期110 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
+    // 收货：日期110 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（无勾选列）
+    // 库内：日期110 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（8列 + 操作）
+    // 后勤：日期110 / 项目200 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（7列 + 操作，无单位）
+    const INLINE_WIDTHS = {
+      发货: [34, 110, 150, 62, 80, 78, 72, 84, 116, 72, 96],
+      收货: [110, 180, 80, 72, 72, 80, 78, 84, 116, 72, 96],
+      库内: [110, 200, 62, 78, 84, 116, 72, 96],
+      后勤: [110, 200, 78, 84, 116, 72, 96],
+    };
 
     function renderHead() {
       const cols = COLUMNS[state.workType];
-      const inline = state.workType === '发货' && state.status === 'pending';
+      // 所有 pending 行都行内直编：统一开 wh-inline-grid（table-layout:fixed），
+      // 但只给发货锁精细列宽；收货/库内/后勤用 colgroup 空 → 浏览器均匀分配
+      const inline = state.status === 'pending';
       const table = $('whTable');
       if (table) table.classList.toggle('wh-inline-grid', inline);
       const cg = $('whColGroup');
       if (cg) {
         if (inline && INLINE_WIDTHS[state.workType]) {
-          cg.innerHTML = INLINE_WIDTHS[state.workType].map((w) => `<col style="width:${w}px">`).join('');
-        } else cg.innerHTML = '';
+          // 发货：精确列宽锁定（含勾选列 34 + 操作列 96）
+          const widths = INLINE_WIDTHS[state.workType];
+          cg.innerHTML = widths.map((w) => `<col style="width:${w}px">`).join('');
+        } else if (inline) {
+          // 收货/库内/后勤：空 colgroup + table-layout:fixed → 浏览器均分；后续可按需扩展
+          cg.innerHTML = '';
+        } else {
+          cg.innerHTML = '';
+        }
       }
-      const ck = state.status === 'pending'
+      // 勾选列（仅发货 pending；其他类型批量提交按钮也未启用）
+      const ck = state.workType === '发货' && state.status === 'pending'
         ? '<th class="wh-ck"><input type="checkbox" id="ckAll" title="勾选本页全部"></th>' : '';
-      $('whHead').innerHTML = ck + cols.map((col) => `<th class="${col.num ? 'num' : ''}">${col.label}</th>`).join('') + '<th class="ops-head">操作</th>';
-      if (state.status === 'pending') {
+      // ★ 必填项星号（三个类型各自的必填列）
+      const REQ_MAP = {
+        收货: new Set(['date', 'customer_name', 'cartons', 'main_hours']),
+        库内: new Set(['date', 'project', 'main_hours']),
+        后勤: new Set(['date', 'project', 'main_hours']),
+      };
+      const REQ_COLS = REQ_MAP[state.workType] || new Set();
+      $('whHead').innerHTML = ck + cols.map((col) => {
+        const star = REQ_COLS.has(col.key) ? '<span class="req-star">*</span> ' : '';
+        return `<th class="${col.num ? 'num' : ''}">${star}${col.label}</th>`;
+      }).join('') + '<th class="ops-head">操作</th>';
+      if (state.workType === '发货' && state.status === 'pending') {
         const all = $('ckAll');
         if (all) all.onchange = (e) => {
           [...$('whBody').querySelectorAll('input.wh-row-ck')].forEach((box) => {
@@ -416,53 +621,130 @@ function createWorkhoursPage(warehouse) {
       return ph + ['单', '件', '箱'].map((u) => `<option value="${u}" ${u === sel ? 'selected' : ''}>${u}</option>`).join('');
     }
 
-    function rowHtml(r) {
+    function projectOptions(type, sel, placeholder) {
+      const ph = placeholder || '—';
+      const list = PROJECT_OPTIONS[type] || [];
+      return `<option value="" ${!sel ? 'selected' : ''}>${escapeHtml(ph)}</option>`
+        + list.map((p) => `<option value="${escapeAttr(p)}" ${p === sel ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('');
+    }
+
+    function rowHtml(r, idx) {
       const cols = COLUMNS[state.workType];
       const trend = r.trend || null;
-      // 发货 + 未归档：全部行（缺口 filled=0 与已填 filled=1）都行内直编，无「填写」按钮
-      const inline = state.workType === '发货' && state.status === 'pending';
-      const isGap = inline && r.filled === 0;               // 缺口行：work_id=0，提交用 POST+auto_archive
-      const wid = r.work_id || 0;                            // 已填行：>0，保存用 PUT 更新原记录
+      // 所有 pending 行都行内直编（含收货/库内/后勤），发货保留缺口行(wid=0)机制；
+      // 已归档行保持只读（走下面非 inline 分支）。
+      const inline = state.status === 'pending';
+      const isGap = inline && state.workType === '发货' && r.filled === 0; // 仅发货有缺口行
+      const wid = r.work_id || 0;
       const rowAttrs = `data-row-cid="${r.customer_id}" data-row-wid="${wid}" ` +
-        `data-row-date="${escapeAttr(r.date || r.suggest_date || todayStr())}" data-row-cname="${escapeAttr(r.customer_name || '')}"`;
-      // 勾选列（缺口行无 work_id，禁止勾选归档）
-      const ck = state.status === 'pending'
+        `data-row-date="${escapeAttr(r.date || r.suggest_date || todayStr())}" data-row-cname="${escapeAttr(r.customer_name || '')}"` +
+        ((r.tempId && inline) ? ` data-temp-id="${escapeAttr(r.tempId)}"` : '') +
+        (inline ? ` data-row-idx="${idx}"` : '');
+      // 勾选列：仅发货 pending 有；缺口行禁止勾选
+      const ck = state.workType === '发货' && state.status === 'pending'
         ? '<td class="wh-ck">' + (isGap ? '' :
             `<input type="checkbox" class="wh-row-ck" data-id="${r.work_id}" ${state.checked.has(r.work_id) ? 'checked' : ''}>`) + '</td>'
         : '';
+      // 各类型哪些字段可编辑（rowHtml inline 分支 + bindInlineRow recalc/persist 共用）
+      const numVal = (v) => (v != null && Number(v) !== 0) ? v : '';
       const cells = cols.map((col) => {
         if (inline) {
-          // 日期：缺口行显示建议日期（待补标红），已填行显示实际日期；均只读，按此日期入库
+          // —— 日期：仅发货缺口行只读（显示 suggest_date 带待补标签）；其余所有 pending 行都渲染 <input type="date">
           if (col.key === 'date') {
-            const d = isGap ? (r.suggest_date || todayStr()) : r.date;
-            return `<td class="wh-inline-date">${escapeHtml(d || '')}${isGap && r.need_backfill ? ' <span class="bk-tag">[待补]</span>' : ''}</td>`;
+            if (isGap) {
+              const d = r.suggest_date || todayStr();
+              return `<td class="wh-inline-date">${escapeHtml(d || '')}${r.need_backfill ? ' <span class="bk-tag">[待补]</span>' : ''}</td>`;
+            }
+            const d = r.date || todayStr();
+            // 收货/库内/后勤 日期都是必填；发货也用必填提示（发货必填由后端保证：ship/main/remark 至少一项）
+            const ph = '* 日期（必填）';
+            return `<td><input data-if="date" type="date" class="wh-cell-date" value="${escapeAttr(d)}" placeholder="${escapeAttr(ph)}" data-ph="${escapeAttr(ph)}"></td>`;
           }
-          // 客户名：缺口行用 company_name，已填行用关联最新名 + 状态标签
+          // —— 客户名：
+          //   发货：缺口行(wid=0)只读显示（系统自动带出的货主，客户关联不可改）；
+          //         已填行(wid>0)也只读（历史数据，避免误改客户归属）。
+          //   收货：wid=0（新增行）或 wid>0 都行内搜索下拉（原生 datalist + text input）。
+          //         option.value 存 label（浏览器自然显示中文客户名），data-cid 存 customer_id（JS 取数用）。
           if (col.key === 'customer_name') {
+            if (state.workType === '收货') {
+              const dlId = 'dl_customers_' + state.warehouse.replace(/[^a-zA-Z0-9]/g, '_');
+              const opts = (state.customers || []).map((o) => {
+                const label = (o.owner_name || o.company_name || '') +
+                  (o.status === '已删除' ? ' (已删除)' : o.status === '停用' ? ' (已停用)' : '');
+                const cid = o.customer_id != null && o.customer_id !== '' ? String(o.customer_id) : '';
+                // ★ Bug#1 修复：option.value 存 label（浏览器显示中文），data-cid 存 customer_id（JS 取数）
+                return `<option value="${escapeAttr(label)}" data-cid="${cid}">${escapeHtml(label)}</option>`;
+              }).join('');
+              const curCid = (r.customer_id != null && r.customer_id !== '') ? String(r.customer_id) : '';
+              const curName = curCid
+                ? ((state.customers || []).find((c) => String(c.customer_id) === curCid)?.owner_name || r.customer_name || '')
+                : '';
+              return `<td>
+                <datalist id="${dlId}">${opts}</datalist>
+                <input list="${dlId}" data-if="customer_name_cid" class="wh-cell-txt wh-cust-sel"
+                  placeholder="* 输入客户名搜索（必填）" autocomplete="off"
+                  value="${escapeAttr(curName)}" data-cur-cid="${curCid}"
+                  onfocus="this.value=''"/>
+              </td>`;
+            }
+            // 发货：保持只读
             let tag = '';
             if (r.customer_status === '已删除') tag = ' <span class="cust-tag cust-tag-del">(已删除)</span>';
             else if (r.customer_status === '停用') tag = ' <span class="cust-tag cust-tag-stop">(已停用)</span>';
             return `<td>${escapeHtml(r.customer_name || '')}${tag}</td>`;
           }
-          // 可编辑控件：单位下拉 / 单量·主工时·其他工时数字框 / 备注文本框
-          // 防脏读：空值一律渲染为空字符串（绝不写 0 或占位文字冒充已填）；placeholder 仅空时显示且浅色由 CSS 控制。
-          const numVal = (v) => (v != null && Number(v) !== 0) ? v : ''; // 0 视为未填，保持真空态
-          if (col.key === 'unit')        return `<td><select data-if="unit" class="wh-cell-sel">${unitOptions(isGap ? '' : (r.unit || '单'))}</select></td>`;
-          if (col.key === 'ship_orders') return `<td><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
-          if (col.key === 'main_hours')  return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="请输入主工时"></td>`;
-          if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
-          if (col.key === 'remark')      return `<td><input data-if="remark" class="wh-cell-txt" type="text" value="${escapeAttr(r.remark || '')}" placeholder="请输入备注"></td>`;
-          // 未归档：提交人列固定显示 -（尚未提交，不冒充已有提交人）
-          if (col.key === 'submitter')   return '<td class="muted">-</td>';
-          // 时效：单量与主工时都 >0 才显示计算值，否则 -（与行内 recalc 口径一致，不显示 0.000）
-          if (col.key === 'efficiency') {
-            const m = Number(r.main_hours) || 0, s = Number(r.ship_orders) || 0;
-            return `<td class="num" data-out="efficiency">${(s > 0 && m > 0) ? num(r.efficiency) : '-'}</td>`;
+          // —— 项目（库内/后勤）：下拉框；必填项加 placeholder 必填标记
+          if (col.key === 'project') {
+            const type = state.workType;
+            const ph = (type === '库内' || type === '后勤') ? '* 请选择项目（必填）' : '—';
+            return `<td><select data-if="project" class="wh-cell-sel">${projectOptions(type, r.project || '', ph)}</select></td>`;
           }
+          // —— 单位（发货/收货/库内）：下拉；后勤没有此列
+          if (col.key === 'unit') {
+            const defUnit = state.workType === '发货' ? (r.unit || r.default_unit || '单') : (r.unit || '单');
+            return `<td><select data-if="unit" class="wh-cell-sel">${unitOptions(defUnit)}</select></td>`;
+          }
+          // —— 发货/收货/库内/后勤：工时通用数字框
+          // —— 发货/收货/库内/后勤：工时通用数字框；主工时对库内/后勤也是必填（与收货口径一致）
+          if (col.key === 'main_hours')  {
+            const ph = state.workType === '发货' ? '请输入主工时' : '* 主工时（必填）';
+            return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="${escapeAttr(ph)}"></td>`;
+          }
+          if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
+          // —— 发货专属
+          if (col.key === 'ship_orders') return `<td><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
+          // —— 收货专属
+          if (col.key === 'cartons')  {
+            const ph = state.workType === '收货' ? '* 箱数（必填）' : '箱数';
+            return `<td><input data-if="cartons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cartons)}" placeholder="${escapeAttr(ph)}"></td>`;
+          }
+          if (col.key === 'tons')     return `<td><input data-if="tons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.tons)}" placeholder="吨"></td>`;
+          if (col.key === 'cubic')    return `<td><input data-if="cubic" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cubic)}" placeholder="方"></td>`;
+          if (col.key === 'pallets')  return `<td><input data-if="pallets" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.pallets)}" placeholder="托盘"></td>`;
+          // —— 备注（所有类型通用）
+          if (col.key === 'remark') return `<td><input data-if="remark" class="wh-cell-txt" type="text" value="${escapeAttr(r.remark || '')}" placeholder="请输入备注"></td>`;
+          // —— 实时计算列（发货 efficiency / 收货 efficiency / 库内+后勤 total_hours）：留空交给 bindInlineRow.recalc
+          if (col.key === 'efficiency') {
+            const type = state.workType;
+            if (type === '发货') {
+              const m = Number(r.main_hours) || 0, s = Number(r.ship_orders) || 0;
+              return `<td class="num" data-out="efficiency">${(s > 0 && m > 0) ? num(r.efficiency) : '-'}</td>`;
+            }
+            if (type === '收货') {
+              const m = Number(r.main_hours) || 0, c = Number(r.cartons) || 0;
+              return `<td class="num" data-out="efficiency">${(c > 0 && m > 0) ? num(r.efficiency) : '-'}</td>`;
+            }
+          }
+          if (col.key === 'total_hours') {
+            const m = Number(r.main_hours) || 0, o = Number(r.other_hours) || 0;
+            return `<td class="num" data-out="total_hours">${(m + o) > 0 ? ((Math.round((m + o + Number.EPSILON) * 1000) / 1000).toFixed(3)) : '-'}</td>`;
+          }
+          // —— 未归档：提交人固定 -；其他展示列（doc_cost/unit_cost）未归档无值
+          if (col.key === 'submitter') return '<td class="muted">-</td>';
+          if (col.key === 'doc_cost' || col.key === 'unit_cost') return '<td class="muted">-</td>';
           return '<td class="muted">—</td>';
         }
         if (col.trend && trend) return trendCell(r[col.key], trend[col.key]);
-        // 提交人：已归档显示真实提交人，未归档（含无值）显示 -
         if (col.key === 'submitter') return `<td>${escapeHtml(r.submitter || '-')}</td>`;
         if (col.num) return `<td class="num">${num(r[col.key])}</td>`;
         if (col.key === 'customer_name') {
@@ -474,28 +756,30 @@ function createWorkhoursPage(warehouse) {
         }
         return `<td>${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
       }).join('');
-      // 操作列 —— 铁律 3：按「行状态 + 登录用户真实角色」动态渲染，严禁越权：
-      //  - archived：查看（只读）/ 撤回（本人或管理员）/ 修改提交人（管理员）/ 删除（仅超管）
-      //  - pending + 行内直编（发货）：提交（蓝色，保存并归档）/ 删除（红色，仅超管物理删除）
-      //  - pending + 非行内（收货/库内/后勤）：编辑 / 提交 / 删除
-      // 角色取自 load() 里 refreshRole()（/api/auth/me 库内最新 role_code），不读 localStorage 旧快照。
+      // 操作列 —— 已归档/未归档分支不变；pending 全类型都走 inline ops
       const archived = String(r.status || (state.status === 'archived' ? 'archived' : 'pending')) === 'archived';
       let ops;
       if (archived) {
-        // 已归档：修改（本人或管理员）/ 撤回（本人或管理员）/ 修改提交人（仅管理员）/ 删除（仅超管）
         const canEditArchived = state.isAdmin || (!!state.meName && r.submitter === state.meName);
-        const canWithdraw = canEditArchived;  // 撤回权限与修改一致（本人或管理员）
+        const canWithdraw = canEditArchived;
         ops = `<button data-act="view" data-id="${wid}" title="只读查看">查看</button>`
           + (canEditArchived ? `<button data-act="editArchived" data-id="${wid}" class="primary" title="修改归档记录（弹窗编辑）">修改</button>` : '')
           + (canWithdraw ? `<button data-act="withdraw" data-id="${wid}" title="撤回到未归档，撤回后可重新编辑">撤回</button>` : '')
           + (state.isAdmin ? `<button data-act="editSubmitter" data-id="${wid}" title="修改该记录的提交人">修改提交人</button>` : '')
           + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条归档记录（不可恢复）">删除</button>` : '');
       } else if (inline) {
-        const submitBtn = `<button data-act="submit" data-id="${wid}" class="primary" title="保存当前行并提交归档">提交</button>`;
-        const delBtn = (!isGap && state.isSuper)
-          ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条记录（不可恢复）">删除</button>`
-          : '<span class="ops-none" title="仅超级管理员可删除记录">—</span>';
-        ops = submitBtn + delBtn;
+        const submitBtn = `<button data-act="submit" data-id="${wid}" class="primary" title="保存当前行并提交归档">保存提交</button>`;
+        let delBtn;
+        if (wid === 0) {
+          delBtn = `<button data-act="cancelNew" data-id="0" class="danger" title="取消新增（不写入数据库）">取消</button>`;
+        } else if (state.isSuper) {
+          delBtn = `<button data-act="delAdmin" data-id="${wid}" class="danger" ${isGap ? 'data-gap="1"' : ''}
+              title="${isGap ? '将该虚拟缺口行从本页屏蔽（不再自动带出）' : '永久删除该条记录（不可恢复）'}">删除</button>`;
+        } else {
+          delBtn = '<span class="ops-none" title="仅超级管理员可删除记录">—</span>';
+        }
+        // ★ Bug#5 修复：操作列按钮用 flex 布局横向并排（.ops-inner display:flex gap:6px）
+        ops = `<div class="ops-inner">${submitBtn}${delBtn}</div>`;
       } else {
         ops = `<button data-act="edit" data-id="${r.work_id}">编辑</button>
                <button data-act="submit" data-id="${r.work_id}" class="primary" title="提交归档">提交</button>
@@ -513,11 +797,24 @@ function createWorkhoursPage(warehouse) {
         return;
       }
       const act = e.target.dataset.act, id = e.target.dataset.id;
-      if (!act || !id) return;
+      if (!act) return;
+      if (act === 'cancelNew') {
+        // 取消新增：用 tempId 精确匹配（避免 wid=0 误删其他虚拟行）
+        const tr = e.target.closest('tr');
+        const tempId = tr && tr.dataset.tempId;
+        const wid = Number(tr && tr.dataset.rowWid) || 0;
+        state.lastRows = state.lastRows.filter((r) => {
+          if (tempId && r.tempId === tempId) return false;
+          // 没 tempId 时退而用 wid=0 兜底（老数据或发货缺口行）
+          if (!tempId && wid === 0 && Number(r.work_id) === 0) return false;
+          return true;
+        });
+        tr && tr.remove();
+        return;
+      }
+      // 发货 tab 的非 inline 行（已归档）edit → openModal 编辑
       if (act === 'edit') openModal(id);
-      // 已归档记录弹窗修改（仅本人或管理员可见）——复用 openModal 编辑模式
       if (act === 'editArchived') openModal(id);
-      // 归档详情：只读查看
       if (act === 'view') openModal(id, null, { readonly: true });
       // 提交归档：行内视图走行内保存（带当前输入值）；其他 tab 直接提交
       if (act === 'submit') {
@@ -546,11 +843,25 @@ function createWorkhoursPage(warehouse) {
         API.req('DELETE', '/workhours/' + id).then(load).catch((ex) => alert(ex.message));
       }
       // 永久删除（仅超管可见）：二次确认 + 后端 role_code 强校验
-      // 已归档记录用更严厉的提示；pending 保持原文案
+      // 已归档记录用更严厉的提示；pending 保持原文案；虚拟缺口行（wid=0）走前端屏蔽，绝不调后端
       if (act === 'delAdmin') {
         const row = e.target.closest && e.target.closest('tr');
         const wid = row && Number(row.dataset.rowId);
         const r = state.lastRows.find((x) => x.work_id === wid);
+        const isVirtual = (wid === 0 || wid == null) && !!e.target.dataset.gap;
+        if (isVirtual) {
+          // 虚拟缺口行：前端屏蔽（写入 localStorage + 立即 DOM 移除）
+          if (!confirm('该货主尚未填报数据，确认要将其从当前列表中移除吗？（屏蔽后刷新也不会再自动带出）')) return;
+          // 用 state._shownRows 里对应的那行（gap 行没有 work_id，靠 rowAttrs 里的 rowCid + rowDate 反查）
+          const cid = row && row.dataset.rowCid;
+          const date = row && row.dataset.rowDate;
+          const gapRow = state.lastRows.find((x) => String(x.customer_id) === String(cid) && (x.suggest_date || x.date) === date && x.filled === 0);
+          if (gapRow) addGapBlock(state.warehouse, gapKeyOf(gapRow));
+          const tr = btn.closest('tr');
+          if (tr) tr.remove();
+          toast('已屏蔽该虚拟行（' + (gapRow && gapRow.customer_name ? gapRow.customer_name : '') + '）');
+          return;
+        }
         const isArchived = r && String(r.status || '') === 'archived';
         const prompt = isArchived
           ? '确定要永久删除该条归档记录吗？此操作不可恢复！'
@@ -562,77 +873,186 @@ function createWorkhoursPage(warehouse) {
           .then(() => {
             const tr = btn.closest('tr');
             if (tr) tr.remove();
-            alert('已删除');
+            toast('已删除');
             load();
           })
           .catch((ex) => { btn.disabled = false; alert('删除失败：' + ex.message); });
       }
     }
 
-    // 行内直编：实时计算时效 + 失焦/回车自动保存为 pending 草稿；「提交」按钮保存并归档。
-    // 缺口行(wid=0) → POST /workhours（草稿待提交；提交时 auto_archive=true）
+    // 行内直编行 → 后端 payload（唯一取数口径：行内保存与批量提交共用）
+    // 按 workType 动态组装：发货/收货带客户关联字段，库内/后勤带 project
+    function inlinePayloadOf(tr) {
+      const val = (k) => { const e = tr.querySelector('[data-if="' + k + '"]'); return e ? e.value : ''; };
+      const type = state.workType;
+      const base = { warehouse: state.warehouse, work_type: type };
+      // 日期：发货缺口行只读（用 dataset.rowDate）；其余都走 date input
+      base.date = (type === '发货' && Number(tr.dataset.rowWid) === 0 && (tr.dataset.rowDate || '').length === 10)
+        ? tr.dataset.rowDate
+        : (val('date') || tr.dataset.rowDate || todayStr());
+      // 备注：trim 后真空 → null（后端 CREATE TABLE remark TEXT DEFAULT NULL 口径）
+      const remark = (val('remark') || '').trim();
+      base.remark = remark || null;
+      // 工时通用
+      base.main_hours = Number(val('main_hours')) || 0;
+      base.other_hours = Number(val('other_hours')) || 0;
+      base.shared_hours = 0;
+
+      if (type === '发货' || type === '收货') {
+        if (type === '收货') {
+          // ★ Bug#1 修复：customer_name_cid input.value 现在是 label（客户名），不是 customer_id 数字。
+          // customer_id 从 tr.dataset.rowCid 取（bindInlineRow 的 input/change 事件维护）。
+          const cidSel = tr.dataset.rowCid || '';
+          if (cidSel) {
+            base.customer_id = Number(cidSel);
+            const hit = (state.customers || []).find((c) => String(c.customer_id) === String(cidSel));
+            base.customer_name = hit ? (hit.owner_name || hit.company_name) : (tr.dataset.rowCname || null);
+          } else {
+            base.customer_id = null;
+            base.customer_name = null;
+          }
+        } else {
+          base.customer_id = tr.dataset.rowCid != null && tr.dataset.rowCid !== '' ? Number(tr.dataset.rowCid) : null;
+          base.customer_name = tr.dataset.rowCname || null;
+        }
+      }
+      if (type === '发货') {
+        base.unit = val('unit') || '单';
+        base.ship_orders = Number(val('ship_orders')) || 0;
+      }
+      if (type === '收货') {
+        // 已隐藏 unit 列，但后端 payload + calcRow 仍需要；后端校验里 unit 非必填，给个兜底
+        base.unit = '单';
+        base.cartons = Number(val('cartons')) || 0;
+        base.tons = Number(val('tons')) || 0;
+        base.cubic = Number(val('cubic')) || 0;
+        base.pallets = Number(val('pallets')) || 0;
+      }
+      if (type === '库内' || type === '后勤') {
+        base.project = val('project') || null;
+      }
+      if (type === '库内') {
+        base.unit = val('unit') || '单';
+      }
+      return base;
+    }
+
+    // 行内直编：实时计算时效/总工时 + 失焦/回车自动保存为 pending 草稿；「保存提交」按钮保存并归档。
+    // 发货缺口行(wid=0) → POST /workhours（草稿；提交时 auto_archive=true）
     // 已填行(wid>0) → PUT /workhours/:wid，提交时再 POST /:id/submit（写提交人 + 提交时间）
     function bindInlineRow(tr) {
       const el = (k) => tr.querySelector('[data-if="' + k + '"]');
       const val = (k) => { const e = el(k); return e ? e.value : ''; };
-      // 时效：只有 单量>0 且 主工时>0 才计算（round3），否则一律显示 -（防脏数据冒充 0.000）
-      const recalc = () => {
-        const ship = Number(val('ship_orders')) || 0, main = Number(val('main_hours')) || 0;
-        const out = tr.querySelector('[data-out="efficiency"]');
-        if (out) out.textContent = (ship > 0 && main > 0)
-          ? (Math.round((ship / main + Number.EPSILON) * 1000) / 1000).toFixed(3)
-          : '-';
+      const type = state.workType;
+      // 从 data-row-idx 解析当前行在 state._shownRows 里的索引
+      const idx = parseInt(tr.dataset.rowIdx, 10);
+      // ★ 核心修复：syncBack 把 DOM 里用户输入的值回写到 state.lastRows[idx]
+      // 这样无论 renderRows() 因何种原因重渲染（点击新增 / 局部保存后重绘），
+      // 用户已填写的草稿数据都不会被丢失
+      const syncBack = () => {
+        if (isNaN(idx) || idx < 0) return;
+        const row = state.lastRows[idx];
+        if (!row) return;
+        // 通用字段（所有类型共用 el 一定存在）
+        const dateEl = el('date'); if (dateEl) row.date = dateEl.value || row.date;
+        const mainEl = el('main_hours'); if (mainEl) row.main_hours = mainEl.value === '' ? '' : Number(mainEl.value);
+        const otherEl = el('other_hours'); if (otherEl) row.other_hours = otherEl.value === '' ? '' : Number(otherEl.value);
+        const remarkEl = el('remark'); if (remarkEl) row.remark = remarkEl.value || '';
+        // 项目（仅库内/后勤有此列）
+        const projEl = el('project'); if (projEl) row.project = projEl.value || null;
+        // 单位（发货/库内有此列；收货隐藏了）
+        const unitEl = el('unit'); if (unitEl) row.unit = unitEl.value || null;
+        // 发货专属
+        const shipEl = el('ship_orders'); if (shipEl) row.ship_orders = shipEl.value === '' ? '' : Number(shipEl.value);
+        // 收货专属
+        const cartonsEl = el('cartons'); if (cartonsEl) row.cartons = cartonsEl.value === '' ? '' : Number(cartonsEl.value);
+        const tonsEl = el('tons'); if (tonsEl) row.tons = tonsEl.value === '' ? '' : Number(tonsEl.value);
+        const cubicEl = el('cubic'); if (cubicEl) row.cubic = cubicEl.value === '' ? '' : Number(cubicEl.value);
+        const palletsEl = el('pallets'); if (palletsEl) row.pallets = palletsEl.value === '' ? '' : Number(palletsEl.value);
+        // 收货客户：从 tr.dataset 读取（datalist 选择后维护）
+        if (type === '收货') {
+          const cid = tr.dataset.rowCid || '';
+          const cname = tr.dataset.rowCname || '';
+          row.customer_id = cid ? Number(cid) : null;
+          row.customer_name = cname || null;
+        }
       };
-      // 防脏读复位：把整行输入恢复成真正的未填初始态（空值 + 单位占位 + 时效 -）
+      // 实时计算列：发货→efficiency(ship/main)；收货→efficiency(cartons/main)；库内/后勤→total_hours
+      const recalc = () => {
+        const main = Number(val('main_hours')) || 0;
+        const other = Number(val('other_hours')) || 0;
+        if (type === '发货') {
+          const ship = Number(val('ship_orders')) || 0;
+          const out = tr.querySelector('[data-out="efficiency"]');
+          if (out) out.textContent = (ship > 0 && main > 0)
+            ? (Math.round((ship / main + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
+        } else if (type === '收货') {
+          const cartons = Number(val('cartons')) || 0;
+          const out = tr.querySelector('[data-out="efficiency"]');
+          if (out) out.textContent = (cartons > 0 && main > 0)
+            ? (Math.round((cartons / main + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
+        }
+        if (type === '库内' || type === '后勤') {
+          const out = tr.querySelector('[data-out="total_hours"]');
+          if (out) out.textContent = (main + other) > 0
+            ? (Math.round((main + other + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
+        }
+      };
       const resetRow = () => {
-        tr.querySelectorAll('[data-if]').forEach((e) => { if (e.tagName !== 'SELECT') e.value = ''; });
-        const u = el('unit'); if (u) u.value = '';
+        tr.querySelectorAll('[data-if]').forEach((e) => { if (e.tagName !== 'SELECT' && e.tagName !== 'INPUT') e.value = ''; else if (e.tagName === 'INPUT') e.value = ''; });
+        // 下拉也复位到首项（空占位）
+        tr.querySelectorAll('select[data-if]').forEach((s) => { if (s.options.length) s.value = s.options[0].value; });
         recalc();
       };
-      // 当前行输入 → 后端 payload（行内编辑的唯一取数口径）
-      function payloadOf() {
-        const cid = tr.dataset.rowCid;
-        return {
-          warehouse: state.warehouse, work_type: '发货',
-          customer_id: cid != null && cid !== '' ? Number(cid) : null,
-          customer_name: tr.dataset.rowCname || null,
-          date: tr.dataset.rowDate || todayStr(),
-          // 单位真空时默认按「单」提交（后端必填校验口径），但 UI 保持空不冒充已填
-          unit: val('unit') || '单',
-          ship_orders: Number(val('ship_orders')) || 0,
-          main_hours: Number(val('main_hours')) || 0,
-          other_hours: Number(val('other_hours')) || 0,
-          shared_hours: 0,
-          remark: (val('remark') || '').trim() || null,
-        };
-      }
-      // archive=false：失焦草稿（pending，仍留在未归档列表）
-      // archive=true ：提交归档（缺口行 POST auto_archive；已填行 PUT + /submit）
+      function payloadOf() { return inlinePayloadOf(tr); }
       async function persist(archive, explicit) {
-        const ship = Number(val('ship_orders')) || 0;
         const main = Number(val('main_hours')) || 0;
-        // 防呆核心（铁律级）：单量>0 且 主工时>0 才允许保存（与「时效必须可计算」口径一致）。
-        // 空值/0 一律取消保存，绝不入库全 0 或缺主工时的脏记录。
-        if (!(ship > 0) || !(main > 0)) {
-          if (explicit) { alert('请先填写发货单量（>0）和主工时（>0）后再提交'); return false; }
-          const w = Number(tr.dataset.rowWid) || 0;
-          if (w > 0) load(); else resetRow();   // 已填行恢复库值；缺口行复位成真空态
-          return false;
+        const other = Number(val('other_hours')) || 0;
+        const remark = (val('remark') || '').trim();
+        let ok = true, hint = '';
+        if (type === '收货') {
+          // 严格必填：日期 / 客户 / 箱数 / 主工时，缺一拦截
+          const date = tr.dataset.rowDate || val('date') || '';
+          const cidSel = tr.dataset.rowCid || '';
+          const cartons = Number(val('cartons')) || 0;
+          const missing = [];
+          if (!date) missing.push('日期');
+          if (!cidSel) missing.push('客户');
+          if (!(cartons > 0)) missing.push('箱数');
+          if (!(main > 0)) missing.push('主工时');
+          if (missing.length) { ok = false; hint = '请填写完整的必填项（日期、客户、箱数、主工时）'; }
+        } else if (type === '库内' || type === '后勤') {
+          // ★ 库内/后勤与收货同一口径：严格必填日期 + 项目 + 主工时
+          const date = tr.dataset.rowDate || val('date') || '';
+          const proj = val('project');
+          const missing = [];
+          if (!date) missing.push('日期');
+          if (!proj) missing.push('项目');
+          if (!(main > 0)) missing.push('主工时');
+          if (missing.length) { ok = false; hint = '请填写完整的必填项（日期、项目、主工时）'; }
+        } else if (type === '发货') {
+          const ship = Number(val('ship_orders')) || 0;
+          ok = (ship > 0) || (main > 0) || !!remark;
+          if (!ok) hint = '请至少填写发货单量、主工时或备注中的一项';
         }
-        // 串行化：若上一次保存仍在进行，先等它完成，防止重复 POST / 旧值覆盖新值
-        if (tr.__saving) { try { await tr.__saving; } catch (e) { /* 交给本轮重试 */ } }
+        if (!ok) {
+          if (explicit) { alert(hint); return false; }
+          return false;  // 失焦自动保存失败 → 不清空、不刷新
+        }
+        if (tr.__saving) { try { await tr.__saving; } catch (e) { /* 交给本轮 */ } }
         const wid = Number(tr.dataset.rowWid) || Number(tr.__savedWid) || 0;
         const payload = payloadOf();
+        const tempId = tr.dataset.tempId || '';
         const run = (async () => {
           if (wid > 0) {
             await API.put('/workhours/' + wid, payload);
-            if (archive) await API.post('/workhours/' + wid + '/submit', { warehouse: state.warehouse, work_type: '发货' });
+            if (archive) await API.post('/workhours/' + wid + '/submit', { warehouse: state.warehouse, work_type: type });
           } else if (archive) {
-            payload.auto_archive = true;      // 缺口行提交：保存即归档（后端写 submitter / submit_time）
+            payload.auto_archive = true;
             const res = await API.post('/workhours', payload);
             tr.__savedWid = res && res.data && res.data.work_id;
           } else {
-            const res = await API.post('/workhours', payload);  // 失焦草稿：pending
+            const res = await API.post('/workhours', payload);
             tr.__savedWid = res && res.data && res.data.work_id;
           }
         })();
@@ -640,26 +1060,79 @@ function createWorkhoursPage(warehouse) {
         try {
           await run;
         } catch (ex) {
-          alert((archive ? '提交失败：' : '保存失败：') + ex.message);
+          alert((archive ? '提交失败：' : '保存失败：') + (ex.message || ex));
           return false;
         } finally {
           tr.__saving = null;
         }
-        if (archive) alert('已提交归档');
-        await load();
+        if (archive) alert('已保存并提交归档');
+        // ★ Bug#2 核心修复：成功后 **不 load() 全量刷新**，只做局部数组更新。
+        // 这样用户正在填写的其他 wid=0 虚拟行不会被冲刷掉。
+        if (archive) {
+          // 归档成功 → 从当前 pending 列表里移除该行（保留其他虚拟行）
+          const savedWid = Number(tr.__savedWid) || wid || 0;
+          state.lastRows = state.lastRows.filter((r) => {
+            // 匹配 work_id > 0 或 tempId（两种身份都过滤）
+            const rwid = Number(r.work_id) || 0;
+            if (rwid > 0 && rwid === savedWid) return false;
+            if (tempId && r.tempId === tempId) return false;
+            return true;
+          });
+        } else {
+          // 草稿保存（失焦自动）→ 只更新该行 work_id（从 0 变成后端新分配的 ID），保留其他虚拟行
+          const savedWid = Number(tr.__savedWid) || 0;
+          if (savedWid > 0) {
+            const idx = state.lastRows.findIndex((r) => r.tempId === tempId || Number(r.work_id) === wid);
+            if (idx >= 0) state.lastRows[idx] = { ...state.lastRows[idx], work_id: savedWid };
+          }
+        }
+        // 重新渲染（DOM 更新），但只替换 tbody，不重拉 API
+        renderRows();
         return true;
       }
 
-      // 操作列「提交」：二次确认 → 保存当前行 → 归档（不再触发 blur 自动保存）
       tr.__submit = async () => {
-        if (!confirm('确定要提交归档吗？归档后不可直接修改。')) return;
+        if (!confirm('确定要保存并提交归档吗？归档后不可直接修改。')) return;
         await persist(true, true);
       };
 
       tr.querySelectorAll('[data-if]').forEach((e) => {
-        e.addEventListener('input', recalc);
+        // ★ 核心修复：每个 input/change 事件先 syncBack 回写 state.lastRows，再 recalc
+        // 确保任何重渲染都不会丢失用户已填数据
+        e.addEventListener('input', () => { syncBack(); recalc(); });
+        e.addEventListener('change', () => { syncBack(); recalc(); });
+        // ★ Bug#1 修复：收货 customer_name_cid 是 datalist input，value 存 label（客户名）。
+        //   input 事件 → 遍历 datalist options 精确匹配 option.value（label），取 option.data-cid 写 dataset。
+        //   写完 dataset 后再 syncBack 回写 state.lastRows。
+        if (type === '收货' && e.dataset && e.dataset.if === 'customer_name_cid') {
+          const dlId = e.getAttribute('list');
+          e.addEventListener('input', () => {
+            const v = e.value.trim();
+            if (!v) { tr.dataset.rowCid = ''; tr.dataset.rowCname = ''; syncBack(); recalc(); return; }
+            const dl = dlId ? document.getElementById(dlId) : null;
+            const opts = dl ? dl.options : [];
+            // 精确匹配 option.value（label）
+            const hit = [...opts].find((o) => (o.value || '').trim() === v)
+                     || [...opts].find((o) => (o.value || '').includes(v));
+            if (hit) {
+              tr.dataset.rowCid = hit.dataset.cid || '';
+              tr.dataset.rowCname = hit.value || '';
+            } else {
+              tr.dataset.rowCid = ''; tr.dataset.rowCname = '';
+            }
+            syncBack(); recalc();
+          });
+          e.addEventListener('change', () => {
+            const v = e.value.trim();
+            if (!v) { tr.dataset.rowCid = ''; tr.dataset.rowCname = ''; syncBack(); recalc(); return; }
+            const dl = dlId ? document.getElementById(dlId) : null;
+            const opts = dl ? dl.options : [];
+            const hit = [...opts].find((o) => (o.value || '').trim() === v);
+            if (hit) { tr.dataset.rowCid = hit.dataset.cid || ''; tr.dataset.rowCname = hit.value || ''; }
+            syncBack(); recalc();
+          });
+        }
         e.addEventListener('blur', () => {
-          // 点「提交」时 pointerdown 已打好标记：跳过本次自动保存，由提交逻辑统一处理
           if (tr.dataset.skipBlurSave === '1') { delete tr.dataset.skipBlurSave; return; }
           persist(false, false);
         });
@@ -744,6 +1217,23 @@ function createWorkhoursPage(warehouse) {
       </div>`;
       document.body.appendChild(modal);
       modal.querySelectorAll('.close').forEach((b) => (b.onclick = () => modal.remove()));
+      // 客户联动单位：选完客户后，单位下拉自动切到该客户的 default_unit（兜底 '单'）
+      // owners 现在由 /api/customers/options 返回含 default_unit 字段
+      const custToUnit = new Map();
+      owners.forEach((o) => { if (o.customer_id != null && o.customer_id !== '') custToUnit.set(String(o.customer_id), o.default_unit || '单'); });
+      const custSel = modal.querySelector('#f_customer'), unitSel = modal.querySelector('#f_unit');
+      if (custSel && unitSel) {
+        custSel.onchange = () => {
+          const du = custToUnit.get(custSel.value) || '单';
+          // 用 option[value=du] 定位；如果不在 UNITS 里则补一项选中（同历史工时兜底逻辑）
+          let opt = unitSel.querySelector(`option[value="${du}"]`);
+          if (!opt) {
+            opt = document.createElement('option'); opt.value = du; opt.textContent = du;
+            unitSel.prepend(opt);
+          }
+          unitSel.value = du;
+        };
+      }
       if (readonly) {
         // 归档数据只读：全部控件禁用，移除保存按钮（修改需先撤回）
         modal.querySelectorAll('input,select,textarea').forEach((e) => { e.disabled = true; });
