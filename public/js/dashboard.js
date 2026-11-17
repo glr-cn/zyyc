@@ -360,19 +360,52 @@ function dashboardPage(host) {
   async function copyImage() {
     const btn = $('dbCopyImg');
     btn.disabled = true; btn.textContent = '生成中…';
+    const hideRoot = document.createElement('div');
+    hideRoot.style.cssText = 'position:fixed;left:-9999px;top:0;width:1280px;background:#ffffff;';
     try {
-      const node = c.querySelector('.db-wrap');
-      if (!node) throw new Error('找不到看板容器');
       if (!window.htmlToImage) throw new Error('html-to-image 库未加载');
+      if (!state.data) { toast('请先刷新数据再截图', 'warn'); return; }
 
-      const blob = await window.htmlToImage.toBlob(node, {
+      // 1) 构造动态标题
+      const d = state.data;
+      let periodText;
+      if (state.periodType === 'day') {
+        periodText = state.startDate;
+      } else if (state.periodType === 'week') {
+        // 用 d.periodLabel 里已有的周 label，没有就拼 start~end
+        periodText = d.periodLabel && /第\d+周/.test(d.periodLabel) ? d.periodLabel
+                   : (state.startDate + ' ~ ' + state.endDate);
+      } else {
+        periodText = d.periodLabel || state.startDate.slice(0, 7);
+      }
+
+      const title = document.createElement('div');
+      title.style.cssText =
+        'text-align:center;font-size:24px;font-weight:bold;margin-bottom:20px;' +
+        'font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#111;line-height:1.5;';
+      title.textContent = state.warehouse + '    周期：' + periodText;
+
+      // 2) 克隆四个表格区（.db-sections），原 DOM 完全不动
+      const sections = c.querySelector('.db-sections');
+      if (!sections) throw new Error('找不到 .db-sections');
+      const clone = sections.cloneNode(true);
+      // 确保 clone 里没有 hover 残留（概率极低，保险）
+      clone.querySelectorAll('tr').forEach(tr => tr.style.background = '');
+
+      hideRoot.appendChild(title);
+      hideRoot.appendChild(clone);
+      document.body.appendChild(hideRoot);
+
+      // 3) 截图隐藏容器
+      const blob = await window.htmlToImage.toBlob(hideRoot, {
         pixelRatio: 2,
         cacheBust: true,
         backgroundColor: '#ffffff',
-        width: node.scrollWidth,
-        height: node.scrollHeight,
+        width: hideRoot.scrollWidth,
+        height: hideRoot.scrollHeight,
       });
 
+      // 4) 写剪贴板 或 降级下载
       if (navigator.clipboard && window.ClipboardItem) {
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
         toast('图片已复制到剪贴板，可直接粘贴发送', 'ok');
@@ -380,7 +413,8 @@ function dashboardPage(host) {
         console.warn('[看板] Clipboard API 不可用（需要 HTTPS），降级为下载图片');
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = '佐雍云仓数据中心_经营看板_' + _todayIso + '.png';
+        a.href = url;
+        a.download = '佐雍云仓数据中心_' + state.warehouse + '_' + (d.periodLabel || _todayIso) + '.png';
         document.body.appendChild(a); a.click(); a.remove();
         URL.revokeObjectURL(url);
         toast('已下载为 PNG（非 HTTPS 环境无法写剪贴板）', 'warn');
@@ -389,6 +423,7 @@ function dashboardPage(host) {
       console.error(ex);
       toast('生成图片失败：' + (ex.message || ex), 'err');
     } finally {
+      if (hideRoot.parentNode) hideRoot.parentNode.removeChild(hideRoot);
       btn.disabled = false; btn.textContent = '复制为图片';
     }
   }
