@@ -107,6 +107,8 @@ if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[light-erp] running on http://0.0.0.0:${PORT}`);
+    // 托管环境没有 cron：由进程自己每天生成一次一致性快照（可用 ERP_BACKUP_ENABLED=0 关闭）
+    require('./services/backupScheduler').startBackupScheduler(db._path);
   });
 }
 
