@@ -69,6 +69,49 @@ function resolvePeriod(dateFrom, dateTo) {
   return { from: `${y}-${m}-01`, to: `${y}-${m}-${String(last).padStart(2, '0')}` };
 }
 
+// ========== 唯一性校验（发货/库内/后勤 禁止同日同维度重复） ==========
+// 收货允许同日多客户多行（不校验）；其他三种 work_type 用 (warehouse, date, key) 联合唯一
+// key 规则：发货/收货用 customer_id，库内/后勤用 project
+// excludeWorkId 用于编辑场景——允许同一条记录更新自身
+function checkUnique(workType, { warehouse, date, customer_id, customer_name, project }, { excludeWorkId } = {}) {
+  // 收货放行
+  if (workType === '收货') return null;
+
+  const keyCol = (workType === '发货') ? 'customer_id' : 'project';
+  const keyVal = (workType === '发货') ? (customer_id != null ? customer_id : null) : project;
+
+  if (warehouse == null || date == null || keyVal == null) return null; // 缺失关键字段跳过（validateByType 会拦）
+
+  const clauses = ["warehouse = ?", "work_type = ?", "date = ?", "status = 'archived'"];
+  const params = [warehouse, workType, date];
+
+  if (workType === '发货' && keyVal != null) {
+    // 优先按 customer_id 精确匹配；如果 customer_id 是 null（导入可能），fallback customer_name
+    clauses.push('(customer_id = ? OR (customer_id IS NULL AND customer_name = ?))');
+    params.push(keyVal, customer_name || '');
+  } else {
+    clauses.push('project = ?');
+    params.push(keyVal);
+  }
+
+  if (excludeWorkId) {
+    clauses.push('work_id != ?');
+    params.push(excludeWorkId);
+  }
+
+  const row = db.prepare(
+    `SELECT work_id, ${keyCol} FROM work_hours WHERE ${clauses.join(' AND ')} LIMIT 1`
+  ).get(...params);
+
+  if (!row) return null;
+
+  const label = (workType === '发货')
+    ? (customer_name || ('客户ID=' + customer_id))
+    : (project || '');
+  return `该${workType === '发货' ? '客户' : '项目'}「${label}」在 ${date} 已存在归档工时记录，请勿重复提交或请前往已归档列表修改。`;
+}
+
+
 // 补报日期识别：缺口行默认显示"今天"；若本期含"昨天"且昨天早于今天，
 // 则说明该货主昨天应报未报 → 显示昨天并标记 need_backfill（前端渲染红色 [待补]）。
 // 仅在 today 落在 [from,to] 内时启用待补判断，避免查看历史区间时误标。
@@ -269,6 +312,26 @@ router.post('/archive', (req, res) => {
 
   if (!targetIds.length) return res.json({ archived: 0, message: '没有需要归档的记录' });
 
+  // 归档前的唯一性预校验：每个待归档 pending 记录不能与已 archived 记录撞同维度
+  if (workType !== '收货') {
+    const duplicates = [];
+    for (const id of targetIds) {
+      const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
+      if (!row) continue;
+      const uqErr = checkUnique(workType, {
+        warehouse: row.warehouse, date: row.date,
+        customer_id: row.customer_id, customer_name: row.customer_name, project: row.project,
+      });
+      if (uqErr) duplicates.push({ work_id: id, error: uqErr });
+    }
+    if (duplicates.length) {
+      return res.status(409).json({
+        error: '有 ' + duplicates.length + ' 条记录与已归档数据冲突，无法归档',
+        conflicts: duplicates,
+      });
+    }
+  }
+
   db.exec('BEGIN');
   try {
     const submitter = operatorName(req);
@@ -313,6 +376,26 @@ router.post('/batch-submit', (req, res) => {
   }
   if (!allowed.length) return res.json({ submitted: 0, skipped: ids.length, ids: [] });
 
+  // 批量提交前的唯一性预校验（与 /archive 接口同理）
+  if (workType !== '收货') {
+    const duplicates = [];
+    for (const id of allowed) {
+      const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
+      if (!row) continue;
+      const uqErr = checkUnique(workType, {
+        warehouse: row.warehouse, date: row.date,
+        customer_id: row.customer_id, customer_name: row.customer_name, project: row.project,
+      });
+      if (uqErr) duplicates.push({ work_id: id, error: uqErr });
+    }
+    if (duplicates.length) {
+      return res.status(409).json({
+        error: '有 ' + duplicates.length + ' 条记录与已归档数据冲突，无法提交',
+        conflicts: duplicates,
+      });
+    }
+  }
+
   const submitter = operatorName(req);
   const holders = allowed.map(() => '?').join(',');
   const info = db.prepare(
@@ -339,6 +422,15 @@ router.post('/:id/submit', (req, res) => {
     return res.status(403).json({ error: '禁止跨仓提交：该记录属于' + old.warehouse });
   }
   if (old.status === 'archived') return res.status(400).json({ error: '该记录已归档，无需重复提交' });
+
+  // 单条提交归档前的唯一性校验
+  if (old.work_type !== '收货') {
+    const uqErr = checkUnique(old.work_type, {
+      warehouse: old.warehouse, date: old.date,
+      customer_id: old.customer_id, customer_name: old.customer_name, project: old.project,
+    });
+    if (uqErr) return res.status(409).json({ error: uqErr });
+  }
 
   const submitter = operatorName(req);
   const info = db.prepare(
@@ -483,6 +575,15 @@ router.post('/', (req, res) => {
   };
   svc.calcRow(workType, r);
 
+  // 唯一性校验（仅 autoArchive 才校验 archived 状态；pending 草稿允许同维度多条）
+  if (autoArchive) {
+    const uqErr = checkUnique(workType, {
+      warehouse: r.warehouse, date: r.date,
+      customer_id: r.customer_id, customer_name: r.customer_name, project: r.project,
+    });
+    if (uqErr) return res.status(409).json({ error: uqErr });
+  }
+
   const info = db
     .prepare(
       `INSERT INTO work_hours
@@ -569,6 +670,16 @@ router.put('/:id', (req, res) => {
     remark: b.remark !== undefined ? b.remark : old.remark,
   };
   svc.calcRow(workType, merged);
+
+  // 唯一性校验：编辑后若状态仍为 archived 或目标为 pending 但即将通过 archive 接口归档，
+  // 这里先拦 archived 状态的重复冲突（archive 接口也会再校一次，双重保险）
+  if (old.status === 'archived') {
+    const uqErr = checkUnique(workType, {
+      warehouse: merged.warehouse, date: merged.date,
+      customer_id: merged.customer_id, customer_name: merged.customer_name, project: merged.project,
+    }, { excludeWorkId: old.work_id });
+    if (uqErr) return res.status(409).json({ error: uqErr });
+  }
 
   db.prepare(
     `UPDATE work_hours SET
