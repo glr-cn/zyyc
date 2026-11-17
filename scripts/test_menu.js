@@ -124,7 +124,7 @@ assert(ERP.MENU[0].direct === 'dashboard', '看板为直达菜单项（direct）
 assert(ERP.MENU[0].groups.length === 0, '看板已取消二级子菜单');
 assert(!ERP.MENU.some((c) => c.id === 'dashboard' && c.groups.length > 0), '看板不存在任何二级分组');
 const others = ERP.MENU.slice(1).map((c) => c.id);
-assert(others.join(',') === 'outbound,inbound,inventory,master,work',
+assert(others.join(',') === 'outbound,inbound,inventory,master,work,tools',
   '其余菜单顺序与内容未变：' + others.join(','));
 
 // ============ 1b. 工时菜单按仓库拆分 ============

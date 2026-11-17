@@ -103,6 +103,16 @@ ERP.MENU = [
       ]},
     ],
   },
+  {
+    id: 'tools', label: '快捷工具', icon: '🧰',
+    groups: [
+      { title: '工具', icon: '🧰', items: [
+        { label: '分列单号', page: null },
+        { label: '条码设计', page: null },
+        { label: '图片转文件', page: null },
+      ]},
+    ],
+  },
 ];
 
 // ---------- 运行时状态 ----------
@@ -114,7 +124,7 @@ ERP._MENU_RUNTIME = null; // 登录后由后端权限菜单树驱动（RBAC 动�
 // ---------- 菜单结构版本 / 缓存治理 ----------
 // 每次改菜单种子或渲染结构必须 +1；版本变化会清掉历史菜单缓存 + 强制刷新 /auth/me，
 // 避免「后端已加菜单、前端仍拿旧数据」导致主菜单静默消失。
-ERP.MENU_SCHEMA_VERSION = 4;   // v4 = 「智能测单」重命名为「智能测算」+ 历史测算合并进该页
+ERP.MENU_SCHEMA_VERSION = 5;   // v5 = 新增「快捷工具」父级菜单（分列单号/条码设计/图片转文件）
 ERP.MENU_CACHE_PREFIX = /^erp_menu/i;
 
 ERP.clearMenuCache = function () {

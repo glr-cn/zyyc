@@ -82,3 +82,12 @@ INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,gro
  (804,'log_smartquote',8,'智能测单日志','log_smartquote',NULL,'业务日志',40,1),
  (805,'log_system',   8,'系统/权限日志','log_system',   NULL,'系统日志',50,1),
  (806,'log_all',      8,'全部日志',    'log_all',      NULL,'汇总',    60,1);
+
+-- 快捷工具（父级为纯容器；子菜单上线前 is_built=0 → 面板置灰提示「功能建设中」）
+INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
+ (9,'tools',NULL,'快捷工具',NULL,'🧰',NULL,90,1);
+
+INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
+ (901,'tool_split_no',9,'分列单号',  'tool_split_no',NULL,'工具',10,0),
+ (902,'tool_barcode', 9,'条码设计',  'tool_barcode', NULL,'工具',20,0),
+ (903,'tool_img2file',9,'图片转文件','tool_img2file',NULL,'工具',30,0);
