@@ -89,5 +89,5 @@ INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,gro
 
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
  (901,'tool_split_no',9,'分列单号',  'tool_split_no',NULL,'工具',10,1),
- (902,'tool_barcode', 9,'条码设计',  'tool_barcode', NULL,'工具',20,0),
+ (902,'tool_barcode', 9,'条码设计',  'tool_barcode', NULL,'工具',20,1),
  (903,'tool_img2file',9,'图片转文件','tool_img2file',NULL,'工具',30,0);

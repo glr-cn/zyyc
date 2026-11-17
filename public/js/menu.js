@@ -108,7 +108,7 @@ ERP.MENU = [
     groups: [
       { title: '工具', icon: '🧰', items: [
         { label: '分列单号', page: 'tool_split_no' },
-        { label: '条码设计', page: null },
+        { label: '条码设计', page: 'tool_barcode' },
         { label: '图片转文件', page: null },
       ]},
     ],
@@ -124,7 +124,7 @@ ERP._MENU_RUNTIME = null; // 登录后由后端权限菜单树驱动（RBAC 动�
 // ---------- 菜单结构版本 / 缓存治理 ----------
 // 每次改菜单种子或渲染结构必须 +1；版本变化会清掉历史菜单缓存 + 强制刷新 /auth/me，
 // 避免「后端已加菜单、前端仍拿旧数据」导致主菜单静默消失。
-ERP.MENU_SCHEMA_VERSION = 6;   // v6 = 「分列单号」页上线（is_built=1）
+ERP.MENU_SCHEMA_VERSION = 7;   // v7 = 「条码设计」页上线（is_built=1）
 ERP.MENU_CACHE_PREFIX = /^erp_menu/i;
 
 ERP.clearMenuCache = function () {

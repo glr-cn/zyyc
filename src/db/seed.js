@@ -45,6 +45,7 @@ function runSeed(db) {
   db.exec(`DELETE FROM menus WHERE menu_code='smart_quote_history';`);
   // 「分列单号」页已上线：把历史库里 is_built=0 的占位行升级为可点击（幂等）
   db.exec(`UPDATE menus SET is_built=1, path='tool_split_no' WHERE menu_code='tool_split_no';`);
+  db.exec(`UPDATE menus SET is_built=1, path='tool_barcode' WHERE menu_code='tool_barcode';`);
 
   // ---- 首个管理员账号（仅当无任何用户时自举；线上库自带 admin 不受影响）----
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {

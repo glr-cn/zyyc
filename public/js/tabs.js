@@ -38,6 +38,7 @@ ERP.PAGE_META = {
   smart_quote_history: { title: '历史测算', icon: '🕑' },
   // 快捷工具（parent 为容器，不注册；子页 path 与 menus.path 一致）
   tool_split_no: { title: '分列单号', icon: '✂️' },
+  tool_barcode: { title: '条码设计', icon: '🏷️' },
   // 日志中心：key 必须与 menus.path / window.ERP_PAGES 一致；父级「日志中心」是容器，不注册
   log_customer: { title: '客户资料日志', icon: '📜' },
   log_workhours: { title: '工时管理日志', icon: '📜' },
