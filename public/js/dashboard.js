@@ -361,7 +361,10 @@ function dashboardPage(host) {
     const btn = $('dbCopyImg');
     btn.disabled = true; btn.textContent = '生成中…';
     const hideRoot = document.createElement('div');
-    hideRoot.style.cssText = 'position:fixed;left:-9999px;top:0;width:1280px;background:#ffffff;';
+    // ⚠️ 不能用 left:-9999px 屏外定位：html-to-image 会把该样式克隆进 SVG，
+    // 内容被画到画布外 → 导出纯白空白图。改为 z-index:-10000 藏到页面内容后面
+    //（克隆节点在自己的 SVG 里正常落在画布内，实测非空白；page 上被内容遮挡不可见）。
+    hideRoot.style.cssText = 'position:fixed;left:0;top:0;z-index:-10000;pointer-events:none;background:#ffffff;';
     try {
       if (!window.htmlToImage) throw new Error('html-to-image 库未加载');
       if (!state.data) { toast('请先刷新数据再截图', 'warn'); return; }
