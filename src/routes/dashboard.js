@@ -116,6 +116,21 @@ function fetchArchivedRows({ req, warehouse, workType, startDate, endDate }) {
   return db.prepare(sql).all(...params);
 }
 
+// ========== 汇总：库内公摊工时总额（用于发货组分摊） ==========
+function fetchTotalInternalShared({ req, warehouse, startDate, endDate }) {
+  const scope = ownerScope(req);
+  const clauses = ["status = 'archived'", "work_type = '库内'"];
+  const params = [];
+  if (scope.sql)   { clauses.push(scope.sql);   params.push(...scope.params); }
+  if (warehouse)   { clauses.push('warehouse = ?'); params.push(warehouse); }
+  clauses.push('date >= ?'); params.push(startDate);
+  clauses.push('date <= ?'); params.push(endDate);
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(shared_hours),0) AS t FROM work_hours WHERE ${clauses.join(' AND ')}`
+  ).get(...params);
+  return Number(row.t) || 0;
+}
+
 // ========== 聚合：按 (customer_id, customer_name) ==========
 function aggregateByCustomer(rows) {
   const map = new Map();
@@ -236,6 +251,42 @@ function buildShippingList({ req, warehouse, curStart, curEnd, prevStart, prevEn
       unit_cost_wow:  wow(curUnitCost, prevUnitCost),
     });
   }
+
+  // ========== 库内公摊工时 → 发货客户 按比例分摊 ==========
+  // 规则：单量 > 100 才参与；按单量占比分摊；分摊结果覆盖 cur_shared_hours / prev_shared_hours
+  // 并同步重算 cur_total_hours / cur_cost / cur_unit_cost 及其 prev 系列 + unit_cost_wow
+  const curTotalPublicShared  = fetchTotalInternalShared({ warehouse, startDate: curStart,  endDate: curEnd,  req });
+  const prevTotalPublicShared = fetchTotalInternalShared({ warehouse, startDate: prevStart, endDate: prevEnd, req });
+  const curQualSumQty  = out.filter(o => o.cur_ship_qty  > 100).reduce((s, o) => s + o.cur_ship_qty,  0);
+  const prevQualSumQty = out.filter(o => o.prev_ship_qty > 100).reduce((s, o) => s + o.prev_ship_qty, 0);
+
+  for (const o of out) {
+    let curSharedNew  = 0;
+    let prevSharedNew = 0;
+    if (curTotalPublicShared  > 0 && curQualSumQty  > 0 && o.cur_ship_qty  > 100)
+      curSharedNew  = round3(curTotalPublicShared  * (o.cur_ship_qty  / curQualSumQty));
+    if (prevTotalPublicShared > 0 && prevQualSumQty > 0 && o.prev_ship_qty > 100)
+      prevSharedNew = round3(prevTotalPublicShared * (o.prev_ship_qty / prevQualSumQty));
+
+    o.cur_shared_hours  = curSharedNew;
+    o.prev_shared_hours = prevSharedNew;
+
+    const curTotal  = round3(o.cur_main_hours + o.cur_other_hours + curSharedNew);
+    const prevTotal = round3(o.prev_main_hours + o.prev_other_hours + prevSharedNew);
+    const curCost   = round3(curTotal  * RATE_NORMAL);
+    const prevCost  = round3(prevTotal * RATE_NORMAL);
+    const curUC     = o.cur_ship_qty  > 0 ? round3(curCost  / o.cur_ship_qty)  : 0;
+    const prevUC    = o.prev_ship_qty > 0 ? round3(prevCost / o.prev_ship_qty) : 0;
+
+    o.cur_total_hours  = curTotal;
+    o.prev_total_hours = prevTotal;
+    o.cur_cost   = curCost;
+    o.prev_cost  = prevCost;
+    o.cur_unit_cost  = curUC;
+    o.prev_unit_cost = prevUC;
+    o.unit_cost_wow  = wow(curUC, prevUC);
+  }
+
   return out;
 }
 
