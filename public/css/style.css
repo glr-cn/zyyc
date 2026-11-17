@@ -668,6 +668,15 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .wh-cell-num, .wh-cell-txt, .wh-cell-sel { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:3px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); font-size:13px; }
 /* ★ Bug#5 修复：date input 也必须 width:100%，否则收货行内表格日期列错位 */
 .wh-cell-date { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:2px 3px; font-size:13px; }
+
+/* 行内保存/提交错误提示条（替代 alert 弹窗） */
+.row-inline-error {
+  display:none; position:absolute; left:0; right:0; top:100%; z-index:50;
+  margin-top:2px; padding:6px 10px; border-radius:4px; font-size:12px; font-weight:500;
+  background:#fef2f2; border:1px solid #fca5a5; color:#dc2626;
+  box-shadow:0 4px 12px rgba(220,38,38,.12); line-height:1.4;
+}
+#whBody tr { position:relative; }
 .wh-cell-num::placeholder, .wh-cell-txt::placeholder { color:#b8bec9; font-weight:400; opacity:1; }
 /* ★ Bug#2 修复：表头必填星号红色高亮 */
 .req-star { color:#e53935; font-weight:700; margin-right:2px; }

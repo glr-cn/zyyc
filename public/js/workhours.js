@@ -210,6 +210,9 @@ function createWorkhoursPage(warehouse) {
       // 导入导出仅发货 tab 可见；归档按钮仅未归档视图可见；已归档视图显示动态权限提示
       const ship = $('shipTools');
       if (ship) ship.style.display = state.workType === '发货' ? 'inline' : 'none';
+      const addBtn = $('addBtn');
+      // 发货 Tab 隐藏"新增工时"按钮——发货有缺口行机制，不需要手动新增
+      if (addBtn) addBtn.style.display = state.workType === '发货' ? 'none' : '';
       const arcBtn = $('archiveBtn');
       if (arcBtn) arcBtn.style.display = state.status === 'pending' ? '' : 'none';
       const tip = $('archiveTip');
@@ -1060,7 +1063,18 @@ function createWorkhoursPage(warehouse) {
         try {
           await run;
         } catch (ex) {
-          alert((archive ? '提交失败：' : '保存失败：') + (ex.message || ex));
+          // 就地显示错误条，不清空用户输入
+          let errDiv = tr.querySelector('.row-inline-error');
+          if (!errDiv) {
+            errDiv = document.createElement('div');
+            errDiv.className = 'row-inline-error';
+            tr.appendChild(errDiv);
+          }
+          errDiv.textContent = (archive ? '提交失败：' : '保存失败：') + (ex.message || ex);
+          errDiv.style.display = 'block';
+          // 5 秒后自动隐藏
+          clearTimeout(tr.__errTimer);
+          tr.__errTimer = setTimeout(() => { errDiv.style.display = 'none'; }, 5000);
           return false;
         } finally {
           tr.__saving = null;
