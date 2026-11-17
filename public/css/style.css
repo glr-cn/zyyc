@@ -716,10 +716,12 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .drp-cal { flex:1 1 0; min-width:0; }
 .drp-cal-title { text-align:center; font-size:13px; font-weight:600; color:var(--text); margin-bottom:6px; }
 .drp-cal-hd, .drp-cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+.drp-cal-grid { grid-template-rows:repeat(6,28px); } /* 强制 6 行 28px 高，左右面板完美对齐 */
 .drp-cal-hd span { text-align:center; font-size:11px; color:var(--muted); padding:3px 0; }
-.drp-cell { display:flex; align-items:center; justify-content:center; height:28px; border:none; border-radius:5px; background:transparent; color:var(--text); font-size:12px; cursor:pointer; }
+.drp-cell { display:flex; align-items:center; justify-content:center; height:28px; border:none; border-radius:5px; background:transparent; color:var(--text); font-size:12px; cursor:pointer; padding:0; margin:0; min-width:0; box-sizing:border-box; }
 .drp-cell:hover { background:#eaf1fe; }
 .drp-cell.drp-blank { cursor:default; }
+.drp-cell.drp-other { color:#bbb !important; cursor:default !important; pointer-events:none !important; font-size:11px; opacity:.7; }
 .drp-cell.drp-in { background:#eaf1fe; border-radius:0; }
 .drp-cell.drp-sel { background:var(--primary); color:#fff; font-weight:600; }
 /* 底部操作条：margin-top:auto 吸附在右下角，按钮靠右 */

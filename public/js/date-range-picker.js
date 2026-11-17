@@ -171,12 +171,23 @@
     _calHtml(monthDate) {
       const y = monthDate.getFullYear();
       const mo = monthDate.getMonth();
+      // lead：当月1号是星期几（周一=0，周日=6），前面要补几个格子
       const lead = (new Date(y, mo, 1).getDay() + 6) % 7;
       const days = new Date(y, mo + 1, 0).getDate();
+      const total = 42; // 固定 6 行 × 7 列，两个面板必须完全一致
+      const tail = Math.max(0, total - lead - days);
       const hiS = this.draft.start || this.value.startDate;
       const hiE = this.draft.end || (this.draft.start ? this.draft.start : this.value.endDate);
       let cells = '';
-      for (let i = 0; i < lead; i++) cells += '<span class="drp-cell drp-blank"></span>';
+
+      // 前置 lead：用上个月末尾的真实日期（淡色禁点，比空白格更直观）
+      const prevEnd = new Date(y, mo, 0);
+      for (let i = lead - 1; i >= 0; i--) {
+        const d = prevEnd.getDate() - i;
+        const prevDs = iso(new Date(y, mo - 1, d));
+        cells += '<span class="drp-cell drp-other" data-date="' + prevDs + '">' + d + '</span>';
+      }
+      // 当月
       for (let d = 1; d <= days; d++) {
         const ds = iso(new Date(y, mo, d));
         let cls = 'drp-cell';
@@ -185,6 +196,12 @@
         if (hiS && hiE && ds > hiS && ds < hiE) cls += ' drp-in';
         cells += '<button type="button" class="' + cls + '" data-date="' + ds + '">' + d + '</button>';
       }
+      // 尾部 tail：用下个月开头的真实日期（淡色禁点）
+      for (let d = 1; d <= tail; d++) {
+        const nextDs = iso(new Date(y, mo + 1, d));
+        cells += '<span class="drp-cell drp-other" data-date="' + nextDs + '">' + d + '</span>';
+      }
+
       return '<div class="drp-cal"><div class="drp-cal-title">' + y + '年' + (mo + 1) + '月</div>' +
         '<div class="drp-cal-hd"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>' +
         '<div class="drp-cal-grid">' + cells + '</div></div>';
