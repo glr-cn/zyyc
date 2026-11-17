@@ -3,6 +3,8 @@
 window.ERP_PAGES = window.ERP_PAGES || {};
 
 const DASH_WAREHOUSES = ['龙湖仓', '佳新仓', '速远仓', '开元仓'];
+const _pad2 = (n) => String(n).padStart(2, '0');
+const _todayIso = (() => { const t = new Date(); return t.getFullYear() + '-' + _pad2(t.getMonth() + 1) + '-' + _pad2(t.getDate()); })();
 
 function dashboardPage(host) {
   const c = host;
@@ -10,9 +12,9 @@ function dashboardPage(host) {
 
   const state = {
     warehouse: DASH_WAREHOUSES[0],
-    periodType: 'month',
-    startDate: '',
-    endDate: '',
+    periodType: 'day',
+    startDate: _todayIso,
+    endDate: _todayIso,
     data: null,
   };
 
@@ -51,6 +53,8 @@ function dashboardPage(host) {
   const picker = new DateRangePicker({
     mount: $('dbDatePicker'),
     mode: state.periodType,
+    startDate: state.startDate,
+    endDate: state.endDate,
     onChange: (v) => {
       state.periodType = v.mode;
       state.startDate  = v.startDate;
