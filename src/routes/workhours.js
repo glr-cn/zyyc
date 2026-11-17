@@ -477,9 +477,12 @@ router.put('/:id', (req, res) => {
   const old = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(req.params.id);
   if (!old) return res.status(404).json({ error: '工时记录不存在' });
   if (!ensureOwn(req, old)) return res.status(403).json({ error: '无权修改他人负责的工时记录' });
-  // 归档不可变：已归档记录必须先在「已归档」视图撤回，回到 pending 后才可编辑。
+  // 已归档记录的编辑权限：仅提交人本人 或 管理员 可修改；pending 无额外限制。
   if (old.status === 'archived') {
-    return res.status(403).json({ error: '已归档记录不可直接修改，请先撤回后再编辑' });
+    const me = operatorName(req);
+    if (!isAdminUser(req) && String(old.submitter || '') !== me) {
+      return res.status(403).json({ error: '已归档记录仅提交人本人或管理员可修改' });
+    }
   }
 
   const workType = (b.work_type || old.work_type).trim();

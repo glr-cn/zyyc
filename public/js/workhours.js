@@ -59,7 +59,7 @@ function createWorkhoursPage(warehouse) {
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    const state = { warehouse: warehouse, workType: '发货', trend: 'month', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
+    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
 
     function todayStr() {
       const d = new Date();
@@ -128,13 +128,6 @@ function createWorkhoursPage(warehouse) {
         </label>
         <input id="q" placeholder="搜索客户名称">
         <span id="drpSlot"></span>
-        <span id="trendWrap" style="display:none;align-items:center;gap:6px;color:var(--muted)">环比
-          <select id="trend">
-            <option value="day">日</option>
-            <option value="week">周</option>
-            <option value="month" selected>月</option>
-          </select>
-        </span>
         <button id="qryBtn" class="primary">查询</button>
         <button id="resetBtn">重置</button>
         <span id="shipTools" style="display:none">
@@ -143,10 +136,9 @@ function createWorkhoursPage(warehouse) {
         </span>
         <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
         <button id="archiveBtn" title="将勾选或当前筛选的工时归档">归档</button>
-        <button id="signoffBtn" style="margin-left:auto">📷 签收单</button>
         <button id="addBtn" class="primary">+ 新增工时</button>
       </div>
-      <div class="wh-archive-tip" id="archiveTip" style="display:none">当前查看「已归档」记录（只读展示，如需修改请先联系管理员）</div>
+      <div class="wh-archive-tip" id="archiveTip" style="display:none"></div>
       <table class="grid" id="whTable">
         <colgroup id="whColGroup"></colgroup>
         <thead><tr id="whHead"></tr></thead>
@@ -179,7 +171,7 @@ function createWorkhoursPage(warehouse) {
       syncTabUI();
     }
 
-    // UI 联动：Tab 选中态 / 标题 / 搜索占位符 / 环比 / 状态视图（导入导出按钮、归档按钮、提示条）
+      // UI 联动：Tab 选中态 / 标题 / 搜索占位符 / 状态视图（导入导出按钮、归档按钮、提示条）
     function syncTabUI() {
       const tt = $('typeTabs');
       if (tt) tt.querySelectorAll('.wh-tab').forEach((t) => t.classList.toggle('active', t.dataset.tp === state.workType));
@@ -187,20 +179,26 @@ function createWorkhoursPage(warehouse) {
       if (title) title.textContent = state.workType + '工时录入';
       const q = $('q');
       if (q) q.placeholder = (state.workType === '发货' || state.workType === '收货') ? '搜索客户名称' : '搜索项目名称';
-      const trend = $('trendWrap');
-      if (trend) trend.style.display = state.workType === '发货' ? 'flex' : 'none';
-      // 导入导出仅发货 tab 可见；归档按钮仅未归档视图可见；已归档视图显示只读提示
+      // 导入导出仅发货 tab 可见；归档按钮仅未归档视图可见；已归档视图显示动态权限提示
       const ship = $('shipTools');
       if (ship) ship.style.display = state.workType === '发货' ? 'inline' : 'none';
       const arcBtn = $('archiveBtn');
       if (arcBtn) arcBtn.style.display = state.status === 'pending' ? '' : 'none';
       const tip = $('archiveTip');
-      if (tip) tip.style.display = state.status === 'archived' ? '' : 'none';
+      if (tip) {
+        if (state.status === 'archived') {
+          if (state.isSuper) tip.textContent = '您是超级管理员，可修改归档记录、修改提交人、永久删除';
+          else if (state.isAdmin) tip.textContent = '您是管理员，可修改归档记录、修改提交人；不可永久删除（仅限超级管理员）';
+          else tip.textContent = '已归档记录：您可修改自己提交的、撤回自己提交的；他人提交的仅查看';
+          tip.style.display = '';
+        } else {
+          tip.style.display = 'none';
+        }
+      }
     }
 
     function bindToolbar() {
       $('q').value = state.q;
-      $('trend').value = state.trend;
       $('statusFilter').value = state.status;
       const syncDates = () => { if (drp) { const v = drp.getValue(); state.dateFrom = v.startDate; state.dateTo = v.endDate; } };
       $('qryBtn').onclick = () => { syncDates(); readFilters(); state.page = 1; load(); };
@@ -211,13 +209,11 @@ function createWorkhoursPage(warehouse) {
         if (drp) drp.setValue({ startDate: today, endDate: today }, true);
         state.page = 1; load();
       };
-      $('trend').onchange = (e) => { state.trend = e.target.value; state.page = 1; load(); };
       $('statusFilter').onchange = (e) => {
         state.status = e.target.value; state.page = 1; state.checked.clear();
         syncTabUI(); load();
       };
       $('addBtn').onclick = () => openModal(null);
-      $('signoffBtn').onclick = () => { if (window.ERP_CLOUD && ERP.openSignoffModal) ERP.openSignoffModal(warehouse); };
       $('templateBtn').onclick = onDownloadTemplate;
       $('importBtn').onclick = () => $('importFile').click();
       $('importFile').onchange = onImportFile;
@@ -343,7 +339,6 @@ function createWorkhoursPage(warehouse) {
       // 渲染前刷新真实角色：删除按钮按库内最新 role_code 门控（铁律 3）
       await refreshRole();
       const params = new URLSearchParams({ warehouse: state.warehouse, work_type: state.workType, status: state.status, page: state.page, pageSize: state.pageSize });
-      if (state.workType === '发货') params.set('trend', state.trend);
       if (state.q) params.set('q', state.q);
       if (state.dateFrom) params.set('dateFrom', state.dateFrom);
       if (state.dateTo) params.set('dateTo', state.dateTo);
@@ -487,12 +482,14 @@ function createWorkhoursPage(warehouse) {
       const archived = String(r.status || (state.status === 'archived' ? 'archived' : 'pending')) === 'archived';
       let ops;
       if (archived) {
-        // 撤回：提交人本人或管理员；修改提交人：仅管理员；删除：仅超管
-        const canWithdraw = state.isAdmin || (!!state.meName && r.submitter === state.meName);
-        ops = `<button data-act="view" data-id="${wid}" title="查看归档详情（只读）">查看</button>`
+        // 已归档：修改（本人或管理员）/ 撤回（本人或管理员）/ 修改提交人（仅管理员）/ 删除（仅超管）
+        const canEditArchived = state.isAdmin || (!!state.meName && r.submitter === state.meName);
+        const canWithdraw = canEditArchived;  // 撤回权限与修改一致（本人或管理员）
+        ops = `<button data-act="view" data-id="${wid}" title="只读查看">查看</button>`
+          + (canEditArchived ? `<button data-act="editArchived" data-id="${wid}" class="primary" title="修改归档记录（弹窗编辑）">修改</button>` : '')
           + (canWithdraw ? `<button data-act="withdraw" data-id="${wid}" title="撤回到未归档，撤回后可重新编辑">撤回</button>` : '')
           + (state.isAdmin ? `<button data-act="editSubmitter" data-id="${wid}" title="修改该记录的提交人">修改提交人</button>` : '')
-          + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条记录（不可恢复）">删除</button>` : '');
+          + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条归档记录（不可恢复）">删除</button>` : '');
       } else if (inline) {
         const submitBtn = `<button data-act="submit" data-id="${wid}" class="primary" title="保存当前行并提交归档">提交</button>`;
         const delBtn = (!isGap && state.isSuper)
@@ -518,7 +515,9 @@ function createWorkhoursPage(warehouse) {
       const act = e.target.dataset.act, id = e.target.dataset.id;
       if (!act || !id) return;
       if (act === 'edit') openModal(id);
-      // 归档详情：只读查看（归档数据不可直接改，需先撤回）
+      // 已归档记录弹窗修改（仅本人或管理员可见）——复用 openModal 编辑模式
+      if (act === 'editArchived') openModal(id);
+      // 归档详情：只读查看
       if (act === 'view') openModal(id, null, { readonly: true });
       // 提交归档：行内视图走行内保存（带当前输入值）；其他 tab 直接提交
       if (act === 'submit') {
@@ -546,16 +545,25 @@ function createWorkhoursPage(warehouse) {
       if (act === 'del' && confirm('确认删除该工时记录？此操作将写入审计日志。')) {
         API.req('DELETE', '/workhours/' + id).then(load).catch((ex) => alert(ex.message));
       }
-      // 管理员永久删除（发货 tab）：二次确认 + 后端 role_code 强校验；成功后立即从页面移除该行
-      if (act === 'delAdmin' && confirm('确定要彻底删除这条记录吗？')) {
+      // 永久删除（仅超管可见）：二次确认 + 后端 role_code 强校验
+      // 已归档记录用更严厉的提示；pending 保持原文案
+      if (act === 'delAdmin') {
+        const row = e.target.closest && e.target.closest('tr');
+        const wid = row && Number(row.dataset.rowId);
+        const r = state.lastRows.find((x) => x.work_id === wid);
+        const isArchived = r && String(r.status || '') === 'archived';
+        const prompt = isArchived
+          ? '确定要永久删除该条归档记录吗？此操作不可恢复！'
+          : '确定要彻底删除这条记录吗？';
+        if (!confirm(prompt)) return;
         const btn = e.target;
         btn.disabled = true;
         API.req('DELETE', '/workhours/' + id + '/force')
           .then(() => {
             const tr = btn.closest('tr');
-            if (tr) tr.remove();          // 立即从页面移除该行
+            if (tr) tr.remove();
             alert('已删除');
-            load();                       // 再拉取一次，保持分页/计数一致
+            load();
           })
           .catch((ex) => { btn.disabled = false; alert('删除失败：' + ex.message); });
       }

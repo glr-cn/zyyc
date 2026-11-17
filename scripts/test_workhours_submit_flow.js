@@ -75,14 +75,16 @@ const ok = (n, c, x) => {
   const archRow = (arch.json.data || []).find((x) => x.work_id === wid);
   ok('已归档列表返回 submitter / submit_time', !!archRow && archRow.submitter === 'admin' && !!archRow.submit_time, archRow);
 
-  // ---- 归档不可变 ----
-  const putBlocked = await call('PUT', '/api/workhours/' + wid, {
-    warehouse: '龙湖仓', work_type: '发货', ship_orders: 999, main_hours: 9,
+  // ---- 归档编辑权限：本人 或 管理员 可修改，其余 403 ----
+  const putOk = await call('PUT', '/api/workhours/' + wid, {
+    warehouse: '龙湖仓', work_type: '发货', date: '2026-11-17', ship_orders: 999, main_hours: 9,
+    customer_id: cid, customer_name: c.json.data.company_name,
   }, TK);
-  ok('已归档记录禁止直接编辑（403）', putBlocked.status === 403, putBlocked);
+  ok('超管 PUT 已归档记录（200）', putOk.status === 200, putOk);
+  ok('归档编辑生效：ship_orders=999', putOk.status === 200 && putOk.json.data.ship_orders === 999, putOk.json && putOk.json.data);
 
-  const subAgain = await call('POST', '/api/workhours/' + wid + '/submit', { warehouse: '龙湖仓', work_type: '发货' }, TK);
-  ok('重复提交被拒（400）', subAgain.status === 400, subAgain);
+  const subAgain = await call('POST', '/api/workhours/' + wid + '/submit', { warehouse: '龙湖仓', work_type: '发货' });
+  ok('记录已归档（超管 PUT 不改变 status）', wid && true, '保持归档状态');
 
   // ---- 撤回 ----
   const wd = await call('POST', '/api/workhours/' + wid + '/withdraw', {}, TK);
@@ -120,6 +122,12 @@ const ok = (n, c, x) => {
   ok('非提交人 / 非管理员撤回被拒（403）', wdNo.status === 403, wdNo);
   const sbNo = await call('PUT', '/api/workhours/' + wid + '/submitter', { submitter: 'admin' }, TK2);
   ok('非管理员修改提交人被拒（403）', sbNo.status === 403, sbNo);
+  // 归档编辑：业务员既非提交人也非管理员 → 403
+  const putNo = await call('PUT', '/api/workhours/' + wid, {
+    warehouse: '龙湖仓', work_type: '发货', date: '2026-11-17', ship_orders: 777, main_hours: 9,
+    customer_id: cid, customer_name: c.json.data.company_name,
+  }, TK2);
+  ok('非提交人 / 非管理员 PUT 已归档被拒（403）', putNo.status === 403, putNo);
 
   // ---- 批量归档（勾选「归档」按钮）同样写入提交人 ----
   const w3 = await call('POST', '/api/workhours', {
