@@ -162,21 +162,29 @@ function dashboardPage(host) {
       { label: '公摊工时', cls: 'num' },
       { label: '单均成本(元)', cls: 'num' },
     ];
-    const rows = list.map(o => [
-      escapeHtml(o.customer_name || ''),
-      num0(o.cur_ship_qty),
-      num0(o.prev_ship_qty),
-      wowCell(o.ship_qty_wow),
-      num3(o.cur_main_hours),
-      num3(o.prev_main_hours),
-      wowCell(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '<span class="muted">-</span>',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '<span class="muted">-</span>',
-      wowCell(o.efficiency_wow),
-      num3(o.cur_other_hours),
-      num3(o.cur_shared_hours),
-      o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
-    ].map(x => `<td class="${typeof x === 'string' && x.includes('<span') ? '' : (cols[list.indexOf(o)].cls || '')}">${x}</td>`).join(''));
+    // ★ Bug 修复：原实现用 cols[list.indexOf(o)] 取列样式，当客户数 > 列数(13) 时
+    //   indexOf(o) 越界 → cols[idx] 为 undefined → 读 .cls 抛错 → 整个看板加载失败。
+    //   正确做法：按「单元格自身下标 ci」取对应列样式。
+    const rows = list.map((o) => {
+      const cells = [
+        escapeHtml(o.customer_name || ''),
+        num0(o.cur_ship_qty),
+        num0(o.prev_ship_qty),
+        wowCell(o.ship_qty_wow),
+        num3(o.cur_main_hours),
+        num3(o.prev_main_hours),
+        wowCell(o.main_hours_wow),
+        o.cur_efficiency ? num3(o.cur_efficiency) : '<span class="muted">-</span>',
+        o.prev_efficiency ? num3(o.prev_efficiency) : '<span class="muted">-</span>',
+        wowCell(o.efficiency_wow),
+        num3(o.cur_other_hours),
+        num3(o.cur_shared_hours),
+        o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
+      ];
+      return cells
+        .map((x, ci) => `<td class="${typeof x === 'string' && x.includes('<span') ? '' : ((cols[ci] && cols[ci].cls) || '')}">${x}</td>`)
+        .join('');
+    });
     $('db-shipping').innerHTML = dbTableHTML(cols, rows, '暂无发货数据（所有客户本期/上期均无归档记录）');
   }
 
