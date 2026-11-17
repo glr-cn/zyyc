@@ -113,15 +113,15 @@ function dashboardPage(host) {
   function num0(x) { return (x == null ? 0 : Number(x)).toFixed(0); }
   /**
    * 环比：后端返回 null → 前端渲染为 "-"；
-   * 数值 → 渲染为 "12.500%" 并按正负着色（green 正 / red 负 / muted 零）
+   * 数值 → 渲染为 "12.50%" 并按正负着色（green 正 / red 负 / muted 零），保留 2 位小数
    */
   function wowCell(v) {
     if (v == null) return `<span class="wow muted">-</span>`;
     const n = Number(v);
-    if (n === 0) return `<span class="wow muted">0.000%</span>`;
+    if (n === 0) return `<span class="wow muted">0.00%</span>`;
     const cls = n > 0 ? 'pos' : 'neg';
     const arrow = n > 0 ? '↑' : '↓';
-    return `<span class="wow ${cls}">${arrow} ${Math.abs(n).toFixed(3)}%</span>`;
+    return `<span class="wow ${cls}">${arrow} ${Math.abs(n).toFixed(2)}%</span>`;
   }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
