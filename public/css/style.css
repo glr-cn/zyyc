@@ -821,7 +821,13 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .sn-batch-partial { border-color:#f0d9a8; background:#fffdf6; }
 .sn-batch-copied { border-color:var(--ok); box-shadow:0 0 0 3px rgba(31,157,87,.15); }
 .sn-empty { padding:36px 0; text-align:center; color:var(--muted); font-size:13px; grid-column:1/-1; border:1px dashed var(--line); border-radius:8px; }
-/* ========== 快捷工具 · 条码设计 ========== */
+/* ========== 快捷工具 · 条码设计（内置 ZPLab iframe） ========== */
+.zplab-wrap { height:calc(100vh - 132px); min-height:640px; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.zplab-frame { display:block; width:100%; height:100%; border:0; background:#fff; }
+@media (max-width:820px) {
+  .zplab-wrap { height:calc(100vh - 96px); min-height:520px; border-radius:8px; }
+}
+/* ========== 快捷工具 · 条码设计（旧版，已由 ZPLab 替换，样式保留待清理） ========== */
 .bc-app { display:flex; flex-direction:column; height:calc(100vh - 132px); min-height:640px; background:var(--bg); }
 .bc-appbar { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:6px 16px; background:#fff; border-bottom:1px solid var(--line); flex:0 0 auto; }
 .bc-brand { display:flex; align-items:center; gap:10px; flex:0 0 auto; }
