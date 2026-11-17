@@ -59,7 +59,7 @@ function createWorkhoursPage(warehouse) {
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    const state = { warehouse: warehouse, workType: '发货', trend: 'month', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: '', dateTo: '', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
+    const state = { warehouse: warehouse, workType: '发货', trend: 'month', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '' };
 
     function todayStr() {
       const d = new Date();
@@ -205,9 +205,10 @@ function createWorkhoursPage(warehouse) {
       const syncDates = () => { if (drp) { const v = drp.getValue(); state.dateFrom = v.startDate; state.dateTo = v.endDate; } };
       $('qryBtn').onclick = () => { syncDates(); readFilters(); state.page = 1; load(); };
       $('resetBtn').onclick = () => {
-        state.q = ''; state.dateFrom = ''; state.dateTo = '';
+        const today = todayStr();
+        state.q = ''; state.dateFrom = today; state.dateTo = today;
         $('q').value = '';
-        if (drp) drp.setValue({ startDate: '', endDate: '' }, true);
+        if (drp) drp.setValue({ startDate: today, endDate: today }, true);
         state.page = 1; load();
       };
       $('trend').onchange = (e) => { state.trend = e.target.value; state.page = 1; load(); };
@@ -706,7 +707,7 @@ function createWorkhoursPage(warehouse) {
         fields.push(`<label>项目*<select id="f_project">${projOpts}</select></label>`);
         if (workType === '库内') fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
       }
-      fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || '')}"></label>`);
+      fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
       if (workType === '发货') fields.push(`<label>发货单量*<input id="f_ship" type="number" step="0.001" min="0" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
       if (workType === '收货') {
         fields.push(`<label>箱数<input id="f_cartons" type="number" step="0.001" min="0" value="${cur.cartons != null ? cur.cartons : 0}"></label>`);
