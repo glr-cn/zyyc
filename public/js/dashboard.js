@@ -23,19 +23,7 @@ function dashboardPage(host) {
           ${DASH_WAREHOUSES.map(w => `<button class="db-wh-tab ${w === state.warehouse ? 'active' : ''}" data-wh="${w}">${w}</button>`).join('')}
         </div>
         <div class="db-filter-row">
-          <label class="db-f-label">时间维度
-            <select id="dbPeriod">
-              <option value="day">日</option>
-              <option value="week">周</option>
-              <option value="month" selected>月</option>
-            </select>
-          </label>
-          <label class="db-f-label">起
-            <input type="date" id="dbStart">
-          </label>
-          <label class="db-f-label">止
-            <input type="date" id="dbEnd">
-          </label>
+          <div id="dbDatePicker" class="db-date-picker"></div>
           <button id="dbRefresh" class="primary">刷新</button>
           <span id="dbPeriodLabel" class="db-period-label"></span>
         </div>
@@ -59,14 +47,28 @@ function dashboardPage(host) {
     load();
   });
 
-  // 时间维度
-  $('dbPeriod').value = state.periodType;
-  $('dbPeriod').addEventListener('change', (e) => { state.periodType = e.target.value; setDefaultDates(); load(); });
-  $('dbStart').addEventListener('change', () => { state.startDate = $('dbStart').value; load(); });
-  $('dbEnd').addEventListener('change',   () => { state.endDate   = $('dbEnd').value;   load(); });
+  // ★ 全局高级日期范围选择器（与工时管理页面复用同一组件）
+  const picker = new DateRangePicker({
+    mount: $('dbDatePicker'),
+    mode: state.periodType,
+    onChange: (v) => {
+      state.periodType = v.mode;
+      state.startDate  = v.startDate;
+      state.endDate    = v.endDate;
+    },
+  });
+
   $('dbRefresh').addEventListener('click', load);
 
-  setDefaultDates();
+  // 把 picker 当前值同步到 state（onChange 只会在用户真正操作时触发）
+  function syncFromPicker() {
+    const v = picker.getValue();
+    state.periodType = v.mode;
+    state.startDate  = v.startDate;
+    state.endDate    = v.endDate;
+  }
+
+  syncFromPicker();
   load();
 
   function sectionHTML(key, title) {
@@ -78,26 +80,10 @@ function dashboardPage(host) {
     `;
   }
 
-  function setDefaultDates() {
-    const now = new Date();
-    const fmt = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    let s, e;
-    if (state.periodType === 'day') { s = e = fmt(now); }
-    else if (state.periodType === 'week') {
-      const dayOffset = (now.getDay() + 6) % 7;
-      const mon = new Date(now); mon.setDate(now.getDate() - dayOffset);
-      const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-      s = fmt(mon); e = fmt(sun);
-    } else {
-      const first = new Date(now.getFullYear(), now.getMonth(), 1);
-      const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      s = fmt(first); e = fmt(last);
-    }
-    state.startDate = s; state.endDate = e;
-    $('dbStart').value = s; $('dbEnd').value = e;
-  }
-
   async function load() {
+    // 每次请求前从 picker 取最新值（兜底：用户改了 picker 但还没点 onChange 回调，
+    // 或切换仓库时要保留当前日期范围）
+    syncFromPicker();
     try {
       const r = await API.get('/dashboard/summary', {
         warehouse: state.warehouse,
