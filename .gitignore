@@ -1,6 +1,15 @@
 node_modules/
 data/
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.db.bak-*
+*.db.empty-*
+*.bak
+*.bak-*
+# 发布暂存目录（绝不入库，否则库文件会被打进发布包 → 重演 2026-11-16 空库覆盖事故）
+.publish_staged_db/
 .env
 jwt.secret
 # 测试临时产物（Chrome profile / 临时库）
