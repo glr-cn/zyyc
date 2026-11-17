@@ -43,6 +43,8 @@ function runSeed(db) {
   // 之所以放在启动自举里：发布不覆盖线上库，线上菜单变更必须靠每次启动重跑这段来生效。
   db.exec(`UPDATE menus SET menu_name='智能测算', icon='🧮', group_name='测算' WHERE menu_code='smart_quote';`);
   db.exec(`DELETE FROM menus WHERE menu_code='smart_quote_history';`);
+  // 「分列单号」页已上线：把历史库里 is_built=0 的占位行升级为可点击（幂等）
+  db.exec(`UPDATE menus SET is_built=1, path='tool_split_no' WHERE menu_code='tool_split_no';`);
 
   // ---- 首个管理员账号（仅当无任何用户时自举；线上库自带 admin 不受影响）----
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {

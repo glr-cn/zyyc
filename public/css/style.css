@@ -789,6 +789,38 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .db-toast.db-toast-err  { background:#dc2626; }
 
 .db-sections { display:flex; flex-direction:column; gap:18px; }
+
+/* ========== 快捷工具 · 分列单号 ========== */
+.sn-wrap { max-width:1180px; }
+.sn-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+.sn-title { font-size:14px; font-weight:600; color:var(--text); }
+.sn-hint { font-size:12px; font-weight:400; color:var(--muted); margin-left:6px; }
+.sn-head-ops { display:flex; gap:8px; flex-wrap:wrap; }
+.sn-input {
+  width:100%; min-height:240px; padding:12px 14px; border:1px solid var(--line); border-radius:8px;
+  background:var(--panel); color:var(--text); font:13px/1.7 Consolas,Menlo,"Courier New",monospace;
+  resize:vertical; outline:none;
+}
+.sn-input:focus { border-color:var(--primary); box-shadow:0 0 0 3px rgba(47,111,237,.10); }
+.sn-stats { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 4px; flex-wrap:wrap; font-size:13px; color:var(--text); }
+.sn-stats b { color:var(--primary); font-size:15px; }
+.sn-remainder { color:var(--warn); font-weight:600; }
+.sn-suspicious { display:block; margin-top:4px; color:var(--warn); font-size:12px; }
+.sn-stats-right { display:flex; align-items:center; gap:10px; }
+.sn-size-label { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+.sn-size-label input { width:96px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
+.sn-list-head { display:flex; align-items:center; justify-content:space-between; margin:18px 0 10px; font-size:13px; font-weight:600; }
+.sn-batches { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+.sn-batch { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .1s; }
+.sn-batch:hover { border-color:var(--primary); box-shadow:0 3px 12px rgba(47,111,237,.12); }
+.sn-batch:active { transform:scale(.99); }
+.sn-batch-title { display:flex; align-items:center; justify-content:space-between; font-size:13px; font-weight:600; color:var(--text); }
+.sn-batch-count { color:var(--primary); font-weight:600; }
+.sn-batch-range { margin-top:4px; font-size:12px; color:var(--muted); }
+/* 末批（不满每批上限）：淡黄底提示，但仍可点击复制 */
+.sn-batch-partial { border-color:#f0d9a8; background:#fffdf6; }
+.sn-batch-copied { border-color:var(--ok); box-shadow:0 0 0 3px rgba(31,157,87,.15); }
+.sn-empty { padding:36px 0; text-align:center; color:var(--muted); font-size:13px; grid-column:1/-1; border:1px dashed var(--line); border-radius:8px; }
 .db-section {
   background:var(--panel); border:1px solid var(--line); border-radius:10px;
   overflow:hidden;

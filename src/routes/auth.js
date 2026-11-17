@@ -35,7 +35,7 @@ function authPayload(u) {
     role_id: u.role_id,
     menus: menuService.getMenuTree(role),
     permissions: menuService.permissionsOf(role),
-    menu_version: 5,   // 与 public/js/menu.js 的 ERP.MENU_SCHEMA_VERSION 保持一致
+    menu_version: 6,   // 与 public/js/menu.js 的 ERP.MENU_SCHEMA_VERSION 保持一致
   };
 }
 
