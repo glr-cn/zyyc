@@ -169,6 +169,7 @@ router.get('/', (req, res) => {
                w.main_hours, w.other_hours, w.shared_hours, w.total_hours,
                w.efficiency, w.unit_cost, w.doc_cost, w.remark, w.owner_user_id,
                w.status, w.submitter, w.submit_time,
+               COALESCE(cl.sort_order, 9999) AS sort_order,
                ${STATUS} AS customer_status, 1 AS filled, '' AS suggest_date, 0 AS need_backfill
           FROM work_hours w ${JOIN} ${filledWhere}
         UNION ALL
@@ -178,6 +179,7 @@ router.get('/', (req, res) => {
                0 AS main_hours, 0 AS other_hours, 0 AS shared_hours, 0 AS total_hours,
                0 AS efficiency, 0 AS unit_cost, 0 AS doc_cost, '' AS remark, c.owner_user_id,
                'pending' AS status, NULL AS submitter, NULL AS submit_time,
+               COALESCE(c.sort_order, 9999) AS sort_order,
                ${CUST_STATUS} AS customer_status, 0 AS filled,
                ? AS suggest_date, ? AS need_backfill
           FROM customers c
@@ -188,7 +190,7 @@ router.get('/', (req, res) => {
                 AND w.customer_id=c.customer_id AND ${periodWhere}
            )
       ) t
-      ORDER BY filled DESC, date DESC, customer_name
+      ORDER BY filled DESC, sort_order ASC, date DESC, customer_name
       LIMIT ? OFFSET ?`
     ).all(
       ...params,                       // ① filled 分支 WHERE 参数（SQL 文本中最先出现）
@@ -588,8 +590,8 @@ function ownersOfWarehouse(req, warehouse, activeOnly) {
   if (activeOnly) where.push("coop_status='合作中'");
   if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
   return db.prepare(
-    `SELECT customer_id, company_name, COALESCE(NULLIF(short_name,''),company_name) AS owner_name, coop_status
-       FROM customers WHERE ${where.join(' AND ')} ORDER BY company_name`
+    `SELECT customer_id, company_name, COALESCE(NULLIF(short_name,''),company_name) AS owner_name, coop_status, sort_order
+       FROM customers WHERE ${where.join(' AND ')} ORDER BY sort_order ASC, company_name`
   ).all(...params);
 }
 

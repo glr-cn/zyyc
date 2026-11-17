@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS customers (
   coop_status        TEXT NOT NULL DEFAULT '合作中',     -- ⑰ 合作状态
   remark             TEXT,                              -- ⑱ 备注
   customer_type      TEXT NOT NULL DEFAULT '仓储客户',  -- 分类：仓储客户/共享单号/快运物流
+  sort_order         INTEGER NOT NULL DEFAULT 9999,       -- 排序号：前端列表按 ASC 展示；默认 9999 排最后
   owner_user_id      INTEGER REFERENCES users(user_id),  -- 系统列：rbac ownerScope 依赖
   is_deleted         INTEGER NOT NULL DEFAULT 0,        -- 软删除标记：1=已删除（行保留，关联与历史不丢）
   created_at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),

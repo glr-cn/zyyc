@@ -67,6 +67,7 @@ function normalizeForm(b) {
     logistics_control: s('logistics_control'),
     expiry_mgmt: s('expiry_mgmt') || '否',
     coop_status: s('coop_status') || '合作中',
+    sort_order: b.sort_order === '' || b.sort_order == null ? 9999 : Number(b.sort_order),
     remark: s('remark'),
   };
 }
@@ -149,7 +150,7 @@ router.get('/active', (req, res) => {
             COALESCE(NULLIF(short_name,''), company_name) AS owner_name,
             '启用' AS status,
             owner_user_id
-       FROM customers WHERE ${where.join(' AND ')} ORDER BY company_name`
+       FROM customers WHERE ${where.join(' AND ')} ORDER BY sort_order ASC, company_name`
   ).all(...params);
   res.json({ data: rows });
 });
@@ -174,7 +175,7 @@ router.get('/options', (req, res) => {
             warehouse, customer_type, coop_status, is_deleted,
             ${CUST_STATUS_SQL} AS status
        FROM customers ${whereSql}
-      ORDER BY ${CUST_STATUS_SQL} DESC, company_name`
+      ORDER BY ${CUST_STATUS_SQL} DESC, sort_order ASC, company_name`
   ).all(...params);
   res.json({ data: rows });
 });

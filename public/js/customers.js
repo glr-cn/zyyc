@@ -216,6 +216,7 @@
             <label class="field">物流公司控制<input id="f_logistics" value="${esc(v.logistics_control || '')}" ${d}></label>
             <label class="field">效期管理<select id="f_expiry" ${d}>${opts(['是', '否'], v.expiry_mgmt || '否')}</select></label>
             <label class="field">合作状态<select id="f_coop" ${d}>${opts(COOP, v.coop_status || '合作中')}</select></label>
+            <label class="field">排序号<input id="f_sort_order" type="number" min="0" step="1" placeholder="留空默认 9999（排最后）" value="${v.sort_order != null && v.sort_order !== '' ? v.sort_order : ''}" ${d}></label>
             <label class="field full">备注<textarea id="f_remark" ${d}>${esc(v.remark || '')}</textarea></label>
             <div id="f_err" class="err full"></div>
           </div>
@@ -257,6 +258,7 @@
         logistics_control: val('f_logistics'),
         expiry_mgmt: val('f_expiry'),
         coop_status: val('f_coop'),
+        sort_order: val('f_sort_order') === '' ? '' : Number(val('f_sort_order')),
         remark: val('f_remark'),
       };
     }
