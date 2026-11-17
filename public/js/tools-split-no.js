@@ -114,12 +114,6 @@
       else alert(msg);
     }
 
-    function esc(s) {
-      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-      ));
-    }
-
     /** 复制到剪贴板：优先异步 Clipboard API，非 HTTPS / 无权限时降级 execCommand */
     async function copyText(text) {
       if (!text) { toast('没有可复制的内容'); return false; }
@@ -140,23 +134,6 @@
         return ok;
       } catch (e) {
         return false;
-      }
-    }
-
-    /** 读取剪贴板（受浏览器权限限制，失败时提示手动粘贴） */
-    async function readClipboard() {
-      try {
-        if (!navigator.clipboard || !navigator.clipboard.readText) {
-          throw new Error('浏览器不支持读取剪贴板');
-        }
-        const text = await navigator.clipboard.readText();
-        if (!text || !text.trim()) { toast('剪贴板里没有文本'); return; }
-        const input = $('snInput');
-        input.value = text;
-        onChange();
-        toast('已读取 ' + state.tokens.length + ' 个单号');
-      } catch (e) {
-        toast('浏览器拦截了剪贴板读取，请在输入框手动 Ctrl+V 粘贴');
       }
     }
 
@@ -237,8 +214,6 @@
         recalc(); render();
       });
 
-      $('snReadClip').addEventListener('click', readClipboard);
-
       $('snDedupe').addEventListener('click', () => {
         const before = state.tokens.length;
         const deduped = dedupeKeepOrder(state.tokens);
@@ -274,7 +249,6 @@
               <span class="sn-hint">每行一个；Excel 整列复制也行（制表符 / 空格 / 逗号自动拆开）。原样保留，不补零。</span>
             </div>
             <div class="sn-head-ops">
-              <button type="button" class="ghost" id="snReadClip">读剪贴板</button>
               <button type="button" class="ghost" id="snDedupe">去重</button>
               <button type="button" class="ghost" id="snClear">清空</button>
             </div>
