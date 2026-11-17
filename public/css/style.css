@@ -799,11 +799,13 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 }
 .db-table td {
   padding:7px 10px; font-size:13px; color:var(--text);
-  border-bottom:1px solid #eef1f6; white-space:nowrap;
+  border-bottom:1px solid #ebeef5; white-space:nowrap;
 }
 .db-table tr:last-child td { border-bottom:none; }
-.db-table tbody tr:nth-child(even) td { background:#f9f9f9; }
-.db-table tr:hover td { background:#eef4ff !important; }
+.db-table tbody tr:nth-child(odd)  td { background:#ffffff; }
+.db-table tbody tr:nth-child(even) td { background:#f2f4f7; }
+.db-table tr:hover td { background:#e6f7ff !important; }
+.db-table tr:nth-child(even):hover td { background:#dff2fd !important; }
 .db-table td.num, .db-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .db-table td.cust, .db-table th.cust { font-weight:600; }
 
