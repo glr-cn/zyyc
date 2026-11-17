@@ -47,6 +47,7 @@ mkdir -p "$DATA_DIR/backups"
 if [ ! -f "$SECRET_FILE" ]; then
   umask 077
   printf 'ERP_JWT_SECRET=%s\n' "$(head -c 48 /dev/urandom | base64 | tr -d '\n')" > "$SECRET_FILE"
+  printf '# 异地备份（可选）：先执行 rclone config，再把远端填在下面，如 cos:zyyc-backup\nBACKUP_RCLONE_REMOTE=\nBACKUP_KEEP=30\n' >> "$SECRET_FILE"
   echo "  已生成固定 JWT 密钥：$SECRET_FILE"
 else
   echo "  复用已有 JWT 密钥：$SECRET_FILE"
@@ -93,14 +94,21 @@ ln -sf /etc/nginx/sites-available/zyyc /etc/nginx/sites-enabled/zyyc
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
-echo "[7/7] 配置每日自动备份"
+echo "[7/7] 配置每日自动备份（一致性快照 + 可选异地同步）"
 cat > /etc/cron.daily/zyyc-backup <<EOF
 #!/bin/sh
-mkdir -p ${DATA_DIR}/backups
-cp ${DATA_DIR}/erp.db ${DATA_DIR}/backups/erp-\$(date +%Y%m%d).db 2>/dev/null || true
-find ${DATA_DIR}/backups -name 'erp-*.db' -mtime +14 -delete
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+APP_DIR=${APP_DIR} ENV_FILE=${SECRET_FILE} sh ${APP_DIR}/scripts/backup.sh >> ${DATA_DIR}/backups/backup.log 2>&1
 EOF
 chmod +x /etc/cron.daily/zyyc-backup
+
+# 立即跑一次，确认快照链路可用（失败不阻断部署，但会打印原因）
+APP_DIR=${APP_DIR} ENV_FILE=${SECRET_FILE} sh ${APP_DIR}/scripts/backup.sh || echo "  首次备份失败，请检查上方输出"
+
+if ! command -v rclone >/dev/null 2>&1; then
+  echo "  提示：异地同步需安装 rclone —— curl https://rclone.org/install.sh | bash"
+  echo "        然后 rclone config 配置 COS/OSS 远端，并在 ${SECRET_FILE} 填 BACKUP_RCLONE_REMOTE"
+fi
 
 IP=$(curl -s --max-time 5 https://api.ipify.org || echo "你的公网IP")
 echo ""
