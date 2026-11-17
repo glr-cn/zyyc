@@ -27,6 +27,8 @@ function dashboardPage(host) {
         <div class="db-filter-row">
           <div id="dbDatePicker" class="db-date-picker"></div>
           <button id="dbRefresh" class="primary">刷新</button>
+          <button id="dbExportXlsx" class="db-btn-ghost" title="导出当前看板为 Excel">导出 Excel</button>
+          <button id="dbCopyImg" class="db-btn-ghost" title="复制看板为图片到剪贴板">复制为图片</button>
           <span id="dbPeriodLabel" class="db-period-label"></span>
         </div>
       </div>
@@ -63,6 +65,8 @@ function dashboardPage(host) {
   });
 
   $('dbRefresh').addEventListener('click', load);
+  $('dbExportXlsx').addEventListener('click', exportExcel);
+  $('dbCopyImg').addEventListener('click', copyImage);
 
   // 把 picker 当前值同步到 state（onChange 只会在用户真正操作时触发）
   function syncFromPicker() {
@@ -272,6 +276,121 @@ function dashboardPage(host) {
       wowCell(o.cost_wow),
     ].map(x => `<td>${x}</td>`).join(''));
     $('db-logistics').innerHTML = dbTableHTML(cols, rows, '暂无后勤归档数据');
+  }
+
+  // ============ Toast 工具 ============
+  function toast(msg, kind) {
+    kind = kind || 'info';
+    const el = document.createElement('div');
+    el.className = 'db-toast db-toast-' + kind;
+    el.textContent = msg;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('in'));
+    setTimeout(() => { el.classList.remove('in'); setTimeout(() => el.remove(), 250); }, 2200);
+  }
+
+  // ============ 导出 Excel ============
+  function wowStr(v) {
+    if (v == null) return '-';
+    const n = Number(v);
+    if (n === 0) return '0.00%';
+    return (n > 0 ? '↑ ' : '↓ ') + Math.abs(n).toFixed(2) + '%';
+  }
+
+  function exportExcel() {
+    if (!state.data) { toast('请先刷新数据再导出', 'warn'); return; }
+    if (!window.XLSX) { toast('Excel 导出库未加载', 'err'); return; }
+    const btn = $('dbExportXlsx');
+    btn.disabled = true; btn.textContent = '导出中…';
+
+    const d = state.data;
+    const shipHeader = ['客户名称','本期单量','上期单量','单量环比','本期发货工时','上期发货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单均成本(元)'];
+    const recvHeader = ['客户名称','本期箱数','上期箱数','箱数环比','本期收货工时','上期收货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单箱成本(元)'];
+    const intHeader  = ['项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
+    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','本期金额(元)','上期金额(元)','金额环比'];
+
+    const aoaSheet = (header, rows) => [
+      [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${d.periodLabel}）`],
+      header,
+      ...rows,
+    ];
+
+    const aoaShip = aoaSheet(shipHeader, d.shippingList.map(o => [
+      o.customer_name || '', num0(o.cur_ship_qty), num0(o.prev_ship_qty), wowStr(o.ship_qty_wow),
+      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num3(o.cur_other_hours), num3(o.cur_shared_hours),
+      o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
+    ]));
+    const aoaRecv = aoaSheet(recvHeader, d.receivingList.map(o => [
+      o.customer_name || '', num0(o.cur_cartons), num0(o.prev_cartons), wowStr(o.cartons_wow),
+      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num3(o.cur_other_hours), num3(o.cur_shared_hours),
+      o.cur_doc_cost ? num3(o.cur_doc_cost) : '-',
+    ]));
+    const aoaInt = aoaSheet(intHeader, d.internalList.map(o => [
+      o.project || '', num0(o.cur_qty), num0(o.prev_qty), wowStr(o.qty_wow),
+      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num3(o.cur_other_hours),
+      o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
+    ]));
+    const aoaLog = aoaSheet(logHeader, d.logisticsList.map(o => [
+      o.project || '', o.cost_rate,
+      num3(o.cur_total_hours), num3(o.prev_total_hours), wowStr(o.total_hours_wow),
+      num3(o.cur_cost), num3(o.prev_cost), wowStr(o.cost_wow),
+    ]));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaShip), '发货组');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaRecv), '收货组');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaInt),  '库内组');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaLog),  '后勤组');
+    XLSX.writeFile(wb, '佐雍云仓数据中心_经营看板_' + (d.periodLabel || _todayIso) + '.xlsx');
+
+    btn.disabled = false; btn.textContent = '导出 Excel';
+    toast('Excel 已导出', 'ok');
+  }
+
+  // ============ 复制为图片 ============
+  async function copyImage() {
+    const btn = $('dbCopyImg');
+    btn.disabled = true; btn.textContent = '生成中…';
+    try {
+      const node = c.querySelector('.db-wrap');
+      if (!node) throw new Error('找不到看板容器');
+      if (!window.htmlToImage) throw new Error('html-to-image 库未加载');
+
+      const blob = await window.htmlToImage.toBlob(node, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: '#ffffff',
+        width: node.scrollWidth,
+        height: node.scrollHeight,
+      });
+
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        toast('图片已复制到剪贴板，可直接粘贴发送', 'ok');
+      } else {
+        console.warn('[看板] Clipboard API 不可用（需要 HTTPS），降级为下载图片');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = '佐雍云仓数据中心_经营看板_' + _todayIso + '.png';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        toast('已下载为 PNG（非 HTTPS 环境无法写剪贴板）', 'warn');
+      }
+    } catch (ex) {
+      console.error(ex);
+      toast('生成图片失败：' + (ex.message || ex), 'err');
+    } finally {
+      btn.disabled = false; btn.textContent = '复制为图片';
+    }
   }
 }
 

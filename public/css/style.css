@@ -757,6 +757,28 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 }
 .db-period-label { margin-left:auto; font-size:12px; color:var(--muted); }
 
+.db-btn-ghost {
+  padding:5px 14px; border:1px solid var(--line); border-radius:5px;
+  background:transparent; color:var(--text); font-size:13px; cursor:pointer;
+  transition:background .15s, border-color .15s, color .15s;
+}
+.db-btn-ghost:hover:not(:disabled) {
+  border-color:var(--primary); color:var(--primary); background:rgba(var(--primary-rgb,22,119,255),0.06);
+}
+.db-btn-ghost:disabled { opacity:.5; cursor:not-allowed; }
+
+/* Toast */
+.db-toast {
+  position:fixed; top:20px; left:50%; transform:translate(-50%, -20px);
+  padding:10px 18px; border-radius:8px; font-size:13px; font-weight:500;
+  background:#333; color:#fff; box-shadow:0 6px 20px rgba(0,0,0,.18);
+  opacity:0; transition:opacity .25s, transform .25s; z-index:10000; pointer-events:none;
+}
+.db-toast.in { opacity:1; transform:translate(-50%, 0); }
+.db-toast.db-toast-ok   { background:#16a34a; }
+.db-toast.db-toast-warn { background:#b45309; }
+.db-toast.db-toast-err  { background:#dc2626; }
+
 .db-sections { display:flex; flex-direction:column; gap:18px; }
 .db-section {
   background:var(--panel); border:1px solid var(--line); border-radius:10px;
