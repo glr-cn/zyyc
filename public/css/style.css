@@ -187,8 +187,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 /* 表格 */
 .grid { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .grid th, .grid td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
-.grid th { background: #f7f9fc; font-weight: 600; color: var(--muted); }
+/* 表头与数据行差异化：浅灰底 + 加粗 + 字号加大 + 颜色加深 */
+.grid th { background: #f5f7fa; font-weight: 700; font-size: 14px; color: #344054; }
+.grid td { font-size: 13px; font-weight: 400; }
 .grid tr:last-child td { border-bottom: none; }
+/* 行悬停：当前行背景微亮（active-row 高亮行不参与，保持原色） */
+.grid tbody tr:not(.active-row):hover td { background: #f0f6ff; }
 .grid .num { text-align: right; font-variant-numeric: tabular-nums; }
 .grid .empty { text-align: center; color: var(--muted); padding: 26px; }
 .grid .ops button { margin-right: 6px; padding: 5px 9px; }
@@ -697,7 +701,7 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
   position:sticky; right:0; z-index:3; background:var(--panel);
   box-shadow:-2px 0 5px rgba(0,0,0,.06);
 }
-.grid.wh-inline-grid th.ops-head { background:#f7f9fc; }
+.grid.wh-inline-grid th.ops-head { background:#f5f7fa; }
 .grid.wh-inline-grid tr.wh-gap-row td.ops,
 .grid.wh-inline-grid tr.wh-gap-row:hover td.ops { background:#fff8e1; }
 .grid.wh-inline-grid td.ops .ops-none { color:#b8bec9; font-size:13px; }
@@ -705,6 +709,19 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-inline-grid td.ops .ops-inner { display:flex; gap:6px; align-items:center; }
 .grid.wh-inline-grid td.ops button { padding:4px 6px; font-size:12px; white-space:nowrap; flex:0 0 auto; }
 .wh-gap-row [data-out] { font-weight:600; color:#2e7d32; }
+
+/* ===== 工时录入表格：与经营看板视觉统一（全边框 / 内容居中 / 表头区分） ===== */
+.grid.wh-table th, .grid.wh-table td {
+  border:1px solid #e3e8ef;
+  text-align:center;
+  vertical-align:middle;
+}
+/* 数值/日期/下拉输入内容居中；文本输入（客户搜索、备注）保持左对齐便于输入阅读 */
+.grid.wh-table .wh-cell-num,
+.grid.wh-table .wh-cell-date,
+.grid.wh-table .wh-cell-sel { text-align:center; }
+/* 悬停微亮；缺口行保持原有米黄高亮，不参与 */
+.grid.wh-table tbody tr:not(.wh-gap-row):hover td { background:#f0f6ff; }
 
 /* ===== 全局日期范围选择组件 ERP.DateRangePicker ===== */
 .drp { position:relative; display:inline-flex; align-items:center; }
@@ -1030,20 +1047,24 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
   white-space:nowrap;
 }
 .db-table th {
-  height:40px; font-size:12px; font-weight:600; color:var(--muted);
-  background:#f6f8fb;
+  height:40px; font-size:14px; font-weight:700; color:#344054;
+  background:#f5f7fa;
 }
-.db-table td { font-size:13px; color:var(--text); }
+.db-table td { font-size:13px; font-weight:400; color:var(--text); }
 /* 覆盖 .grid 的左对齐/右对齐与「最后一行去边框」 */
-.db-table td.num, .db-table th.num,
-.db-table td.cust, .db-table th.cust { text-align:center; }
+.db-table th.num, .db-table th.cust { text-align:center; }
+.db-table td.num { text-align:center; }
+/* 客户/项目名称列：表头居中、内容靠左；超长省略 + 悬浮显示全名（等价 show-overflow-tooltip） */
+.db-table td.cust { text-align:left; font-weight:600; }
+.db-table th.cust { font-weight:700; }
+.db-table td.cust .db-cust-ellipsis {
+  display:inline-block; max-width:220px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;
+}
 .db-table td.num { font-variant-numeric:tabular-nums; }
-.db-table td.cust, .db-table th.cust { font-weight:600; }
 .db-table tr:last-child td { border-bottom:1px solid #e3e8ef; }
 .db-table tbody tr:nth-child(odd)  td { background:#ffffff; }
 .db-table tbody tr:nth-child(even) td { background:#f2f4f7; }
-.db-table tbody tr:hover td { background:#e6f7ff; }
-.db-table tbody tr:nth-child(even):hover td { background:#dff2fd; }
 /* 汇总行：浅灰底 + 加粗 + 顶部双线，与数据行明显区分 */
 .db-table tfoot td {
   background:#f5f7fa;

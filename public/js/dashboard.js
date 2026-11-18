@@ -153,6 +153,15 @@ function dashboardPage(host) {
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
+  // 行拼接：按列定义输出 <td>（cust / num 类），保证四张表列样式一致
+  function rowHTML(cells, cols) {
+    return cells.map((x, ci) => `<td class="${(cols[ci] && cols[ci].cls) || ''}">${x}</td>`).join('');
+  }
+  // 首列（客户/项目名称）：超长省略 + 悬浮显示全名（原生 title，等价 show-overflow-tooltip）
+  function custCell(name) {
+    const t = escapeHtml(name || '');
+    return `<span class="db-cust-ellipsis" title="${t}">${t}</span>`;
+  }
   function dbTableHTML(cols, rows, emptyMsg, summary) {
     const head = cols.map(c => `<th class="${c.cls || ''}">${c.label}</th>`).join('');
     const body = rows.length
@@ -187,7 +196,7 @@ function dashboardPage(host) {
     //   正确做法：按「单元格自身下标 ci」取对应列样式。
     const rows = list.map((o) => {
       const cells = [
-        escapeHtml(o.customer_name || ''),
+        custCell(o.customer_name),
         num0(o.cur_ship_qty),
         num0(o.prev_ship_qty),
         wowCell(o.ship_qty_wow),
@@ -201,9 +210,7 @@ function dashboardPage(host) {
         num3(o.cur_shared_hours),
         o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
       ];
-      return cells
-        .map((x, ci) => `<td class="${typeof x === 'string' && x.includes('<span') ? '' : ((cols[ci] && cols[ci].cls) || '')}">${x}</td>`)
-        .join('');
+      return rowHTML(cells, cols);
     });
     const curQty = sumBy(list, 'cur_ship_qty');
     const prevQty = sumBy(list, 'prev_ship_qty');
@@ -246,8 +253,8 @@ function dashboardPage(host) {
       { label: '公摊工时', cls: 'num' },
       { label: '单箱成本(元)', cls: 'num' },
     ];
-    const rows = list.map(o => [
-      escapeHtml(o.customer_name || ''),
+    const rows = list.map(o => rowHTML([
+      custCell(o.customer_name),
       num0(o.cur_cartons),
       num0(o.prev_cartons),
       wowCell(o.cartons_wow),
@@ -260,7 +267,7 @@ function dashboardPage(host) {
       num3(o.cur_other_hours),
       num3(o.cur_shared_hours),
       o.cur_doc_cost ? num3(o.cur_doc_cost) : '<span class="muted">-</span>',
-    ].map(x => `<td>${x}</td>`).join(''));
+    ], cols));
     const curCartons = sumBy(list, 'cur_cartons');
     const prevCartons = sumBy(list, 'prev_cartons');
     const curMain = sumBy(list, 'cur_main_hours');
@@ -301,8 +308,8 @@ function dashboardPage(host) {
       { label: '其他工时', cls: 'num' },
       { label: '单均成本(元)', cls: 'num' },
     ];
-    const rows = list.map(o => [
-      escapeHtml(o.project || ''),
+    const rows = list.map(o => rowHTML([
+      custCell(o.project),
       num0(o.cur_qty),
       num0(o.prev_qty),
       wowCell(o.qty_wow),
@@ -314,7 +321,7 @@ function dashboardPage(host) {
       wowCell(o.efficiency_wow),
       num3(o.cur_other_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
-    ].map(x => `<td>${x}</td>`).join(''));
+    ], cols));
     const curQty = sumBy(list, 'cur_qty');
     const prevQty = sumBy(list, 'prev_qty');
     const curMain = sumBy(list, 'cur_main_hours');
@@ -350,8 +357,8 @@ function dashboardPage(host) {
       { label: '上期金额(元)', cls: 'num' },
       { label: '金额环比', cls: 'num' },
     ];
-    const rows = list.map(o => [
-      escapeHtml(o.project || ''),
+    const rows = list.map(o => rowHTML([
+      custCell(o.project),
       o.cost_rate,
       num3(o.cur_total_hours),
       num3(o.prev_total_hours),
@@ -359,7 +366,7 @@ function dashboardPage(host) {
       num3(o.cur_cost),
       num3(o.prev_cost),
       wowCell(o.cost_wow),
-    ].map(x => `<td>${x}</td>`).join(''));
+    ], cols));
     const curHours = sumBy(list, 'cur_total_hours');
     const prevHours = sumBy(list, 'prev_total_hours');
     const curCost = sumBy(list, 'cur_cost');
