@@ -726,6 +726,43 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-table td.wh-name-cell .wh-cell-txt { text-align:left; }
 /* 项目下拉未选择时占位文字呈灰色（required + :invalid），选择后恢复正常文字色 */
 .grid.wh-table select.wh-cell-sel[required]:invalid { color:#b8bec9; }
+
+/* ===== ★ 问题二：行内编辑布局优化 ===== */
+/* 表格横向滚动容器：列宽加大后超宽可滚动，操作列 sticky 固定右侧 */
+.wh-tbl-scroll { overflow-x:auto; }
+/* 输入框 border-less：默认无边框透明底，悬停轻边框提示可编辑，聚焦亮蓝边框 */
+/* （wh-cell-invalid 的 !important 标红仍优先生效） */
+.grid.wh-table .wh-cell-num, .grid.wh-table .wh-cell-txt,
+.grid.wh-table .wh-cell-sel, .grid.wh-table .wh-cell-date {
+  height:26px; line-height:1.2; padding:1px 5px;
+  border:1px solid transparent; border-radius:4px;
+  background:transparent; outline:none;
+}
+.grid.wh-table .wh-cell-num:hover, .grid.wh-table .wh-cell-txt:hover,
+.grid.wh-table .wh-cell-sel:hover, .grid.wh-table .wh-cell-date:hover { border-color:#c9d4e4; }
+.grid.wh-table .wh-cell-num:focus, .grid.wh-table .wh-cell-txt:focus,
+.grid.wh-table .wh-cell-sel:focus, .grid.wh-table .wh-cell-date:focus {
+  border-color:#2f6fed; background:#ffffff;
+  box-shadow:0 0 0 2px rgba(47,111,237,.12);
+}
+/* 行内编辑行更紧凑：降低单元格上下 padding（行高≈32px），垂直居中 */
+.grid.wh-table td { padding:3px 8px; vertical-align:middle; }
+/* 操作列固定右侧（sticky）：白底 + 分隔阴影，宽 120px 由 colgroup 控制 */
+.grid.wh-table th:last-child { position:sticky; right:0; z-index:2; background:#f5f7fa; }
+.grid.wh-table td:last-child { position:sticky; right:0; z-index:1; background:#ffffff;
+  box-shadow:-6px 0 8px -6px rgba(15,35,70,.18); }
+/* 斑马纹下操作列底色跟随（否则偶数行操作列发白突兀） */
+.grid.wh-table tbody tr:nth-child(even) td:last-child { background:#f2f4f7; }
+/* 行悬浮时操作列跟随高亮（放在斑马纹规则之后，确保覆盖） */
+.grid.wh-table tbody tr:hover td:last-child { background:#f0f6ff; }
+/* 操作列按钮：flex 等距分布 + 间距，窄按钮自适应；不再挤成一团 */
+.grid.wh-table td.ops .ops-inner {
+  display:flex; align-items:center; justify-content:space-around;
+  gap:6px; flex-wrap:wrap; padding:0 2px;
+}
+.grid.wh-table td.ops .ops-inner button { font-size:12px; padding:3px 8px; white-space:nowrap; }
+/* 重复行标红：整行浅红底（!important 压过斑马纹/悬浮/操作列底色） */
+.grid.wh-table tbody tr.wh-dup td { background:#fff1f2 !important; }
 /* 行内新增行输入框：紧凑适配行高（高度≈26px，与 38px 行高匹配） */
 .grid.wh-table .wh-cell-num, .grid.wh-table .wh-cell-txt,
 .grid.wh-table .wh-cell-sel { height:26px; line-height:1.2; }

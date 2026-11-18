@@ -168,11 +168,13 @@ function createWorkhoursPage(warehouse) {
         <button id="addBtn" class="primary">+ 新增工时</button>
       </div>
       <div class="wh-archive-tip" id="archiveTip" style="display:none"></div>
+      <div class="wh-tbl-scroll">
       <table class="grid wh-table" id="whTable">
         <colgroup id="whColGroup"></colgroup>
         <thead><tr id="whHead"></tr></thead>
         <tbody id="whBody"><tr><td class="empty">加载中…</td></tr></tbody>
       </table>
+      </div>
       <div class="pager" id="pager"></div>
       </div>`;
       renderTabs();
@@ -362,12 +364,80 @@ function createWorkhoursPage(warehouse) {
       return (ship > 0) || (m > 0) || !!rk;
     }
 
+    // ★ 问题一：重复数据校验 —— 同一「日期 + 客户」（库内/后勤为「日期 + 项目」）出现 ≥2 行即重复
+    // 只统计已填写且已选客户/项目的行；key 带 work_type 防跨类型误判
+    function dupKeyOf(idx) {
+      const row = state.lastRows[idx] || {};
+      const tr = $('whBody').querySelector('tr[data-row-idx="' + idx + '"]');
+      const dateEl = tr ? tr.querySelector('[data-if="date"]') : null;
+      const date = (dateEl && dateEl.value) || row.date || row.suggest_date || '';
+      let who = '';
+      if (state.workType === '库内' || state.workType === '后勤') {
+        const projEl = tr ? tr.querySelector('[data-if="project"]') : null;
+        who = 'p:' + ((projEl && projEl.value) || row.project || '');
+      } else {
+        // 收货行内选择客户后 tr.dataset.rowCid 实时维护；发货/其余以行数据 cid 为准
+        who = 'c:' + ((tr && tr.dataset.rowCid) || row.customer_id || '');
+      }
+      return state.workType + '|' + date + '|' + who;
+    }
+    function findDupGroups() {
+      const map = new Map();
+      state.lastRows.forEach((row, idx) => {
+        const tr = $('whBody').querySelector('tr[data-row-idx="' + idx + '"]');
+        if (!tr) return;
+        // 未填任何内容、或未选客户/项目的行不参与判重
+        const hasVal = [...tr.querySelectorAll('[data-if]')].some((e) => String(e.value || '').trim() !== '');
+        if (!hasVal) return;
+        const key = dupKeyOf(idx);
+        const who = key.split('|')[2];
+        if (who === 'c:' || who === 'p:') return;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(idx);
+      });
+      return [...map.entries()].filter(([, v]) => v.length > 1);
+    }
+    // 标红重复行：整行浅红底 + 日期/客户(项目)输入框红框；保存成功重渲染后自动清除
+    function markDupRows(groups) {
+      $('whBody').querySelectorAll('tr.wh-dup').forEach((tr) => {
+        tr.classList.remove('wh-dup');
+        tr.querySelectorAll('.wh-cell-invalid').forEach((e) => e.classList.remove('wh-cell-invalid'));
+      });
+      const idxSet = new Set();
+      groups.forEach(([, v]) => v.forEach((i) => idxSet.add(i)));
+      idxSet.forEach((idx) => {
+        const tr = $('whBody').querySelector('tr[data-row-idx="' + idx + '"]');
+        if (!tr) return;
+        tr.classList.add('wh-dup');
+        const dateEl = tr.querySelector('[data-if="date"]');
+        const whoEl = tr.querySelector('[data-if="customer_name_cid"], [data-if="project"]');
+        if (dateEl) dateEl.classList.add('wh-cell-invalid');
+        if (whoEl) whoEl.classList.add('wh-cell-invalid');
+      });
+    }
+    function dupToastMsg(key) {
+      const parts = key.split('|');
+      const whoLabel = (state.workType === '库内' || state.workType === '后勤') ? '该项目' : '该客户';
+      return whoLabel + '在 [' + (parts[1] || '') + '] 已有工时记录，请勿重复录入！';
+    }
+
     async function onBatchSubmit() {
       const ids = [...state.checked].map(Number).filter((n) => Number.isFinite(n) && n > 0);
       if (!ids.length) { alert('请先勾选需要提交的数据'); return; }
       const validIds = ids.filter(rowFilled);
       const skipped = ids.length - validIds.length;
       if (!validIds.length) { alert('勾选的数据尚未填写，无法提交'); return; }
+      // ★ 问题一：批量提交查重 —— 勾选行中存在「日期+客户(项目)」重复时，标红全部重复行并拦截
+      const widSet = new Set(validIds);
+      const dupGroups = findDupGroups().filter(([, v]) => v.some((i) => {
+        const row = state.lastRows[i];
+        return row && widSet.has(Number(row.work_id) || 0);
+      }));
+      if (dupGroups.length) {
+        markDupRows(dupGroups);
+        toast(dupToastMsg(dupGroups[0][0]) + '（已标红 ' + dupGroups.reduce((n, [, v]) => n + v.length, 0) + ' 行重复数据）', 'error');
+        return;
+      }
       if (!confirm(`确认批量提交勾选的 ${validIds.length} 条工时记录？提交后将归档，不再显示在未归档列表。`)) return;
       try {
         // 1) 逐条保存行内当前输入（★ 需求一：所有类型的编辑行都统一保存，不再仅发货；
@@ -587,17 +657,17 @@ function createWorkhoursPage(warehouse) {
       }
 
     // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
+    // ★ 问题二（布局）：客户 200 / 备注 150 / 操作 120 —— 输入控件不再拥挤；操作列固定右侧（sticky）
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
-    // ★ 公摊工时列已从录入 UI 移除（仅看板自动分摊），列宽表恢复原状
-    // 发货：勾选34 / 日期124 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
-    // 收货：日期124 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（无勾选列）
-    // 库内：日期124 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注116 / 总工时96 / 提交人72 / 操作96
-    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注116 / 总工时96 / 提交人72 / 操作96
+    // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作120
+    // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120（无勾选列）
+    // 库内：日期124 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
+    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
     const INLINE_WIDTHS = {
-      发货: [34, 124, 150, 62, 80, 78, 72, 84, 116, 72, 96],
-      收货: [124, 180, 80, 72, 72, 80, 78, 84, 116, 72, 96],
-      库内: [124, 200, 62, 78, 84, 116, 96, 72, 96],
-      后勤: [124, 200, 78, 84, 116, 96, 72, 96],
+      发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 120],
+      收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 120],
+      库内: [124, 200, 62, 78, 84, 150, 96, 72, 120],
+      后勤: [124, 200, 78, 84, 150, 96, 72, 120],
     };
 
     function renderHead() {
@@ -1113,6 +1183,16 @@ function createWorkhoursPage(warehouse) {
         if (!ok) {
           if (explicit) { alert(hint); return false; }
           return false;  // 失焦自动保存失败 → 不清空、不刷新
+        }
+        // ★ 问题一：行级保存查重 —— 本行与表内其他行「日期+客户(项目)」重复 → 标红并拦截
+        if (!isNaN(idx) && idx >= 0) {
+          const dupGroups = findDupGroups().filter(([, v]) => v.includes(idx));
+          if (dupGroups.length) {
+            markDupRows(dupGroups);
+            toast(dupToastMsg(dupGroups[0][0]), 'error');
+            if (explicit) alert(dupToastMsg(dupGroups[0][0]));
+            return false;
+          }
         }
         if (tr.__saving) { try { await tr.__saving; } catch (e) { /* 交给本轮 */ } }
         const wid = Number(tr.dataset.rowWid) || Number(tr.__savedWid) || 0;
