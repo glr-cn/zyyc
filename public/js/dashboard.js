@@ -89,6 +89,16 @@ function dashboardPage(host) {
     `;
   }
 
+  /** 渲染安全包装：单个分组渲染异常不影响其他分组 */
+  function safeRender(groupKey, renderFn, data) {
+    try {
+      renderFn(data);
+    } catch (ex) {
+      console.error('[看板] ' + groupKey + ' 渲染异常', ex);
+      $('db-' + groupKey).innerHTML = `<div class="db-err">渲染异常：${ex.message || ex}</div>`;
+    }
+  }
+
   async function load() {
     // 每次请求前从 picker 取最新值（兜底：用户改了 picker 但还没点 onChange 回调，
     // 或切换仓库时要保留当前日期范围）
@@ -103,11 +113,14 @@ function dashboardPage(host) {
       state.data = r;
       $('dbPeriodLabel').textContent =
         `本期：${r.periodLabel}   上期：${r.prevPeriodLabel}`;
-      renderShipping(r.shippingList);
-      renderReceiving(r.receivingList);
-      renderInternal(r.internalList);
-      renderLogistics(r.logisticsList);
+      // ★ 各分组独立 try-catch：一处渲染异常不拖垮其他三个
+      safeRender('shipping',  renderShipping,  r.shippingList);
+      safeRender('receiving', renderReceiving, r.receivingList);
+      safeRender('internal',  renderInternal,  r.internalList);
+      safeRender('logistics', renderLogistics, r.logisticsList);
     } catch (ex) {
+      // API 请求本身失败（网络/鉴权/500）→ 四分组一起显示错误
+      console.error('[看板] 数据加载失败', ex);
       ['shipping','receiving','internal','logistics'].forEach(k => {
         $('db-' + k).innerHTML = `<div class="db-err">加载失败：${ex.message || ex}</div>`;
       });

@@ -1,6 +1,8 @@
 // 分析路由（深度重构：适配 warehouse × work_type × customer_name 新维度）
 // /api/analytics/summary：按日/周/月汇总，公摊按桶内(main+other)占比分摊
-// /api/analytics/dashboard：本月发货量 / 平均单均成本 / 公摊占比 / 客户单均成本排名（前三后三）
+// /api/analytics/dashboard：⚠️ 已废弃（2026-11-17 看板重构 v2 替代为 /api/dashboard/summary）。
+//   仅保留供测试脚本(test_wh/test_pages/test_rbac/test_prepublish)调用，前端不请求此接口。
+//   后续清理：全部测试迁到新接口后删除此路由。
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
@@ -153,7 +155,9 @@ router.get('/summary', menuGate('analytics'), (req, res) => {
   res.json({ mode, table, periods, chart1, chart2 });
 });
 
-// 阶段 5：经营看板
+// ⚠️ 已废弃看板接口 —— 2026-11-17 看板重构 v2 新接口为 GET /api/dashboard/summary
+//   前端 dashboard.js 已切换到新接口；本路由仅保留供旧测试脚本(test_wh/test_rbac/test_prepublish/test_pages)调用，
+//   数据口径仍基于 work_hours archived，但缺少公摊分摊/四分组分区/Day-Week-Month 灵活筛选等新能力。
 function monthRange() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1);

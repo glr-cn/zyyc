@@ -139,7 +139,6 @@ function fetchTotalInternalShared({ req, warehouse, startDate, endDate }) {
      FROM work_hours WHERE ${clauses.join(' AND ')}`
   ).get(...params);
   const total = (Number(row.t_main) || 0) + (Number(row.t_shared) || 0);
-  console.log(`[看板分摊-库内公摊] ${warehouse} ${startDate}~${endDate} | 行=${row.cnt} main+other=${row.t_main} shared=${row.t_shared} => TOTAL=${total}`);
   return total;
 }
 
@@ -271,9 +270,6 @@ function buildShippingList({ req, warehouse, curStart, curEnd, prevStart, prevEn
   const prevTotalPublicShared = fetchTotalInternalShared({ warehouse, startDate: prevStart, endDate: prevEnd, req });
   const curQualSumQty  = out.filter(o => o.cur_ship_qty  > 100).reduce((s, o) => s + o.cur_ship_qty,  0);
   const prevQualSumQty = out.filter(o => o.prev_ship_qty > 100).reduce((s, o) => s + o.prev_ship_qty, 0);
-  console.log(`[看板分摊-分母] curPeriod curQualSumQty=${curQualSumQty} curTotalShared=${curTotalPublicShared} | prevPeriod prevQualSumQty=${prevQualSumQty} prevTotalShared=${prevTotalPublicShared}`);
-  console.log(`[看板分摊-参与客户] cur>100客户名单=${out.filter(o=>o.cur_ship_qty>100).map(o=>o.customer_name+'('+o.cur_ship_qty+')').join(',')||'(无)'}`);
-
   for (const o of out) {
     let curSharedNew  = 0;
     let prevSharedNew = 0;
