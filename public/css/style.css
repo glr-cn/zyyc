@@ -375,34 +375,79 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
 
 /* ============================================================
    RBAC：角色权限页 / 权限树 / 403 拦截页
+   ------------------------------------------------------------
+   ★ 2026-11-18 重写：上次把 .roles-left .grid 设成 display:flex
+     直接破坏了原生 <table> 布局模型（thead/tbody/tr/td 全变 flex item），
+     导致表格被挤压成竖排、文字换行。这次彻底修正：
+       - table 保持原生 display:table
+       - 列宽由 colgroup（roles.js 模板里）+ table-layout:fixed 锁定
+       - 不手动控制 tbody 滚动，让 table 自然撑满 card
    ============================================================ */
-.roles-layout { display: flex; gap: 16px; align-items: stretch; height: calc(100vh - 180px); min-height: 520px; }
-.roles-left { flex: 0 0 400px; display: flex; flex-direction: column; }
+.roles-layout {
+  display: flex; gap: 16px;
+  height: calc(100vh - 140px); min-height: 520px;
+}
+.roles-left {
+  flex: 0 0 500px; width: 500px;
+  display: flex; flex-direction: column;
+}
 .roles-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.roles-layout .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; box-sizing: border-box; }
-/* 右栏 card 也 flex column，让 ptree-panel 撑满剩余高度 */
-.roles-right.card { display: flex; flex-direction: column; }
-.roles-right .ptree-head { flex: 0 0 auto; }
-.roles-right .ptree-tip { flex: 0 0 auto; }
-.roles-right #permErr { flex: 0 0 auto; min-height: 18px; }
-/* 左侧操作列：固定宽度 + 按钮 flex row nowrap */
-.roles-left .grid th:last-child, .roles-left .grid td.ops { width: 160px; min-width: 160px; }
-.roles-left td.ops .ops-inner { display: flex; flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; flex-wrap: nowrap; justify-content: center; }
-.roles-left td.ops .ops-inner button { flex: 0 0 auto; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.roles-layout .card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px; box-sizing: border-box;
+  display: flex; flex-direction: column;
+  overflow: hidden;  /* 关键：card 裁剪内部溢出，不生成页面级滚动条 */
+}
+.roles-layout .roles-left.card { overflow-y: auto; }  /* 左栏 card 本身可滚 */
+
+/* 左侧角色表格：table-layout:fixed 强制按 colgroup 列宽分配，拒绝内容挤压 */
+.roles-table {
+  table-layout: fixed;
+  width: 100%;
+  flex: 0 0 auto;   /* table 不要 flex-grow，让内容自然撑 */
+  border-collapse: collapse;
+}
+.roles-table th, .roles-table td {
+  white-space: nowrap;          /* ★ 关键：拒绝所有单元格自动换行 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 9px 10px;
+}
+/* 描述列：单行省略号 + hover tooltip（title 属性已加在 td 上） */
+.roles-table td.role-desc { text-align: left; }
+/* 角色名称列也单行省略 */
+.roles-table td.role-name { text-align: left; }
+/* 操作列：按钮已经 inline style flex nowrap，这里只保证 td 不挤压 */
+.roles-table td.ops { white-space: nowrap; }
+/* 操作列内按钮行：强制横排不换行（rowHtml 已 inline style，这里兜底） */
+.roles-table td.ops > div { display: flex !important; flex-direction: row !important; gap: 6px !important;
+  justify-content: flex-start !important; align-items: center !important;
+  white-space: nowrap !important; flex-wrap: nowrap !important; }
+.roles-table td.ops button { margin-right: 0; }  /* 覆盖 .grid .ops button 的 margin-right */
+
+/* 工具栏：flex:0 不被压缩 */
 .roles-left .toolbar { flex: 0 0 auto; margin-bottom: 10px; }
-/* 左侧表格撑满 card 剩余高度，内部独立滚动 */
-.roles-left .grid { flex: 1 1 auto; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
-.roles-left .grid tbody { overflow-y: auto; }
+
+/* 右栏 card 的 flex column 子项 */
+.roles-right.card > .ptree-head { flex: 0 0 auto; }
+.roles-right.card > .ptree-tip  { flex: 0 0 auto; }
+.roles-right.card > #permErr    { flex: 0 0 auto; min-height: 18px; }
+
+/* 右栏权限树面板：撑满剩余高度 + 独立滚动条 */
+.ptree-panel {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px;
+  flex: 1 1 auto; min-height: 0;   /* min-height:0 是 flex item 能缩小的关键 */
+  overflow-y: auto;
+  font-size: 14px; background: var(--bg);
+}
 .grid tr.active-row td { background: rgba(47, 111, 237, 0.08); }
 
 .ptree-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .ptree-role { font-weight: 700; font-size: 14px; color: var(--text); }
 .ptree-actions button { margin-left: 6px; padding: 6px 12px; }
 .ptree-tip { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-.ptree-panel {
-  border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px;
-  flex: 1 1 auto; overflow-y: auto; font-size: 14px; background: var(--bg); min-height: 0;
-}
+/* .ptree-panel 已在上方重写（flex:1 + overflow-y: auto） */
 .ptree-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 6px; user-select: none; }
 .ptree-row:hover { background: rgba(47, 111, 237, 0.06); }
 .ptree-row.tree-parent { font-weight: 700; margin-top: 4px; }

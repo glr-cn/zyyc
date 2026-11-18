@@ -14,7 +14,14 @@ window.ERP_PAGES.roles = function (host) {
         <div class="toolbar">
           <button id="roleAddBtn" class="primary">+ 新增角色</button>
         </div>
-        <table class="grid">
+        <table class="grid roles-table">
+          <colgroup>
+            <col style="width:130px">
+            <col style="width:auto">
+            <col style="width:72px">
+            <col style="width:72px">
+            <col style="width:180px">
+          </colgroup>
           <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>菜单数</th><th>操作</th></tr></thead>
           <tbody id="roleBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
         </table>
@@ -94,12 +101,12 @@ window.ERP_PAGES.roles = function (host) {
     const readonlyTag = r.is_readonly ? '<span class="badge off">只读</span>' : '';
     const scopeTag = r.data_scope === 'self' ? '<span class="badge">仅本人数据</span>' : '';
     return `<tr class="${currentRole && currentRole.role_id === r.role_id ? 'active-row' : ''}">
-      <td>${escapeHtml(r.role_name)} ${sysTag}${readonlyTag}${scopeTag}</td>
-      <td>${escapeHtml(r.description || '')}</td>
+      <td class="role-name">${escapeHtml(r.role_name)} ${sysTag}${readonlyTag}${scopeTag}</td>
+      <td class="role-desc" title="${escapeHtml(r.description || '')}">${escapeHtml(r.description || '')}</td>
       <td class="num">${r.user_count}</td>
       <td class="num">${isSuper ? '全部' : r.menu_count}</td>
       <td class="ops">
-        <div class="ops-inner">
+        <div style="display:flex;flex-direction:row;gap:6px;justify-content:flex-start;align-items:center;white-space:nowrap;">
           <button id="perm_${r.role_id}">分配权限</button>
           <button id="redit_${r.role_id}">编辑</button>
           ${r.is_system ? '' : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}
