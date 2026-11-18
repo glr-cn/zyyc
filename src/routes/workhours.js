@@ -726,6 +726,7 @@ router.put('/:id', (req, res) => {
 // 批量删除（仅超级管理员）：物理删除指定 work_id 集合，写审计
 // 必须满足：超管权限 + 非空 ids + 所有 id 都存在于本仓（防跨仓误删）
 // 幂等：已删除的 id 直接忽略，不会报错
+// 审计：复用 writeAudit（单条 action='delete'），日志中心统一口径
 router.delete('/batch', (req, res) => {
   if (!req.user || req.user.role_code !== 'super_admin') {
     return res.status(403).json({ error: '仅超级管理员可批量删除工时记录' });
@@ -740,7 +741,6 @@ router.delete('/batch', (req, res) => {
     return res.status(400).json({ error: '请勾选要删除的记录' });
   }
   const warehouse = ((req.body && req.body.warehouse) || '').trim();
-  const scope = ownerScope(req);
 
   // 事务删除 + 审计
   db.exec('BEGIN');
@@ -749,8 +749,6 @@ router.delete('/batch', (req, res) => {
     const rows = db.prepare(
       `SELECT * FROM work_hours WHERE work_id IN (${placeholders})`
     ).all(...cleaned);
-    // 过滤：owner_user_id 隔离（与列表口径一致，非超管在列表里看不到别人的）
-    // 但这里调用者已经是 super_admin，ownerScope 对超管返回全放开的条件，所以所有 row 都能删
     const toDelete = rows.filter((r) => {
       if (warehouse && r.warehouse !== warehouse) return false; // 跨仓保护
       return true;
@@ -760,13 +758,10 @@ router.delete('/batch', (req, res) => {
       return res.status(404).json({ error: '所选记录不存在或已被删除' });
     }
     const delStmt = db.prepare('DELETE FROM work_hours WHERE work_id=?');
-    const auditStmt = db.prepare(`INSERT INTO audit_log (op, user_id, user_name, target, target_id, old_val, new_val, ts)
-                                  VALUES ('batch_delete', ?, ?, 'work_hours', ?, ?, NULL, datetime('now','localtime'))`);
-    const oldBlobs = new Map(); // 先把 old_val 序列化缓存，避免删完后再读
-    for (const r of toDelete) oldBlobs.set(r.work_id, JSON.stringify(r));
     for (const r of toDelete) {
+      const oldBlob = JSON.parse(JSON.stringify(r)); // 事务内先深拷贝旧值（删完再传给 writeAudit）
       delStmt.run(r.work_id);
-      auditStmt.run(req.user.user_id || 0, operatorName(req), r.work_id, oldBlobs.get(r.work_id));
+      writeAudit(req, 'delete', r.work_id, oldBlob, null);
     }
     db.exec('COMMIT');
     res.json({ ok: true, deleted: toDelete.length, notFound: cleaned.length - toDelete.length });
