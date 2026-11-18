@@ -119,6 +119,25 @@ function dashboardPage(host) {
     return Number(x).toFixed(3);
   }
   function num0(x) { return (x == null ? 0 : Number(x)).toFixed(0); }
+
+  // ---------- 汇总行计算工具 ----------
+  /** 求和：字符串/null 安全转数字 */
+  const sumBy = (list, key) => list.reduce((s, o) => s + (Number(o[key]) || 0), 0);
+  /** 环比（%）：分母为 0 或空 → null（表格显示 "-"），与后端 wow() 口径一致 */
+  const ratioWow = (cur, prev) => (Number(prev) ? ((Number(cur) - Number(prev)) / Number(prev)) * 100 : null);
+  /** 安全除法：分母 <= 0 → 0 */
+  const divOr = (a, b) => (Number(b) > 0 ? Number(a) / Number(b) : 0);
+  /** 加权平均（如单均成本 = Σ(单价×单量)/Σ单量，等价于 总金额/总量，不能直接求和） */
+  const weightedBy = (list, valKey, weightKey) => {
+    let val = 0, weight = 0;
+    list.forEach((o) => {
+      const p = Number(o[valKey]) || 0;
+      const q = Number(o[weightKey]) || 0;
+      val += p * q;
+      weight += q;
+    });
+    return weight > 0 ? val / weight : 0;
+  };
   /**
    * 环比：后端返回 null → 前端渲染为 "-"；
    * 数值 → 渲染为 "12.50%" 并按正负着色（green 正 / red 负 / muted 零），保留 2 位小数
@@ -134,12 +153,16 @@ function dashboardPage(host) {
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  function dbTableHTML(cols, rows, emptyMsg) {
+  function dbTableHTML(cols, rows, emptyMsg, summary) {
     const head = cols.map(c => `<th class="${c.cls || ''}">${c.label}</th>`).join('');
     const body = rows.length
       ? rows.map(row => `<tr>${row}</tr>`).join('')
       : `<tr><td colspan="${cols.length}" class="empty">${emptyMsg}</td></tr>`;
-    return `<table class="grid db-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    // 汇总行：第一格为分组标题（加粗+底色），其余按列居中；无数据时不渲染全 0 的汇总
+    const foot = (summary && rows.length)
+      ? `<tfoot><tr class="db-summary"><td class="db-summary-title">${summary[0]}</td>${summary.slice(1).map(x => `<td class="num">${x}</td>`).join('')}</tr></tfoot>`
+      : '';
+    return `<table class="grid db-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
   }
 
   // ============ 发货组 ============
@@ -182,7 +205,28 @@ function dashboardPage(host) {
         .map((x, ci) => `<td class="${typeof x === 'string' && x.includes('<span') ? '' : ((cols[ci] && cols[ci].cls) || '')}">${x}</td>`)
         .join('');
     });
-    $('db-shipping').innerHTML = dbTableHTML(cols, rows, '暂无发货数据（所有客户本期/上期均无归档记录）');
+    const curQty = sumBy(list, 'cur_ship_qty');
+    const prevQty = sumBy(list, 'prev_ship_qty');
+    const curMain = sumBy(list, 'cur_main_hours');
+    const prevMain = sumBy(list, 'prev_main_hours');
+    const curEff = divOr(curQty, curMain);   // 时效 = 单量 / 主工时（与后端一致）
+    const prevEff = divOr(prevQty, prevMain);
+    const summary = [
+      '发货汇总',
+      num0(curQty),
+      num0(prevQty),
+      wowCell(ratioWow(curQty, prevQty)),
+      num3(curMain),
+      num3(prevMain),
+      wowCell(ratioWow(curMain, prevMain)),
+      curMain > 0 && curQty > 0 ? num3(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevQty > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      wowCell(ratioWow(curEff, prevEff)),
+      num3(sumBy(list, 'cur_other_hours')),
+      num3(sumBy(list, 'cur_shared_hours')),
+      curQty > 0 ? num3(weightedBy(list, 'cur_unit_cost', 'cur_ship_qty')) : '<span class="muted">-</span>',
+    ];
+    $('db-shipping').innerHTML = dbTableHTML(cols, rows, '暂无发货数据（所有客户本期/上期均无归档记录）', summary);
   }
 
   // ============ 收货组 ============
@@ -217,7 +261,28 @@ function dashboardPage(host) {
       num3(o.cur_shared_hours),
       o.cur_doc_cost ? num3(o.cur_doc_cost) : '<span class="muted">-</span>',
     ].map(x => `<td>${x}</td>`).join(''));
-    $('db-receiving').innerHTML = dbTableHTML(cols, rows, '暂无收货归档数据');
+    const curCartons = sumBy(list, 'cur_cartons');
+    const prevCartons = sumBy(list, 'prev_cartons');
+    const curMain = sumBy(list, 'cur_main_hours');
+    const prevMain = sumBy(list, 'prev_main_hours');
+    const curEff = divOr(curCartons, curMain);   // 时效 = 箱数 / 主工时
+    const prevEff = divOr(prevCartons, prevMain);
+    const summary = [
+      '收货汇总',
+      num0(curCartons),
+      num0(prevCartons),
+      wowCell(ratioWow(curCartons, prevCartons)),
+      num3(curMain),
+      num3(prevMain),
+      wowCell(ratioWow(curMain, prevMain)),
+      curMain > 0 && curCartons > 0 ? num3(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevCartons > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      wowCell(ratioWow(curEff, prevEff)),
+      num3(sumBy(list, 'cur_other_hours')),
+      num3(sumBy(list, 'cur_shared_hours')),
+      curCartons > 0 ? num3(weightedBy(list, 'cur_doc_cost', 'cur_cartons')) : '<span class="muted">-</span>',
+    ];
+    $('db-receiving').innerHTML = dbTableHTML(cols, rows, '暂无收货归档数据', summary);
   }
 
   // ============ 库内组 ============
@@ -250,7 +315,27 @@ function dashboardPage(host) {
       num3(o.cur_other_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
     ].map(x => `<td>${x}</td>`).join(''));
-    $('db-internal').innerHTML = dbTableHTML(cols, rows, '暂无库内归档数据');
+    const curQty = sumBy(list, 'cur_qty');
+    const prevQty = sumBy(list, 'prev_qty');
+    const curMain = sumBy(list, 'cur_main_hours');
+    const prevMain = sumBy(list, 'prev_main_hours');
+    const curEff = divOr(curQty, curMain);   // 时效 = 数量 / 主工时
+    const prevEff = divOr(prevQty, prevMain);
+    const summary = [
+      '库内汇总',
+      num0(curQty),
+      num0(prevQty),
+      wowCell(ratioWow(curQty, prevQty)),
+      num3(curMain),
+      num3(prevMain),
+      wowCell(ratioWow(curMain, prevMain)),
+      curMain > 0 && curQty > 0 ? num3(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevQty > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      wowCell(ratioWow(curEff, prevEff)),
+      num3(sumBy(list, 'cur_other_hours')),
+      curQty > 0 ? num3(weightedBy(list, 'cur_unit_cost', 'cur_qty')) : '<span class="muted">-</span>',
+    ];
+    $('db-internal').innerHTML = dbTableHTML(cols, rows, '暂无库内归档数据', summary);
   }
 
   // ============ 后勤组 ============
@@ -275,7 +360,23 @@ function dashboardPage(host) {
       num3(o.prev_cost),
       wowCell(o.cost_wow),
     ].map(x => `<td>${x}</td>`).join(''));
-    $('db-logistics').innerHTML = dbTableHTML(cols, rows, '暂无后勤归档数据');
+    const curHours = sumBy(list, 'cur_total_hours');
+    const prevHours = sumBy(list, 'prev_total_hours');
+    const curCost = sumBy(list, 'cur_cost');
+    const prevCost = sumBy(list, 'prev_cost');
+    // 工时单价是比率，不能求和：按「总金额 / 总工时」加权，无工时显示 "-"
+    const avgRate = (curHours > 0 && curCost > 0) ? curCost / curHours : null;
+    const summary = [
+      '后勤汇总',
+      avgRate == null ? '<span class="muted">-</span>' : num3(avgRate),
+      num3(curHours),
+      num3(prevHours),
+      wowCell(ratioWow(curHours, prevHours)),
+      num3(curCost),
+      num3(prevCost),
+      wowCell(ratioWow(curCost, prevCost)),
+    ];
+    $('db-logistics').innerHTML = dbTableHTML(cols, rows, '暂无后勤归档数据', summary);
   }
 
   // ============ Toast 工具 ============

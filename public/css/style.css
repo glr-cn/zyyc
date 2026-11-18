@@ -1019,23 +1019,39 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 }
 .db-sec-content { padding:0; overflow-x:auto; }
 
+/* 经营看板表格：全边框 + 表头/单元格全部居中 + 统一行高 */
 .db-table { width:100%; min-width:900px; border-collapse:collapse; }
+.db-table th, .db-table td {
+  border:1px solid #e3e8ef;
+  text-align:center;
+  vertical-align:middle;
+  height:38px;
+  padding:6px 10px;
+  white-space:nowrap;
+}
 .db-table th {
-  padding:8px 10px; font-size:12px; font-weight:600; color:var(--muted);
-  background:#f6f8fb; border-bottom:1px solid var(--line);
-  white-space:nowrap; text-align:left;
+  height:40px; font-size:12px; font-weight:600; color:var(--muted);
+  background:#f6f8fb;
 }
-.db-table td {
-  padding:7px 10px; font-size:13px; color:var(--text);
-  border-bottom:1px solid #ebeef5; white-space:nowrap;
-}
-.db-table tr:last-child td { border-bottom:none; }
+.db-table td { font-size:13px; color:var(--text); }
+/* 覆盖 .grid 的左对齐/右对齐与「最后一行去边框」 */
+.db-table td.num, .db-table th.num,
+.db-table td.cust, .db-table th.cust { text-align:center; }
+.db-table td.num { font-variant-numeric:tabular-nums; }
+.db-table td.cust, .db-table th.cust { font-weight:600; }
+.db-table tr:last-child td { border-bottom:1px solid #e3e8ef; }
 .db-table tbody tr:nth-child(odd)  td { background:#ffffff; }
 .db-table tbody tr:nth-child(even) td { background:#f2f4f7; }
-.db-table tr:hover td { background:#e6f7ff !important; }
-.db-table tr:nth-child(even):hover td { background:#dff2fd !important; }
-.db-table td.num, .db-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.db-table td.cust, .db-table th.cust { font-weight:600; }
+.db-table tbody tr:hover td { background:#e6f7ff; }
+.db-table tbody tr:nth-child(even):hover td { background:#dff2fd; }
+/* 汇总行：浅灰底 + 加粗 + 顶部双线，与数据行明显区分 */
+.db-table tfoot td {
+  background:#f5f7fa;
+  font-weight:700;
+  border-top:2px solid #cfd8e3;
+}
+.db-table tfoot td.db-summary-title { background:#e8edf5; }
+.db-table tfoot tr:hover td { background:#f5f7fa; }
 
 .db-table th.ops-head { width:100px; }
 

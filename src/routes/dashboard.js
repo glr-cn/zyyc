@@ -41,8 +41,11 @@ function computePeriods(startDate, endDate, periodType) {
 
   // 优先按 periodType 推导（用户显式选择日/周/月）
   if (periodType === 'day') {
-    const prevStart = new Date(s); prevStart.setDate(s.getDate() - 1);
-    const prevEnd = new Date(s);
+    // ★ 修复：原来 prevEnd = 本期起始日，导致上期区间 = [昨天, 今天]，
+    //   把今天的归档数据也计进上期（环比因此偏小）。上期应为完整的前一个同跨度区间。
+    const span = Math.max(0, Math.round((e - s) / 86400000));
+    const prevStart = new Date(s); prevStart.setDate(s.getDate() - span - 1);
+    const prevEnd = new Date(e); prevEnd.setDate(e.getDate() - span - 1);
     return {
       cur: { start: ymd(s), end: ymd(e), label: ymd(s) },
       prev: { start: ymd(prevStart), end: ymd(prevEnd), label: ymd(prevStart) },
