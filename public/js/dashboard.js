@@ -153,9 +153,13 @@ function dashboardPage(host) {
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  // 行拼接：按列定义输出 <td>（cust / num 类），保证四张表列样式一致
+  // 「本期」列强调：列名含"本期" → 追加 hi 类（加粗 + 字号+1，见 .db-table .hi 样式）
+  function colCls(c) {
+    return [c.cls || '', (c.label || '').includes('本期') ? 'hi' : ''].filter(Boolean).join(' ');
+  }
+  // 行拼接：按列定义输出 <td>（cust / num / hi 类），保证四张表列样式一致
   function rowHTML(cells, cols) {
-    return cells.map((x, ci) => `<td class="${(cols[ci] && cols[ci].cls) || ''}">${x}</td>`).join('');
+    return cells.map((x, ci) => `<td class="${cols[ci] ? colCls(cols[ci]) : ''}">${x}</td>`).join('');
   }
   // 首列（客户/项目名称）：超长省略 + 悬浮显示全名（原生 title，等价 show-overflow-tooltip）
   function custCell(name) {
@@ -163,13 +167,14 @@ function dashboardPage(host) {
     return `<span class="db-cust-ellipsis" title="${t}">${t}</span>`;
   }
   function dbTableHTML(cols, rows, emptyMsg, summary) {
-    const head = cols.map(c => `<th class="${c.cls || ''}">${c.label}</th>`).join('');
+    const head = cols.map(c => `<th class="${colCls(c)}">${c.label}</th>`).join('');
     const body = rows.length
       ? rows.map(row => `<tr>${row}</tr>`).join('')
       : `<tr><td colspan="${cols.length}" class="empty">${emptyMsg}</td></tr>`;
     // 汇总行：第一格为分组标题（加粗+底色），其余按列居中；无数据时不渲染全 0 的汇总
+    // summary[i+1] 与 cols[i+1] 一一对应，「本期」列同样加 hi
     const foot = (summary && rows.length)
-      ? `<tfoot><tr class="db-summary"><td class="db-summary-title">${summary[0]}</td>${summary.slice(1).map(x => `<td class="num">${x}</td>`).join('')}</tr></tfoot>`
+      ? `<tfoot><tr class="db-summary"><td class="db-summary-title">${summary[0]}</td>${summary.slice(1).map((x, i) => `<td class="${colCls(cols[i + 1] || {})}">${x}</td>`).join('')}</tr></tfoot>`
       : '';
     return `<table class="grid db-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
   }

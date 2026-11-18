@@ -1082,6 +1082,11 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .db-table tfoot td.db-summary-title { background:#e8edf5; }
 .db-table tfoot tr:hover td { background:#f5f7fa; }
 
+/* 「本期」列强调：列名含"本期"的表头与单元格加粗、字号+1，视觉上比普通列醒目 */
+.db-table th.hi { font-weight:700; font-size:15px; color:#1f2a3d; }
+.db-table td.hi { font-weight:600; font-size:14px; }
+.db-table tfoot td.hi { font-weight:700; font-size:14px; }
+
 .db-table th.ops-head { width:100px; }
 
 /* 环比颜色（增强语义） */
