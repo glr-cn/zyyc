@@ -926,12 +926,12 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
   const skipCnt = rows.filter((r) => r.action === 'skip_exact').length;
   const overwriteCnt = rows.filter((r) => r.action === 'overwrite').length;
 
-  // 汇总规则判定（供 import 接口直接复用）
+  // 汇总规则判定（与 import PRECHECK 完全一致的三态语义）
   let rule;
   if (createCnt === rows.length) rule = 1;
-  else if (overwriteCnt === 0) rule = 2;         // 全 skip_exact
-  else if (skipCnt === 0 && createCnt === 0) rule = 3; // 全 overwrite
-  else rule = 4;                                  // 混合
+  else if (skipCnt === rows.length) rule = 2;                // 全 skip_exact（零写入）
+  else if (overwriteCnt === rows.length) rule = 3;           // 全 overwrite
+  else rule = 4;                                              // 混合
 
   res.json({
     data: rows, errors, warehouse,
