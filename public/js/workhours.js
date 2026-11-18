@@ -1,7 +1,7 @@
 // 工时管理页（按仓库拆分）：每个仓库一个独立页面实例
 // - 仓库不再由页内 Tabs 切换，而是由左侧菜单「工时 → 录入 → 各仓工时管理」路由锁定
 // - 页面内保留 发货/收货/库内/后勤 四个业务类型 Tabs
-// - 查询与新增弹窗的归属仓库严格锁定为当前页面配置的仓库
+// - 新增一律为表格行内直编（无新增弹窗）；弹窗仅用于已归档记录修改/查看；归属仓库由页面路由锁定
 window.ERP_PAGES = window.ERP_PAGES || {};
 
 // 页面 id → 仓库映射（与左侧菜单「工时 → 录入」子项一一对应）
@@ -35,23 +35,26 @@ function createWorkhoursPage(warehouse) {
         // 已隐藏冗余列：shared_hours 公摊工时 / total_hours 总工时 / unit_cost 单均成本（仅展示层隐藏，数据与计算逻辑不变）
       ],
       收货: [
-        { key: 'date', label: '日期' }, { key: 'customer_name', label: '客户名称' },
+        { key: 'date', label: '日期' }, { key: 'customer_name', label: '客户名称', left: true },
         { key: 'cartons', label: '箱数', num: true },
         { key: 'tons', label: '吨', num: true }, { key: 'cubic', label: '方', num: true }, { key: 'pallets', label: '托盘', num: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
+        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' },
         { key: 'submitter', label: '提交人' },
         // 已隐藏冗余列：unit/效率/单据成本（仅 UI 层删，后端数据 calc 不变）
       ],
       库内: [
-        { key: 'date', label: '日期' }, { key: 'project', label: '项目' }, { key: 'unit', label: '单位' },
+        { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true }, { key: 'unit', label: '单位' },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
+        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
         { key: 'submitter', label: '提交人' },
       ],
       后勤: [
-        { key: 'date', label: '日期' }, { key: 'project', label: '项目' },
+        { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
+        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
         { key: 'submitter', label: '提交人' },
       ],
@@ -249,29 +252,17 @@ function createWorkhoursPage(warehouse) {
         state.status = e.target.value; state.page = 1; state.checked.clear();
         syncTabUI(); load();
       };
-      $('addBtn').onclick = () => {
-        if (state.status !== 'pending') { openModal(null); return; }
-        const type = state.workType;
-        const today = todayStr();
-        const base = {
-          // ★ Bug#1 修复：给虚拟行加唯一 tempId（时间戳+随机），DOM 不再靠 work_id=0 做 key
-          tempId: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-          work_id: 0, filled: 1, status: 'pending', submitter: null, submit_time: null,
-          warehouse: state.warehouse, work_type: type, date: today, suggest_date: today, need_backfill: 0,
-          remark: '', main_hours: '', other_hours: '', total_hours: '', efficiency: '',
-        };
-        if (type === '发货' || type === '收货') {
-          base.customer_id = ''; base.customer_name = ''; base.customer_status = '启用';
-          base.unit = '';
-          if (type === '发货') base.ship_orders = '';
-          if (type === '收货') { base.cartons = ''; base.tons = ''; base.cubic = ''; base.pallets = ''; }
-        } else {
-          base.project = '';
-          if (type === '库内') base.unit = '';
+      // ★ 需求一：新增一律走「表格行内新增」，彻底取消新增弹窗。
+      //   未归档视图 → 直接在数据源顶部插入虚拟行；已归档视图 → 自动切回未归档再插入。
+      $('addBtn').onclick = async () => {
+        if (state.status !== 'pending') {
+          state.status = 'pending';
+          $('statusFilter').value = 'pending';
+          state.checked.clear();
+          syncTabUI();
+          await load();
         }
-        // ★ Bug#3 修复：每次展开全新独立对象，绝不用共用引用
-        state.lastRows.unshift({ ...base });
-        renderRows();
+        addVirtualRow();
       };
       $('templateBtn').onclick = onDownloadTemplate;
       $('importBtn').onclick = () => $('importFile').click();
@@ -294,6 +285,34 @@ function createWorkhoursPage(warehouse) {
       API.download('/workhours/template?warehouse=' + encodeURIComponent(state.warehouse) + '&work_type=' + encodeURIComponent('发货'),
         '发货工时导入模板_' + state.warehouse + '.xlsx')
         .catch((ex) => alert('下载模板失败：' + ex.message));
+    }
+
+    // 行内新增：在数据源顶部插入一条带默认值的虚拟空行（tempId 标识，取消/提交后移除）
+    function addVirtualRow() {
+      const type = state.workType;
+      const today = todayStr();
+      const base = {
+        // ★ Bug#1 修复：给虚拟行加唯一 tempId（时间戳+随机），DOM 不再靠 work_id=0 做 key
+        tempId: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        work_id: 0, filled: 1, status: 'pending', submitter: null, submit_time: null,
+        warehouse: state.warehouse, work_type: type, date: today, suggest_date: today, need_backfill: 0,
+        remark: '', main_hours: '', other_hours: '', shared_hours: '', total_hours: '', efficiency: '',
+      };
+      if (type === '发货' || type === '收货') {
+        base.customer_id = ''; base.customer_name = ''; base.customer_status = '启用';
+        base.unit = '';
+        if (type === '发货') base.ship_orders = '';
+        if (type === '收货') { base.cartons = ''; base.tons = ''; base.cubic = ''; base.pallets = ''; }
+      } else {
+        base.project = '';
+        if (type === '库内') base.unit = '';
+      }
+      // ★ Bug#3 修复：每次展开全新独立对象，绝不用共用引用
+      state.lastRows.unshift({ ...base });
+      renderRows();
+      // 聚焦首个可输入控件（日期），让用户直接开填
+      const first = $('whBody').querySelector('tr[data-row-idx] input[data-if="date"]');
+      if (first) first.focus();
     }
 
     // 导入：选文件 → 预览检测重复 → 弹窗逐条确认覆盖/跳过 → 执行
@@ -353,10 +372,11 @@ function createWorkhoursPage(warehouse) {
       if (!validIds.length) { alert('勾选的数据尚未填写，无法提交'); return; }
       if (!confirm(`确认批量提交勾选的 ${validIds.length} 条工时记录？提交后将归档，不再显示在未归档列表。`)) return;
       try {
-        // 1) 逐条保存行内当前输入（各行值不同，必须逐行写；只写勾选且有效的行）
+        // 1) 逐条保存行内当前输入（★ 需求一：所有类型的编辑行都统一保存，不再仅发货；
+        //    各行值不同必须逐行写；只写勾选且有效的行）
         for (const id of validIds) {
           const tr = $('whBody').querySelector('tr[data-row-wid="' + id + '"]');
-          if (tr && tr.querySelector('[data-if="ship_orders"]')) {
+          if (tr && tr.querySelector('[data-if]')) {
             await API.put('/workhours/' + id, inlinePayloadOf(tr));
           }
         }
@@ -570,15 +590,17 @@ function createWorkhoursPage(warehouse) {
 
     // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
+    // 公摊工时列 84：★ 需求一新增（收货/库内/后勤），与主工时列同宽
     // 发货：勾选34 / 日期124 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
-    // 收货：日期124 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（无勾选列）
-    // 库内：日期124 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（8列 + 操作）
-    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（7列 + 操作，无单位）
+    // 收货：日期124 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主78 / 其他84 / 公摊84 / 备注116 / 提交人72 / 操作96（无勾选列）
+    // 库内：日期124 / 项目200 / 单位62 / 主78 / 其他84 / 公摊84 / 备注116 / 总工时? / 提交人72 / 操作96
+    // 后勤：日期124 / 项目200 / 主78 / 其他84 / 公摊84 / 备注116 / 总工时? / 提交人72 / 操作96
+    // 注：库内/后勤的「总工时」列为实时计算展示列，随 colgroup 空分配均分宽度
     const INLINE_WIDTHS = {
       发货: [34, 124, 150, 62, 80, 78, 72, 84, 116, 72, 96],
-      收货: [124, 180, 80, 72, 72, 80, 78, 84, 116, 72, 96],
-      库内: [124, 200, 62, 78, 84, 116, 72, 96],
-      后勤: [124, 200, 78, 84, 116, 72, 96],
+      收货: [124, 180, 80, 72, 72, 80, 78, 84, 84, 116, 72, 96],
+      库内: [124, 200, 62, 78, 84, 84, 116, 96, 72, 96],
+      后勤: [124, 200, 78, 84, 84, 116, 96, 72, 96],
     };
 
     function renderHead() {
@@ -717,7 +739,7 @@ function createWorkhoursPage(warehouse) {
                 known.add(base + (o.status === '已删除' ? ' (已删除)' : o.status === '停用' ? ' (已停用)' : ''));
               });
               const nameInvalid = !!curName && !known.has(curName);
-              return `<td>
+              return `<td class="wh-name-cell">
                 <datalist id="${dlId}">${opts}</datalist>
                 <input list="${dlId}" data-if="customer_name_cid" class="wh-cell-txt wh-cust-sel${nameInvalid ? ' wh-cell-invalid' : ''}"
                   aria-invalid="${nameInvalid ? 'true' : 'false'}"
@@ -736,7 +758,8 @@ function createWorkhoursPage(warehouse) {
           if (col.key === 'project') {
             const type = state.workType;
             const ph = (type === '库内' || type === '后勤') ? '* 请选择项目（必填）' : '—';
-            return `<td><select data-if="project" class="wh-cell-sel">${projectOptions(type, r.project || '', ph)}</select></td>`;
+            // 名称列（项目）内容靠左对齐（表头仍居中）
+            return `<td class="wh-name-cell"><select data-if="project" class="wh-cell-sel">${projectOptions(type, r.project || '', ph)}</select></td>`;
           }
           // —— 单位（发货/收货/库内）：下拉；后勤没有此列
           if (col.key === 'unit') {
@@ -750,6 +773,8 @@ function createWorkhoursPage(warehouse) {
             return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="${escapeAttr(ph)}"></td>`;
           }
           if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
+          // ★ 需求一：公摊工时从弹窗迁移到行内输入（收货/库内/后勤；后端 calcRow 用它算总工时/单据成本）
+          if (col.key === 'shared_hours') return `<td><input data-if="shared_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.shared_hours)}" placeholder="公摊"></td>`;
           // —— 发货专属
           if (col.key === 'ship_orders') return `<td><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
           // —— 收货专属
@@ -791,8 +816,10 @@ function createWorkhoursPage(warehouse) {
           let tag = '';
           if (r.customer_status === '已删除') tag = ' <span class="cust-tag cust-tag-del">(已删除)</span>';
           else if (r.customer_status === '停用') tag = ' <span class="cust-tag cust-tag-stop">(已停用)</span>';
-          return `<td>${name}${tag}</td>`;
+          // 名称列内容靠左对齐（表头仍居中）
+          return `<td class="wh-name-cell">${name}${tag}</td>`;
         }
+        if (col.left) return `<td class="wh-name-cell">${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
         return `<td>${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
       }).join('');
       // 操作列 —— 已归档/未归档分支不变；pending 全类型都走 inline ops
@@ -854,7 +881,7 @@ function createWorkhoursPage(warehouse) {
       // 发货 tab 的非 inline 行（已归档）edit → openModal 编辑
       if (act === 'edit') openModal(id);
       if (act === 'editArchived') openModal(id);
-      if (act === 'view') openModal(id, null, { readonly: true });
+      if (act === 'view') openModal(id, { readonly: true });
       // 提交归档：行内视图走行内保存（带当前输入值）；其他 tab 直接提交
       if (act === 'submit') {
         const tr = e.target.closest('tr');
@@ -932,10 +959,10 @@ function createWorkhoursPage(warehouse) {
       // 备注：trim 后真空 → null（后端 CREATE TABLE remark TEXT DEFAULT NULL 口径）
       const remark = (val('remark') || '').trim();
       base.remark = remark || null;
-      // 工时通用
+      // 工时通用（★ 公摊工时改为行内输入取数，后端 calcRow 依此算总工时/单据成本）
       base.main_hours = Number(val('main_hours')) || 0;
       base.other_hours = Number(val('other_hours')) || 0;
-      base.shared_hours = 0;
+      base.shared_hours = Number(val('shared_hours')) || 0;
 
       if (type === '发货' || type === '收货') {
         if (type === '收货') {
@@ -996,6 +1023,8 @@ function createWorkhoursPage(warehouse) {
         const dateEl = el('date'); if (dateEl) row.date = dateEl.value || row.date;
         const mainEl = el('main_hours'); if (mainEl) row.main_hours = mainEl.value === '' ? '' : Number(mainEl.value);
         const otherEl = el('other_hours'); if (otherEl) row.other_hours = otherEl.value === '' ? '' : Number(otherEl.value);
+        // ★ 公摊工时：行内输入值回写草稿，重渲染不丢
+        const sharedEl = el('shared_hours'); if (sharedEl) row.shared_hours = sharedEl.value === '' ? '' : Number(sharedEl.value);
         const remarkEl = el('remark'); if (remarkEl) row.remark = remarkEl.value || '';
         // 项目（仅库内/后勤有此列）
         const projEl = el('project'); if (projEl) row.project = projEl.value || null;
@@ -1034,9 +1063,12 @@ function createWorkhoursPage(warehouse) {
             ? (Math.round((cartons / main + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
         }
         if (type === '库内' || type === '后勤') {
+          // ★ 总工时 = 主 + 其他 + 公摊（行内实时计算）
+          const shared = Number(val('shared_hours')) || 0;
+          const total = main + other + shared;
           const out = tr.querySelector('[data-out="total_hours"]');
-          if (out) out.textContent = (main + other) > 0
-            ? (Math.round((main + other + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
+          if (out) out.textContent = total > 0
+            ? (Math.round((total + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
         }
       };
       const resetRow = () => {
@@ -1209,19 +1241,14 @@ function createWorkhoursPage(warehouse) {
       recalc();
     }
 
-    // ---------- 弹窗（按 work_type 动态表单；归属仓库锁定为当前页面仓库） ----------
-    // preset：缺口行"填写"传入的预选客户 { customer_id, customer_name, date }
-    async function openModal(id, preset, opts) {
-      const isEdit = !!id;
+    // ---------- 弹窗（仅用于已归档记录的「修改 / 查看」） ----------
+    // ★ 需求一：新增已全部改为表格行内直编（addVirtualRow），弹窗不再承担新增职责。
+    async function openModal(id, opts) {
+      if (!id) return; // 新增走行内直编，弹窗必须传入已有记录 id
       const readonly = !!(opts && opts.readonly); // 已归档只读查看：禁用输入、隐藏保存
-      preset = preset || {};
       let cur = {};
-      if (isEdit) {
-        try { cur = (await API.get('/workhours/' + id)).data || {}; } catch (ex) { alert(ex.message); return; }
-      } else if (preset.customer_id) {
-        cur = { customer_id: preset.customer_id, customer_name: preset.customer_name, date: preset.date };
-      }
-      const workType = isEdit ? cur.work_type : state.workType;
+      try { cur = (await API.get('/workhours/' + id)).data || {}; } catch (ex) { alert(ex.message); return; }
+      const workType = cur.work_type;
       // 客户下拉：按当前仓库过滤（warehouse 参数），只显示本仓货主，杜绝跨仓越权。
       // /options 返回含已删除/停用的全部客户；已删除/停用加后缀并置灰，不允许新录入。
       const owners = (await API.get('/customers/options?warehouse=' + encodeURIComponent(state.warehouse))).data || [];
@@ -1273,7 +1300,7 @@ function createWorkhoursPage(warehouse) {
       modal.className = 'modal-overlay';
       modal.innerHTML = `
       <div class="modal">
-        <div class="modal-head"><span>${readonly ? '查看' : (isEdit ? '编辑' : '新增')}工时（${workType} · ${state.warehouse}）</span><button class="close" type="button">×</button></div>
+        <div class="modal-head"><span>${readonly ? '查看' : '编辑'}工时（${workType} · ${state.warehouse}）</span><button class="close" type="button">×</button></div>
         <div class="modal-body">${fields.join('')}
           <div class="full" style="display:flex;gap:24px;color:var(--muted);font-size:13px">
             <span>总工时：<b id="f_total" style="color:var(--text)">0.000</b> 小时</span>
@@ -1332,7 +1359,9 @@ function createWorkhoursPage(warehouse) {
       ['#f_main', '#f_other', '#f_shared', '#f_ship', '#f_cartons'].forEach((sel) => { const el = modal.querySelector(sel); if (el) el.oninput = preview; });
       preview();
 
-      modal.querySelector('#saveBtn').onclick = async () => {
+      // ★ 修复：readonly「查看」模式下 saveBtn 已被移除，必须判空再绑定（否则点击查看即抛 TypeError）
+      const saveBtn = modal.querySelector('#saveBtn');
+      if (saveBtn) saveBtn.onclick = async () => {
         const payload = {
           warehouse: state.warehouse, work_type: workType,
           unit: modal.querySelector('#f_unit') ? (modal.querySelector('#f_unit').value || null) : null,
@@ -1359,8 +1388,7 @@ function createWorkhoursPage(warehouse) {
         }
         const errEl = modal.querySelector('#f_err');
         try {
-          if (isEdit) await API.put('/workhours/' + id, payload);
-          else await API.post('/workhours', payload);
+          await API.put('/workhours/' + id, payload);
           modal.remove(); load();
         } catch (ex) { errEl.textContent = ex.message; }
       };

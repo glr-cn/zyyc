@@ -720,6 +720,14 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-table .wh-cell-num,
 .grid.wh-table .wh-cell-date,
 .grid.wh-table .wh-cell-sel { text-align:center; }
+/* ★ 需求二：名称列（收货客户名称 / 库内·后勤项目名称）表头居中、内容靠左 */
+.grid.wh-table td.wh-name-cell { text-align:left; }
+.grid.wh-table td.wh-name-cell .wh-cell-sel,
+.grid.wh-table td.wh-name-cell .wh-cell-txt { text-align:left; }
+/* 行内新增行输入框：紧凑适配行高（高度≈26px，与 38px 行高匹配） */
+.grid.wh-table .wh-cell-num, .grid.wh-table .wh-cell-txt,
+.grid.wh-table .wh-cell-sel { height:26px; line-height:1.2; }
+.grid.wh-table .wh-cell-date { height:26px; }
 /* 悬停微亮；缺口行保持原有米黄高亮，不参与 */
 .grid.wh-table tbody tr:not(.wh-gap-row):hover td { background:#f0f6ff; }
 
