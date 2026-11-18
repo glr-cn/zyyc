@@ -410,7 +410,11 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
   flex: 0 0 auto;
   border-collapse: collapse;
 }
-/* ★ 表头单独 nowrap：防止「用户数」「菜单数」这种短表头被挤压成竖排 */
+/* ★ 单元格完整边框（覆盖 .grid 只给 bottom border 的规则），形成清晰网格线 */
+.roles-table th, .roles-table td {
+  border: 1px solid var(--line) !important;
+  vertical-align: middle;  /* 全部单元格垂直居中，移除 role-desc 原来的 top */
+}
 .roles-table th {
   white-space: nowrap;
   overflow: hidden;
@@ -437,9 +441,12 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
   color: #666;
   line-height: 1.5;
   text-align: left;
-  vertical-align: top;              /* 多行描述从顶部开始，不垂直居中 */
+  /* vertical-align 已提升到公共 th/td 规则统一 middle，不再单独 top */
 }
+/* ★ 数字列（用户数/菜单数）：居中对齐（覆盖 .grid .num 的 text-align:right） */
+.roles-table td.num { text-align: center !important; font-variant-numeric: tabular-nums; }
 /* 操作列：按钮已经 inline style flex，这里保证 td 不挤压 + 按钮强制横排居中 */
+.roles-table td.ops { text-align: center; }
 .roles-table td.ops > div {
   display: flex !important; flex-direction: row !important;
   gap: 8px !important; justify-content: center !important;
@@ -447,6 +454,14 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
   white-space: nowrap !important; flex-wrap: nowrap !important;
 }
 .roles-table td.ops button { margin-right: 0; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+/* ★ 内置角色无删除按钮时的占位元素：visibility:hidden 保留尺寸，保证「分配权限/编辑」位置对齐 */
+.roles-table td.ops .ops-placeholder {
+  visibility: hidden;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid transparent;  /* 模拟按钮边框，保持盒模型一致 */
+  white-space: nowrap;
+}
 
 /* 工具栏 + 表格都 flex:0，不伸缩 */
 .roles-left .toolbar { flex: 0 0 auto; margin-bottom: 10px; }
@@ -740,6 +755,9 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .imp-grid tbody tr:hover td { background: var(--bg-elev); }
 .imp-grid .imp-dup td { background: #fff8e1; }
 .imp-grid .imp-dup:hover td { background: #fff2c7; }
+.imp-grid .imp-blocked td { background: #ffebee; color: #b71c1c; }
+.imp-grid .imp-blocked:hover td { background: #ffd9de; }
+.imp-grid .imp-blocked-tag { display: inline-block; padding: 2px 8px; font-size: 12px; font-weight: 600; color: #c62828; background: #ffebee; border-radius: 10px; }
 .imp-grid .imp-new-tag { display: inline-block; padding: 2px 8px; font-size: 12px; font-weight: 600; color: #2e7d32; background: #e8f5e9; border-radius: 10px; }
 .imp-grid .imp-new-tag-empty { display: inline-block; padding: 2px 8px; font-size: 12px; color: var(--muted); background: var(--bg-elev); border-radius: 10px; }
 .imp-grid .imp-decide { display: inline-flex; gap: 6px; align-items: center; }

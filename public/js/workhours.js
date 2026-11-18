@@ -534,29 +534,39 @@ function createWorkhoursPage(warehouse) {
     }
 
     // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
+    // 【修复】区分 pending 冲突（可覆盖/跳过）与 archived 冲突（强制禁止导入）
     function openImportConfirm(ctx) {
       const { rows, errors, preview } = ctx;
-      const dupCnt = preview.duplicateCount || rows.filter((r) => r.duplicate).length;
-      const newCnt = rows.length - dupCnt;
+      const blockedCnt = preview.archivedConflictCount || rows.filter((r) => r.archived_conflict).length;
+      const dupCnt = (preview.duplicateCount || rows.filter((r) => r.duplicate).length) - blockedCnt;
+      const newCnt = rows.length - blockedCnt - dupCnt;
 
       const rowsHtml = rows.map((r) => {
-        const dup = r.duplicate;
+        const blocked = r.archived_conflict;
+        const dup = r.duplicate && !blocked;
         const ex = r.existing;
-        const decide = dup
-          ? `<div class="imp-decide">
-              <label><input type="radio" name="dec_${r.line}" value="skip" checked><span>跳过</span></label>
-              <label><input type="radio" name="dec_${r.line}" value="overwrite"><span>覆盖</span></label>
-            </div>`
-          : `<span class="imp-new-tag">新增</span>`;
-        const existTxt = dup && ex ? `已有：${ex.ship_orders} 单 / ${ex.main_hours}h` : '';
-        return `<tr class="${dup ? 'imp-dup' : ''}">
+        let decideHtml;
+        if (blocked) {
+          decideHtml = `<span class="imp-blocked-tag">已归档 · 禁止导入</span>`;
+        } else if (dup) {
+          decideHtml = `<div class="imp-decide">
+            <label><input type="radio" name="dec_${r.line}" value="skip" checked><span>跳过</span></label>
+            <label><input type="radio" name="dec_${r.line}" value="overwrite"><span>覆盖</span></label>
+          </div>`;
+        } else {
+          decideHtml = `<span class="imp-new-tag">新增</span>`;
+        }
+        const existTxt = ex ? `已有：${ex.ship_orders} 单 / ${ex.main_hours}h（${ex.status === 'archived' ? '已归档' : '待提交'}）` : '';
+        return `<tr class="${blocked ? 'imp-blocked' : (dup ? 'imp-dup' : '')}">
           <td>${r.line}</td>
           <td>${escapeHtml(r.date)}</td>
           <td>${escapeHtml(r.customer_name)}</td>
           <td>${r.ship_orders}</td>
           <td>${r.main_hours}</td>
-          <td>${dup ? '<span class="cust-tag cust-tag-stop">重复</span> ' + escapeHtml(existTxt) : '<span class="imp-new-tag-empty">—</span>'}</td>
-          <td>${decide}</td>
+          <td>${blocked
+            ? '<span class="cust-tag cust-tag-stop">归档冲突</span> ' + escapeHtml(existTxt)
+            : (dup ? '<span class="cust-tag cust-tag-warn">待提交重复</span> ' + escapeHtml(existTxt) : '<span class="imp-new-tag-empty">—</span>')}</td>
+          <td>${decideHtml}</td>
         </tr>`;
       }).join('');
 
@@ -574,15 +584,21 @@ function createWorkhoursPage(warehouse) {
           </div>
           <div class="modal-body">
             <div class="imp-alert">
-              <b>注意：</b>重复行请逐条选择「覆盖」或「跳过」，未选择时默认 <b style="color:#b26a00">跳过</b>。
+              <b>注意：</b>
+              ${blockedCnt
+                ? `<span style="color:#c23a1b"><b>${blockedCnt} 行已归档冲突，导入时将被强制跳过，无法覆盖。</b></span>`
+                : `重复行请逐条选择「覆盖」或「跳过」，未选择时默认 <b style="color:#b26a00">跳过</b>。`}
               确认导入后，后端将在单个数据库事务内写入，任意一行失败则整体回滚。
             </div>
             <div class="imp-summary">
               <span>共 <span class="cnt">${rows.length}</span> 行</span>
-              <span>重复 <span class="cnt cnt-dup">${dupCnt}</span> 行</span>
+              ${blockedCnt ? `<span>归档冲突 <span class="cnt cnt-dup">${blockedCnt}</span> 行</span>` : ''}
+              ${dupCnt ? `<span>待提交重复 <span class="cnt cnt-dup">${dupCnt}</span> 行</span>` : ''}
               <span>新增 <span class="cnt cnt-new">${newCnt}</span> 行</span>
-              <span class="muted">重复行默认跳过，可在表格内改为覆盖</span>
-              ${dupCnt ? `<span style="margin-left:auto;display:inline-flex;gap:6px">
+              ${blockedCnt
+                ? `<span class="muted">归档冲突行已被系统锁定，无法覆盖，请调整 Excel 数据后重新导入</span>`
+                : `<span class="muted">重复行默认跳过，可在表格内改为覆盖</span>`}
+              ${dupCnt && !blockedCnt ? `<span style="margin-left:auto;display:inline-flex;gap:6px">
                 <button type="button" class="imp-batch" data-batch="skip">全部跳过</button>
                 <button type="button" class="imp-batch" data-batch="overwrite">全部覆盖</button>
               </span>` : ''}
@@ -615,24 +631,23 @@ function createWorkhoursPage(warehouse) {
       overlay.querySelector('.imp-cancel').onclick = close;
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
 
-      // 批量操作：一键把所有重复行的处理方式统一为 skip 或 overwrite
-      // 只改 DOM radio.checked；单行 radio 原生 group 逻辑继续生效，批量操作后仍可逐行微调
+      // 批量操作：只影响 pending 冲突行，archived 冲突行强制 blocked 不可改
       overlay.querySelectorAll('.imp-batch').forEach((btn) => {
         btn.onclick = () => {
           const target = btn.dataset.batch;   // 'skip' | 'overwrite'
           rows.forEach((r) => {
-            if (!r.duplicate) return;         // 只影响重复行
+            if (!r.duplicate || r.archived_conflict) return; // 跳过归档冲突行
             const input = overlay.querySelector(`input[name="dec_${r.line}"][value="${target}"]`);
-            if (input) input.checked = true;  // radio group 会自动互斥，同时同步选中态
+            if (input) input.checked = true;
           });
         };
       });
 
       overlay.querySelector('.imp-ok').onclick = async () => {
-        // 1) 收集 decisions（只有 duplicate 行才收集；未选默认 skip）
+        // 1) 收集 decisions（pending 冲突行才收集；archived 冲突行强制 blocked 不走 decision）
         const decisions = {};
         rows.forEach((r) => {
-          if (!r.duplicate) return;
+          if (!r.duplicate || r.archived_conflict) return;
           const sel = overlay.querySelector(`input[name="dec_${r.line}"]:checked`);
           decisions[r.line] = sel ? sel.value : 'skip';
         });
@@ -645,12 +660,19 @@ function createWorkhoursPage(warehouse) {
         try {
           const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
           close();
-          toast(`成功导入并归档 ${(res.created || 0) + (res.overwritten || 0)} 条记录（跳过 ${res.skipped || 0} 条）` +
-            (res.errors && res.errors.length ? `，忽略 ${res.errors.length} 行格式不匹配` : ''));
+          const totalSuccess = (res.created || 0) + (res.overwritten || 0);
+          const skipped = res.skipped || 0;
+          const blocked2 = res.archived_blocked || 0;
+          let msg = `成功导入并归档 ${totalSuccess} 条记录`;
+          if (skipped) msg += `（跳过 ${skipped} 条待提交重复）`;
+          if (blocked2) msg += `，但有 ${blocked2} 条与已归档数据冲突已被拦截`;
+          if (res.errors && res.errors.length) msg += `，忽略 ${res.errors.length} 行格式不匹配`;
+          toast(msg);
+          if (res.warn) errAlert('导入完成（含拦截）', res.warn);
           state.page = 1; load();
         } catch (ex) {
           btn.disabled = false; btn.textContent = '确认导入';
-          errAlert('导入失败', ex.message);
+          errAlert('导入失败', friendlyErrMsg(ex));
         }
       };
     }

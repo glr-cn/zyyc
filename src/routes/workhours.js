@@ -821,7 +821,10 @@ function parseImportRows(buf, warehouse, req) {
   return { parsed, errors };
 }
 
-// POST /import/preview：解析 + 标出重复（同日+同客户+同仓+发货+pending），不写库
+// POST /import/preview：解析 + 标出重复（同日+同客户+同仓+发货），不写库
+// 冲突分两类：
+//   - archived_conflict  → 系统已有归档数据，直接拦截，禁止导入
+//   - pending_conflict   → 只有未归档草稿，允许覆盖/跳过（与历史逻辑一致）
 router.post('/import/preview', upload.single('file'), (req, res) => {
   // warehouse 优先取 query（RBAC 门禁在 multer 之前执行，也读 query），兼容 multipart body
   const warehouse = ((req.query && req.query.warehouse) || (req.body && req.body.warehouse) || '').trim();
@@ -831,18 +834,28 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
   try { ({ parsed, errors } = parseImportRows(req.file.buffer, warehouse, req)); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
-  // 查重复：本仓 + 发货 + pending + 同客户 + 同日
+  // 查重复：本仓 + 发货 + 同客户 + 同日；同时覆盖 pending 和 archived
   const rows = parsed.map((p) => {
-    const dup = db.prepare(
-      `SELECT work_id, ship_orders, main_hours, total_hours FROM work_hours
-        WHERE warehouse=? AND work_type='发货' AND status='pending' AND customer_id=? AND date=?
-        ORDER BY work_id LIMIT 1`
+    const any = db.prepare(
+      `SELECT work_id, status, ship_orders, main_hours, total_hours FROM work_hours
+        WHERE warehouse=? AND work_type='发货' AND customer_id=? AND date=?
+        ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id LIMIT 1`
     ).get(warehouse, p.customer_id, p.date);
-    return { ...p, duplicate: !!dup, existing: dup || null, decision: dup ? 'skip' : 'create' };
+    const archivedExists = any && any.status === 'archived';
+    const pendingExists = any && any.status === 'pending';
+    if (archivedExists) {
+      // 归档冲突：不可导入；前端强制决策='blocked' 不可覆盖
+      return { ...p, duplicate: true, archived_conflict: true, existing: any, decision: 'blocked' };
+    }
+    if (pendingExists) {
+      return { ...p, duplicate: true, archived_conflict: false, existing: any, decision: 'skip' };
+    }
+    return { ...p, duplicate: false, archived_conflict: false, existing: null, decision: 'create' };
   });
   res.json({
     data: rows, errors, warehouse,
     duplicateCount: rows.filter((r) => r.duplicate).length,
+    archivedConflictCount: rows.filter((r) => r.archived_conflict).length,
     createCount: rows.filter((r) => !r.duplicate).length,
   });
 });
@@ -850,6 +863,7 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
 // POST /import：按 decisions（行号 → overwrite / skip）落库，事务 + 审计
 // 导入数据 = 员工已确认的工时记录 → 直接置 archived + 写入 submitter / submit_time（当前导入人），
 // 不进入"待提交"队列；覆盖/跳过重复校验保留。
+// 【关键修复】导入前必须先查 archived 冲突，已归档的同日同客户数据绝对禁止新增。
 router.post('/import', upload.single('file'), (req, res) => {
   // warehouse 优先取 query（RBAC 门禁在 multer 之前执行，也读 query），兼容 multipart body
   const warehouse = ((req.query && req.query.warehouse) || (req.body && req.body.warehouse) || '').trim();
@@ -861,16 +875,62 @@ router.post('/import', upload.single('file'), (req, res) => {
   try { ({ parsed, errors } = parseImportRows(req.file.buffer, warehouse, req)); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
+  // ============================================================
+  //  预校验：所有行先查一遍 archived/pending 状态，不进入事务
+  //  - archived 冲突 → 禁止导入，计入 archived_blocked
+  //  - pending 冲突   → 允许 overwrite / skip（历史行为不变）
+  // ============================================================
+  const findAny = db.prepare(
+    `SELECT work_id, status FROM work_hours
+      WHERE warehouse=? AND work_type='发货' AND customer_id=? AND date=?
+      ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id LIMIT 1`
+  );
+  const PRECHECK = new Map(); // line → { archived_conflict, pending_conflict, existing }
+  for (const p of parsed) {
+    const any = findAny.get(warehouse, p.customer_id, p.date);
+    if (any) {
+      PRECHECK.set(p.line, {
+        archived_conflict: any.status === 'archived',
+        pending_conflict: any.status === 'pending',
+        existing: any,
+      });
+    }
+  }
+
+  // 全部行都是 archived 冲突 → 立即返回 409，不启动事务、不写审计
+  const allBlocked = parsed.every((p) => PRECHECK.get(p.line)?.archived_conflict);
+  if (allBlocked) {
+    const blockedRows = parsed.map((p) => {
+      const pc = PRECHECK.get(p.line);
+      return `第 ${p.line} 行：${p.date} / ${p.customer_name}（已归档 work_id=${pc.existing.work_id}）`;
+    }).join('\n');
+    return res.status(409).json({
+      error: `全部 ${parsed.length} 行均与已归档数据冲突，导入已整体拦截。`,
+      code: 'IMPORT_ARCHIVED_CONFLICT',
+      archivedConflictCount: parsed.length,
+      conflicts: parsed.map((p) => ({ line: p.line, date: p.date, shipper: p.customer_name })),
+      detail: blockedRows,
+    });
+  }
+
+  // 部分行 archived 冲突 → 继续事务但全部跳过冲突行，导入完成后在响应里提示
   const submitter = operatorName(req);
-  let created = 0, overwritten = 0, skipped = 0;
+  let created = 0, overwritten = 0, skipped = 0, archivedBlocked = 0;
   const log = [];
   db.exec('BEGIN');
   try {
     for (const p of parsed) {
-      // 重复检测按 pending（已归档不影响导入，导入完成立即归档）
-      const existing = db.prepare(
-        `SELECT * FROM work_hours WHERE warehouse=? AND work_type='发货' AND status='pending' AND customer_id=? AND date=? ORDER BY work_id LIMIT 1`
-      ).get(warehouse, p.customer_id, p.date);
+      const pc = PRECHECK.get(p.line);
+
+      // archived 冲突：强制跳过，不管前端 decision 是什么
+      if (pc && pc.archived_conflict) {
+        archivedBlocked++;
+        log.push({ line: p.line, action: 'archived_conflict', existing_work_id: pc.existing.work_id });
+        continue;
+      }
+
+      // 仅 pending 冲突：尊重前端决策（overwrite / skip）；没有冲突则走 create
+      const existing = pc && pc.pending_conflict ? pc.existing : null;
       const decision = decisions[p.line] || (existing ? 'skip' : 'create');
       if (decision === 'skip') { skipped++; continue; }
       if (decision === 'overwrite' && existing) {
@@ -918,9 +978,15 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(500).json({ error: '导入失败，已回滚：' + e.message });
   }
   writeAudit(req, 'import', 0, null, {
-    warehouse, file: req.file.originalname, created, overwritten, skipped, lines: log, errors,
+    warehouse, file: req.file.originalname, created, overwritten, skipped, archived_blocked: archivedBlocked,
+    lines: log, errors,
   });
-  res.json({ created, overwritten, skipped, errors, lines: log });
+  const resp = { created, overwritten, skipped, archived_blocked: archivedBlocked, errors, lines: log };
+  if (archivedBlocked > 0) {
+    resp.warn = `有 ${archivedBlocked} 行与已归档数据冲突，已自动跳过，未写入任何重复记录。请核对后调整 Excel 再导入。`;
+    resp.archivedConflictCount = archivedBlocked;
+  }
+  res.json(resp);
 });
 
 // 审计：统一走全局日志服务（新旧字段双写，模块=工时管理）
