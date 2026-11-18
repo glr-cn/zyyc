@@ -706,7 +706,7 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-inline-grid tr.wh-gap-row:hover td.ops { background:#fff8e1; }
 .grid.wh-inline-grid td.ops .ops-none { color:#b8bec9; font-size:13px; }
 /* ★ Bug#5 修复：操作列按钮 flex 横向并排（submit + cancel/delete 不换行、不被裁切） */
-.grid.wh-inline-grid td.ops .ops-inner { display:flex; gap:6px; align-items:center; }
+.grid.wh-inline-grid td.ops .ops-inner { display:flex; flex-direction:row; justify-content:center; align-items:center; gap:6px; white-space:nowrap; flex-wrap:nowrap; }
 .grid.wh-inline-grid td.ops button { padding:4px 6px; font-size:12px; white-space:nowrap; flex:0 0 auto; }
 .wh-gap-row [data-out] { font-weight:600; color:#2e7d32; }
 
@@ -755,12 +755,12 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .grid.wh-table tbody tr:nth-child(even) td:last-child { background:#f2f4f7; }
 /* 行悬浮时操作列跟随高亮（放在斑马纹规则之后，确保覆盖） */
 .grid.wh-table tbody tr:hover td:last-child { background:#f0f6ff; }
-/* 操作列按钮：flex 等距分布 + 间距，窄按钮自适应；不再挤成一团 */
+/* 操作列按钮：flex 强制左右排列、不换行；按钮间距 6px；窄按钮自适应 */
 .grid.wh-table td.ops .ops-inner {
-  display:flex; align-items:center; justify-content:space-around;
-  gap:6px; flex-wrap:wrap; padding:0 2px;
+  display:flex; flex-direction:row; align-items:center; justify-content:center;
+  gap:6px; flex-wrap:nowrap; white-space:nowrap; padding:0 2px;
 }
-.grid.wh-table td.ops .ops-inner button { font-size:12px; padding:3px 8px; white-space:nowrap; }
+.grid.wh-table td.ops .ops-inner button { font-size:12px; padding:3px 8px; white-space:nowrap; flex:0 0 auto; }
 /* 重复行标红：整行浅红底（!important 压过斑马纹/悬浮/操作列底色） */
 .grid.wh-table tbody tr.wh-dup td { background:#fff1f2 !important; }
 /* 行内新增行输入框：紧凑适配行高（高度≈26px，与 38px 行高匹配） */

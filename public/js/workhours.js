@@ -76,6 +76,46 @@ function createWorkhoursPage(warehouse) {
       else alert(msg);
     }
 
+    // 阻塞式错误弹窗（替代 alert/toast error）：必须点「确定」才能关闭，遮罩不允许点击关闭
+    // title: 弹窗标题（如「保存失败」）；msg: 详细错误原因（可换行）；options.confirmText: 按钮文字（默认「确定」）
+    function errAlert(title, msg, options) {
+      options = options || {};
+      // 自动注入 modal 样式（幂等，多次调用只注入一次）
+      if (!document.getElementById('__wh_err_modal_css')) {
+        const st = document.createElement('style');
+        st.id = '__wh_err_modal_css';
+        st.textContent = [
+          '.wh-err-mask{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99999;display:flex;align-items:center;justify-content:center;}',
+          '.wh-err-modal{background:#fff;border-radius:8px;min-width:320px;max-width:520px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:20px 24px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}',
+          '.wh-err-modal h4{margin:0 0 10px;font-size:16px;color:#1f2329;display:flex;align-items:center;gap:8px;}',
+          '.wh-err-modal h4::before{content:"";display:inline-block;width:18px;height:18px;border-radius:50%;background:#f56c6c;position:relative;}',
+          '.wh-err-modal h4::after{content:"!";position:absolute;color:#fff;font-weight:700;font-size:13px;line-height:18px;margin-left:-14px;}',
+          '.wh-err-modal .wh-err-body{font-size:14px;color:#606266;white-space:pre-wrap;word-break:break-word;line-height:1.6;margin:8px 0 16px;}',
+          '.wh-err-modal .wh-err-foot{text-align:right;}',
+          '.wh-err-modal .wh-err-foot button{background:#409eff;color:#fff;border:none;border-radius:4px;padding:6px 18px;font-size:13px;cursor:pointer;}',
+          '.wh-err-modal .wh-err-foot button:hover{background:#66b1ff;}'
+        ].join('\n');
+        document.head.appendChild(st);
+      }
+      const mask = document.createElement('div');
+      mask.className = 'wh-err-mask';
+      mask.innerHTML = `
+        <div class="wh-err-modal" role="alertdialog" aria-modal="true">
+          <h4>${escapeHtml(title || '出错了')}</h4>
+          <div class="wh-err-body">${escapeHtml(msg == null ? '' : String(msg))}</div>
+          <div class="wh-err-foot"><button type="button">${escapeAttr(options.confirmText || '确定')}</button></div>
+        </div>`;
+      // 按钮关闭：focus 后点选，遮罩/ESC 都不关闭（强制用户确认）
+      const btn = mask.querySelector('button');
+      btn.addEventListener('click', () => { mask.remove(); document.removeEventListener('keydown', _esc); });
+      const _esc = (e) => { if (e.key === 'Escape') e.preventDefault(); }; // 阻止 ESC 意外关闭
+      document.addEventListener('keydown', _esc);
+      document.body.appendChild(mask);
+      btn.focus();
+      // 禁止遮罩点击关闭
+      mask.addEventListener('click', (e) => { if (e.target === mask) btn.focus(); });
+    }
+
     // 虚拟行屏蔽：超管「删除」缺口行时，把 customer_id + date 组合存入 localStorage；
     // 下次 load() 时对当前仓库的缺口行自动过滤。键按仓库隔离（不同仓屏蔽互不影响）。
     const GAP_BLOCK_KEY = 'erp_gap_block_v1';
@@ -286,7 +326,7 @@ function createWorkhoursPage(warehouse) {
     function onDownloadTemplate() {
       API.download('/workhours/template?warehouse=' + encodeURIComponent(state.warehouse) + '&work_type=' + encodeURIComponent('发货'),
         '发货工时导入模板_' + state.warehouse + '.xlsx')
-        .catch((ex) => alert('下载模板失败：' + ex.message));
+        .catch((ex) => errAlert('下载模板失败', ex.message));
     }
 
     // 行内新增：在数据源顶部插入一条带默认值的虚拟空行（tempId 标识，取消/提交后移除）
@@ -323,16 +363,16 @@ function createWorkhoursPage(warehouse) {
       const file = e.target.files && e.target.files[0];
       e.target.value = '';
       if (!file) return;
-      if (!/\.(xlsx|xls)$/i.test(file.name)) { alert('请选择 .xlsx / .xls 文件'); return; }
+      if (!/\.(xlsx|xls)$/i.test(file.name)) { errAlert('文件格式错误', '请选择 .xlsx / .xls 文件'); return; }
       const fd = new FormData();
       fd.append('file', file);
       let preview;
       try {
         preview = await API.upload('/workhours/import/preview?warehouse=' + encodeURIComponent(state.warehouse), fd);
-      } catch (ex) { alert('导入预览失败：' + ex.message); return; }
+      } catch (ex) { errAlert('导入预览失败', ex.message); return; }
       const rows = preview.data || [];
       const errors = preview.errors || [];
-      if (!rows.length) { alert('没有可导入的数据行' + (errors.length ? '\n' + errors.map((x) => `第${x.line}行：${x.error}`).join('\n') : '')); return; }
+      if (!rows.length) { errAlert('导入预览失败', '没有可导入的数据行' + (errors.length ? '\n' + errors.map((x) => `第${x.line}行：${x.error}`).join('\n') : '')); return; }
       pendingImport = { file, rows, errors, preview };
       openImportConfirm(pendingImport);
     }
@@ -425,10 +465,10 @@ function createWorkhoursPage(warehouse) {
 
     async function onBatchSubmit() {
       const ids = [...state.checked].map(Number).filter((n) => Number.isFinite(n) && n > 0);
-      if (!ids.length) { alert('请先勾选需要提交的数据'); return; }
+      if (!ids.length) { errAlert('批量提交失败', '请先勾选需要提交的数据'); return; }
       const validIds = ids.filter(rowFilled);
       const skipped = ids.length - validIds.length;
-      if (!validIds.length) { alert('勾选的数据尚未填写，无法提交'); return; }
+      if (!validIds.length) { errAlert('批量提交失败', '勾选的数据尚未填写，无法提交'); return; }
       // ★ 问题一：批量提交查重 —— 勾选行中存在「日期+客户(项目)」重复时，标红全部重复行并拦截
       const widSet = new Set(validIds);
       const dupGroups = findDupGroups().filter(([, v]) => v.some((i) => {
@@ -437,7 +477,7 @@ function createWorkhoursPage(warehouse) {
       }));
       if (dupGroups.length) {
         markDupRows(dupGroups);
-        toast(dupToastMsg(dupGroups[0][0]) + '（已标红 ' + dupGroups.reduce((n, [, v]) => n + v.length, 0) + ' 行重复数据）', 'error');
+        errAlert('批量提交失败', dupToastMsg(dupGroups[0][0]) + '（已标红 ' + dupGroups.reduce((n, [, v]) => n + v.length, 0) + ' 行重复数据）');
         return;
       }
       if (!confirm(`确认批量提交勾选的 ${validIds.length} 条工时记录？提交后将归档，不再显示在未归档列表。`)) return;
@@ -459,7 +499,7 @@ function createWorkhoursPage(warehouse) {
         state.checked.clear();
         toast(`成功批量提交 ${n} 条记录，已自动跳过 ${y} 条未填写记录`);
         load();
-      } catch (ex) { alert('批量提交失败：' + ex.message); }
+      } catch (ex) { errAlert('批量提交失败', ex.message); }
     }
 
     // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
@@ -579,7 +619,7 @@ function createWorkhoursPage(warehouse) {
           state.page = 1; load();
         } catch (ex) {
           btn.disabled = false; btn.textContent = '确认导入';
-          alert('导入失败：' + ex.message);
+          errAlert('导入失败', ex.message);
         }
       };
     }
@@ -661,15 +701,15 @@ function createWorkhoursPage(warehouse) {
     // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
     // ★ 问题二（布局）：客户 200 / 备注 150 / 操作 120 —— 输入控件不再拥挤；操作列固定右侧（sticky）
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
-    // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作120
-    // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120（无勾选列）
-    // 库内：日期124 / 项目200 / 作业量80 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120
-    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
+    // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作140
+    // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作140（无勾选列）
+    // 库内：日期124 / 项目200 / 作业量80 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作140
+    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作140
     const INLINE_WIDTHS = {
-      发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 120],
-      收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 120],
-      库内: [124, 200, 80, 62, 78, 84, 150, 72, 120],
-      后勤: [124, 200, 78, 84, 150, 96, 72, 120],
+      发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 140],
+      收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 140],
+      库内: [124, 200, 80, 62, 78, 84, 150, 72, 140],
+      后勤: [124, 200, 78, 84, 150, 96, 72, 140],
     };
 
     function renderHead() {
@@ -894,17 +934,19 @@ function createWorkhoursPage(warehouse) {
         if (col.left) return `<td class="wh-name-cell">${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
         return `<td>${escapeHtml(r[col.key] == null ? '' : r[col.key])}</td>`;
       }).join('');
-      // 操作列 —— 已归档/未归档分支不变；pending 全类型都走 inline ops
+      // 操作列 —— 所有分支统一 ops-inner 包裹 + flex row nowrap（强制左右排列，不换行）
       const archived = String(r.status || (state.status === 'archived' ? 'archived' : 'pending')) === 'archived';
       let ops;
       if (archived) {
         const canEditArchived = state.isAdmin || (!!state.meName && r.submitter === state.meName);
         const canWithdraw = canEditArchived;
-        ops = `<button data-act="view" data-id="${wid}" title="只读查看">查看</button>`
+        ops = `<div class="ops-inner">`
+          + `<button data-act="view" data-id="${wid}" title="只读查看">查看</button>`
           + (canEditArchived ? `<button data-act="editArchived" data-id="${wid}" class="primary" title="修改归档记录（弹窗编辑）">修改</button>` : '')
           + (canWithdraw ? `<button data-act="withdraw" data-id="${wid}" title="撤回到未归档，撤回后可重新编辑">撤回</button>` : '')
           + (state.isAdmin ? `<button data-act="editSubmitter" data-id="${wid}" title="修改该记录的提交人">修改提交人</button>` : '')
-          + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条归档记录（不可恢复）">删除</button>` : '');
+          + (state.isSuper ? `<button data-act="delAdmin" data-id="${wid}" class="danger" title="永久删除该条归档记录（不可恢复）">删除</button>` : '')
+          + `</div>`;
       } else if (inline) {
         const submitBtn = `<button data-act="submit" data-id="${wid}" class="primary" title="保存当前行并提交归档">保存提交</button>`;
         let delBtn;
@@ -916,12 +958,13 @@ function createWorkhoursPage(warehouse) {
         } else {
           delBtn = '<span class="ops-none" title="仅超级管理员可删除记录">—</span>';
         }
-        // ★ Bug#5 修复：操作列按钮用 flex 布局横向并排（.ops-inner display:flex gap:6px）
         ops = `<div class="ops-inner">${submitBtn}${delBtn}</div>`;
       } else {
-        ops = `<button data-act="edit" data-id="${r.work_id}">编辑</button>
-               <button data-act="submit" data-id="${r.work_id}" class="primary" title="提交归档">提交</button>
-               <button data-act="del" data-id="${r.work_id}">删除</button>`;
+        ops = `<div class="ops-inner">`
+          + `<button data-act="edit" data-id="${r.work_id}">编辑</button>`
+          + `<button data-act="submit" data-id="${r.work_id}" class="primary" title="提交归档">提交</button>`
+          + `<button data-act="del" data-id="${r.work_id}">删除</button>`
+          + `</div>`;
       }
       return `<tr class="${isGap ? 'wh-gap-row' : ''}" ${inline ? rowAttrs : ''}>${ck}${cells}<td class="ops">${ops}</td></tr>`;
     }
@@ -962,7 +1005,7 @@ function createWorkhoursPage(warehouse) {
         const btn = e.target; btn.disabled = true;
         API.post('/workhours/' + id + '/submit', { warehouse: state.warehouse, work_type: state.workType })
           .then(() => { alert('已提交归档'); load(); })
-          .catch((ex) => { btn.disabled = false; alert('提交失败：' + ex.message); });
+          .catch((ex) => { btn.disabled = false; errAlert('提交失败', ex.message); });
         return;
       }
       // 撤回：archived → pending，撤回后回到「未归档」可继续行内编辑
@@ -971,7 +1014,7 @@ function createWorkhoursPage(warehouse) {
         const btn = e.target; btn.disabled = true;
         API.post('/workhours/' + id + '/withdraw', { warehouse: state.warehouse, work_type: state.workType })
           .then(() => { alert('已撤回，可在「未归档」中继续编辑'); load(); })
-          .catch((ex) => { btn.disabled = false; alert('撤回失败：' + ex.message); });
+          .catch((ex) => { btn.disabled = false; errAlert('撤回失败', ex.message); });
         return;
       }
       // 修改提交人：管理员弹下拉选择系统内用户
@@ -1014,7 +1057,7 @@ function createWorkhoursPage(warehouse) {
             toast('已删除');
             load();
           })
-          .catch((ex) => { btn.disabled = false; alert('删除失败：' + ex.message); });
+          .catch((ex) => { btn.disabled = false; errAlert('删除失败', ex.message); });
       }
     }
 
@@ -1164,8 +1207,7 @@ function createWorkhoursPage(warehouse) {
           // 客户名非空但不在客户列表 → 立即拦截（不等必填检查）
           if (typedName && !customerOptionOf(custEl)) {
             setCustomerInvalid(custEl, true);
-            toast('该客户不存在，禁止录入！', 'error');
-            if (explicit) alert('该客户不存在，禁止录入！');
+            errAlert('客户校验失败', '该客户不存在，禁止录入！');
             return false;
           }
           const cidSel = tr.dataset.rowCid || '';
@@ -1199,7 +1241,7 @@ function createWorkhoursPage(warehouse) {
           if (!ok) hint = '请至少填写发货单量、主工时或备注中的一项';
         }
         if (!ok) {
-          if (explicit) { alert(hint); return false; }
+          if (explicit) { errAlert('校验未通过', hint); return false; }
           return false;  // 失焦自动保存失败 → 不清空、不刷新
         }
         // ★ 问题一：行级保存查重 —— 本行与表内其他行「日期+客户(项目)」重复 → 标红并拦截
@@ -1207,8 +1249,7 @@ function createWorkhoursPage(warehouse) {
           const dupGroups = findDupGroups().filter(([, v]) => v.includes(idx));
           if (dupGroups.length) {
             markDupRows(dupGroups);
-            toast(dupToastMsg(dupGroups[0][0]), 'error');
-            if (explicit) alert(dupToastMsg(dupGroups[0][0]));
+            errAlert('保存失败', dupToastMsg(dupGroups[0][0]));
             return false;
           }
         }
@@ -1312,7 +1353,7 @@ function createWorkhoursPage(warehouse) {
             setCustomerInvalid(e, true);
             if (showToast && lastWarned !== v) {
               lastWarned = v;
-              toast('该客户不存在，禁止录入！', 'error');
+              errAlert('客户校验失败', '该客户不存在，禁止录入！');
             }
             return false;
           };
@@ -1494,9 +1535,9 @@ function createWorkhoursPage(warehouse) {
     // 修改提交人（仅管理员）：下拉选择系统内真实用户，保存后写审计（只记 submitter 前后值）
     async function openSubmitterModal(id) {
       let users = [];
-      try { users = (await API.get('/users')).data || []; } catch (ex) { alert('读取用户列表失败：' + ex.message); return; }
+      try { users = (await API.get('/users')).data || []; } catch (ex) { errAlert('读取用户列表失败', ex.message); return; }
       const names = [...new Set(users.map((u) => u.display_name || u.username).filter(Boolean))];
-      if (!names.length) { alert('系统内暂无可选用户'); return; }
+      if (!names.length) { errAlert('操作受限', '系统内暂无可选用户'); return; }
       const row = state.lastRows.find((x) => Number(x.work_id) === Number(id)) || {};
       const cur = row.submitter || '';
       const opts = names.map((n) => `<option value="${escapeAttr(n)}" ${n === cur ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
