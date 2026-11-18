@@ -116,6 +116,37 @@ function createWorkhoursPage(warehouse) {
       mask.addEventListener('click', (e) => { if (e.target === mask) btn.focus(); });
     }
 
+    // 二次确认弹窗（Promise 风格，可取消）：批量删除等不可逆操作专用
+    // 风格沿用 errAlert 的 modal-overlay + modal，两个按钮（取消 / 确认）
+    function confirmDialog(title, msg, options) {
+      options = options || {};
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+          <div class="modal wh-confirm" style="min-width:360px">
+            <div class="modal-head">
+              <span>${escapeHtml(title)}</span>
+              <button class="close" type="button">×</button>
+            </div>
+            <div class="modal-body">
+              <p style="color:#606266;font-size:14px;margin:0 0 4px">${escapeHtml(msg)}</p>
+              ${options.warn ? `<p style="color:#c23a1b;font-size:13px;margin:0;margin-top:8px">${escapeHtml(options.warn)}</p>` : ''}
+            </div>
+            <div class="modal-foot">
+              <button type="button" class="wh-cancel">取消</button>
+              <button type="button" class="primary wh-ok" style="background:#e74c3c;border-color:#e74c3c">${escapeHtml(options.okText || '确认删除')}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const close = (val) => { overlay.remove(); resolve(!!val); };
+        overlay.querySelector('.close').onclick = () => close(false);
+        overlay.querySelector('.wh-cancel').onclick = () => close(false);
+        overlay.querySelector('.wh-ok').onclick = () => close(true);
+        overlay.onclick = (ev) => { if (ev.target === overlay) close(false); };
+      });
+    }
+
     // 将后端结构化错误（ex.status/code/detail/conflicts）转为用户友好消息
     // 支持单条重复、批量重复、其他异常三种分支
     function friendlyErrMsg(ex, fallbackMsg) {
@@ -199,6 +230,9 @@ function createWorkhoursPage(warehouse) {
         })();
         try { const u = JSON.parse(localStorage.getItem('erp_user') || '{}'); state.meName = u.display_name || u.username || ''; } catch (x) { state.meName = ''; }
       }
+      // 批量删除按钮：仅超管可见（checked.size=0 时自动 disabled）
+      const delBtn = $('batchDelBtn');
+      if (delBtn) delBtn.style.display = state.isSuper ? '' : 'none';
     }
 
     // 日期范围组件实例：对外产出 startDate/endDate，映射为后端 dateFrom/dateTo（后端零改动）
@@ -223,9 +257,10 @@ function createWorkhoursPage(warehouse) {
       <div class="wh-content-card">
       <div class="toolbar">
         <label class="wh-status-label">状态
-          <select id="statusFilter" title="未归档 / 已归档">
+          <select id="statusFilter" title="未归档 / 已归档 / 全部">
             <option value="pending" selected>未归档</option>
             <option value="archived">已归档</option>
+            <option value="all">全部</option>
           </select>
         </label>
         <input id="q" placeholder="搜索客户名称">
@@ -238,6 +273,7 @@ function createWorkhoursPage(warehouse) {
         </span>
         <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
         <button id="archiveBtn" title="批量提交勾选的工时（未填写行自动跳过）">批量提交</button>
+        <button id="batchDelBtn" class="danger" style="display:none" title="批量删除勾选的记录（仅超级管理员可用，物理删除不可恢复）">批量删除</button>
         <button id="addBtn" class="primary">+ 新增工时</button>
       </div>
       <div class="wh-archive-tip" id="archiveTip" style="display:none"></div>
@@ -341,6 +377,7 @@ function createWorkhoursPage(warehouse) {
       $('importBtn').onclick = () => $('importFile').click();
       $('importFile').onchange = onImportFile;
       $('archiveBtn').onclick = onBatchSubmit;
+      $('batchDelBtn').onclick = onBatchDelete;
       // 点「批量提交」时 pointerdown 先于 blur：有勾选时跳过聚焦行的失焦自动保存，
       // 交由批量提交统一读取当前输入值再保存（避免重复写入 / 旧值覆盖）
       $('archiveBtn').addEventListener('pointerdown', () => {
@@ -492,6 +529,30 @@ function createWorkhoursPage(warehouse) {
       const parts = key.split('|');
       const whoLabel = (state.workType === '库内' || state.workType === '后勤') ? '该项目' : '该客户';
       return whoLabel + '在 [' + (parts[1] || '') + '] 已有工时记录，请勿重复录入！';
+    }
+
+    // ---------- 批量删除（仅超级管理员）----------
+    // 前端做二次确认（弹窗明确显示数量）→ 调 DELETE /workhours/batch → 成功后清空勾选并刷新列表
+    async function onBatchDelete() {
+      if (!state.isSuper) { errAlert('权限不足', '仅超级管理员可批量删除'); return; }
+      const ids = [...state.checked].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      if (!ids.length) { errAlert('批量删除失败', '请先勾选要删除的记录'); return; }
+      // 二次确认弹窗：带数量 + 物理删除不可恢复警告
+      const ok = await confirmDialog(
+        `批量删除 ${ids.length} 条工时记录`,
+        `确认删除勾选的 ${ids.length} 条工时记录？此操作不可恢复，将物理删除数据库中的对应行。`
+      );
+      if (!ok) return;
+      try {
+        const res = await API.del('/workhours/batch', { ids, warehouse: state.warehouse });
+        const deleted = res.deleted || 0;
+        const nf = res.notFound || 0;
+        state.checked.clear();
+        toast(`已删除 ${deleted} 条记录` + (nf ? `，跳过 ${nf} 条不存在/跨仓的记录` : ''));
+        state.page = 1; load();
+      } catch (ex) {
+        errAlert('批量删除失败', friendlyErrMsg(ex));
+      }
     }
 
     async function onBatchSubmit() {
@@ -740,7 +801,8 @@ function createWorkhoursPage(warehouse) {
           if (blocks.size) rows = rows.filter((r) => !(r.filled === 0 && blocks.has(gapKeyOf(r))));
         }
         state._shownRows = rows;
-        const span = COLUMNS[state.workType].length + (state.workType === '发货' && state.status === 'pending' ? 2 : 1);
+        const _showCkCol = (state.workType === '发货' && state.status === 'pending') || state.isSuper;
+        const span = COLUMNS[state.workType].length + (_showCkCol ? 2 : 1);
         // 传 idx 给 rowHtml，rowHtml 在 inline 分支加 data-row-idx 属性
         $('whBody').innerHTML = rows.length
           ? rows.map((r) => rowHtml(r, state._shownRows.indexOf(r))).join('')
@@ -767,6 +829,10 @@ function createWorkhoursPage(warehouse) {
 
     function renderHead() {
       const cols = COLUMNS[state.workType];
+      // 勾选列显示条件（列数/表头/行渲染三处必须完全一致，统一用这个变量）
+      //   a) 历史批量提交：发货 + pending（所有用户）
+      //   b) 新增批量删除：超管在所有 work_type × 所有 status 下都能勾选（包括 archived / all）
+      const showCkCol = (state.workType === '发货' && state.status === 'pending') || state.isSuper;
       // 所有 pending 行都行内直编：统一开 wh-inline-grid（table-layout:fixed），
       // 但只给发货锁精细列宽；收货/库内/后勤用 colgroup 空 → 浏览器均匀分配
       const inline = state.status === 'pending';
@@ -776,28 +842,28 @@ function createWorkhoursPage(warehouse) {
       if (cg) {
         // ★ 列数一致性保护：colgroup 宽度项必须与「数据列 + 勾选列 + 操作列」完全一致，
         //   否则多出的 <col> 会撑出一个空表头列（历史错位问题的根因）。不一致直接退回自动布局。
-        const ckCols = state.workType === '发货' && state.status === 'pending' ? 1 : 0;
+        const ckCols = showCkCol ? 1 : 0;
         const needCols = cols.length + ckCols + 1;
         const widths = INLINE_WIDTHS[state.workType];
         cg.innerHTML = (inline && widths && widths.length === needCols)
           ? widths.map((w) => `<col style="width:${w}px">`).join('')
           : '';
       }
-      // 勾选列（仅发货 pending；其他类型批量提交按钮也未启用）
-      const ck = state.workType === '发货' && state.status === 'pending'
-        ? '<th class="wh-ck"><input type="checkbox" id="ckAll" title="勾选本页全部"></th>' : '';
       // ★ 必填项星号（三个类型各自的必填列）
       const REQ_MAP = {
         收货: new Set(['date', 'customer_name', 'cartons', 'main_hours']),
         库内: new Set(['date', 'project', 'main_hours']),
         后勤: new Set(['date', 'project', 'main_hours']),
       };
+      // 生成表头勾选列（超管在所有视图 / 批量提交在发货pending → 都有勾选）
+      const ck = showCkCol
+        ? '<th class="wh-ck"><input type="checkbox" id="ckAll" title="勾选本页全部"></th>' : '';
       const REQ_COLS = REQ_MAP[state.workType] || new Set();
       $('whHead').innerHTML = ck + cols.map((col) => {
         const star = REQ_COLS.has(col.key) ? '<span class="req-star">*</span> ' : '';
         return `<th class="${col.num ? 'num' : ''}">${star}${col.label}</th>`;
       }).join('') + '<th class="ops-head">操作</th>';
-      if (state.workType === '发货' && state.status === 'pending') {
+      if (showCkCol) {
         const all = $('ckAll');
         if (all) all.onchange = (e) => {
           [...$('whBody').querySelectorAll('input.wh-row-ck')].forEach((box) => {
@@ -854,10 +920,13 @@ function createWorkhoursPage(warehouse) {
         `data-row-date="${escapeAttr(r.date || r.suggest_date || todayStr())}" data-row-cname="${escapeAttr(r.customer_name || '')}"` +
         ((r.tempId && inline) ? ` data-temp-id="${escapeAttr(r.tempId)}"` : '') +
         (inline ? ` data-row-idx="${idx}"` : '');
-      // 勾选列：仅发货 pending 有；缺口行禁止勾选
-      const ck = state.workType === '发货' && state.status === 'pending'
+      // 勾选列：发货 pending（批量提交）+ 超管所有视图（批量删除）；缺口行（wid=0）禁止勾选
+      const _showCkCol = (state.workType === '发货' && state.status === 'pending') || state.isSuper;
+      const ck = _showCkCol
         ? '<td class="wh-ck">' + (isGap ? '' :
-            `<input type="checkbox" class="wh-row-ck" data-id="${r.work_id}" ${state.checked.has(r.work_id) ? 'checked' : ''}>`) + '</td>'
+            (wid > 0
+              ? `<input type="checkbox" class="wh-row-ck" data-id="${wid}" ${state.checked.has(wid) ? 'checked' : ''}>`
+              : '')) + '</td>'
         : '';
       // 各类型哪些字段可编辑（rowHtml inline 分支 + bindInlineRow recalc/persist 共用）
       const numVal = (v) => (v != null && Number(v) !== 0) ? v : '';

@@ -65,6 +65,12 @@ const API = {
     if (conflicts) e.conflicts = conflicts;
     throw e;
   },
+  // 统一 401 处理：清 token + 跳登录
+  _handle401() {
+    this.clear();
+    location.href = 'login.html';
+    throw new Error('登录已过期');
+  },
   async req(method, url, body) {
     const opt = { method, headers: this.headers() };
     // 权限/菜单数据绝不允许被浏览器或中间网关缓存，否则新增菜单不生效
@@ -81,14 +87,9 @@ const API = {
     try {
       res = await fetch(this._url(url), opt);
     } catch (e) {
-      // fetch 本身失败（断网/代理异常），而非服务端响应
       throw new Error('网络异常，无法连接服务器：' + e.message);
     }
-    if (res.status === 401) {
-      this.clear();
-      location.href = 'login.html';
-      throw new Error('登录已过期');
-    }
+    if (res.status === 401) this._handle401();
     if (!res.ok) await this._fail(res);
     return res.json();
   },
@@ -111,6 +112,9 @@ const API = {
   put(u, b) {
     return this.req('PUT', u, b);
   },
+  del(u, b) {
+    return this.req('DELETE', u, b);
+  },
   // FormData 上传（不能走 req，避免被 JSON 序列化）
   async upload(u, formData) {
     const res = await fetch(this._url(u), {
@@ -118,22 +122,14 @@ const API = {
       headers: this.headers(),
       body: formData,
     });
-    if (res.status === 401) {
-      this.clear();
-      location.href = 'login.html';
-      throw new Error('登录已过期');
-    }
+    if (res.status === 401) this._handle401();
     if (!res.ok) await this._fail(res);
     return res.json();
   },
   // 带 token 的二进制下载（模板/导出）
   async download(u, filename) {
     const res = await fetch(this._url(u), { headers: this.headers() });
-    if (res.status === 401) {
-      this.clear();
-      location.href = 'login.html';
-      throw new Error('登录已过期');
-    }
+    if (res.status === 401) this._handle401();
     if (!res.ok) {
       await this._fail(res);
       throw new Error('下载失败'); // 不可达（_fail 必抛），仅为语法完整性
