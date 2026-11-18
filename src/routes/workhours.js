@@ -926,6 +926,14 @@ router.post('/import', upload.single('file'), (req, res) => {
   const warehouse = ((req.query && req.query.warehouse) || (req.body && req.body.warehouse) || '').trim();
   if (!warehouse) return res.status(400).json({ error: '缺少 warehouse 参数' });
   if (!req.file) return res.status(400).json({ error: '请选择要导入的 Excel 文件' });
+
+  // forceArchive 开关：仅超级管理员可用，用于覆盖已归档数据
+  // 用途：当已归档数据的 ship_orders / main_hours 填错时，允许用 Excel 批量修正
+  const forceArchive = (req.query && req.query.forceArchive === '1') || (req.body && req.body.forceArchive === '1');
+  if (forceArchive && (!req.user || req.user.role_code !== 'super_admin')) {
+    return res.status(403).json({ error: '仅超级管理员可强制覆盖已归档数据' });
+  }
+
   let decisions = {};
   try { decisions = JSON.parse(req.body.decisions || '{}'); } catch (_) { /* 空决策：全按默认 */ }
   let parsed, errors;
@@ -934,7 +942,9 @@ router.post('/import', upload.single('file'), (req, res) => {
 
   // ============================================================
   //  预校验：所有行先查一遍 archived/pending 状态，不进入事务
-  //  - archived 冲突 → 禁止导入，计入 archived_blocked
+  //  - archived 冲突：
+  //      forceArchive=1 + 超管 → 允许 overwrite（DELETE 旧行 + INSERT 新行）
+  //      否则  → 禁止导入，计入 archived_blocked
   //  - pending 冲突   → 允许 overwrite / skip（历史行为不变）
   // ============================================================
   // warehouse 统一 LIKE 模糊匹配（与 checkUnique / preview / ownersOfWarehouse 一致）
@@ -943,7 +953,7 @@ router.post('/import', upload.single('file'), (req, res) => {
       WHERE warehouse LIKE ? AND work_type='发货' AND customer_id=? AND date=?
       ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id LIMIT 1`
   );
-  const PRECHECK = new Map(); // line → { archived_conflict, pending_conflict, existing }
+  const PRECHECK = new Map(); // line → { archived_conflict, pending_conflict, existing, forceOverwrite }
   const warehouseLike = '%' + warehouse + '%';
   for (const p of parsed) {
     const any = findAny.get(warehouseLike, p.customer_id, p.date);
@@ -952,39 +962,72 @@ router.post('/import', upload.single('file'), (req, res) => {
         archived_conflict: any.status === 'archived',
         pending_conflict: any.status === 'pending',
         existing: any,
+        forceOverwrite: any.status === 'archived' && forceArchive,
       });
     }
   }
 
-  // 全部行都是 archived 冲突 → 立即返回 409，不启动事务、不写审计
-  const allBlocked = parsed.every((p) => PRECHECK.get(p.line)?.archived_conflict);
+  // 全部行都是 archived 冲突 → 立即返回 409（但 forceArchive=1 时 allBlocked 永远为 false，继续走事务）
+  const allBlocked = !forceArchive && parsed.every((p) => PRECHECK.get(p.line)?.archived_conflict);
   if (allBlocked) {
     const blockedRows = parsed.map((p) => {
       const pc = PRECHECK.get(p.line);
       return `第 ${p.line} 行：${p.date} / ${p.customer_name}（已归档 work_id=${pc.existing.work_id}）`;
     }).join('\n');
     return res.status(409).json({
-      error: `全部 ${parsed.length} 行均与已归档数据冲突，导入已整体拦截。`,
+      error: `全部 ${parsed.length} 行均与已归档数据冲突，导入已整体拦截。${req.user?.role_code === 'super_admin' ? '如需强制覆盖请勾选「确认覆盖已归档数据」。' : ''}`,
       code: 'IMPORT_ARCHIVED_CONFLICT',
       archivedConflictCount: parsed.length,
+      canForceArchive: req.user?.role_code === 'super_admin',
       conflicts: parsed.map((p) => ({ line: p.line, date: p.date, shipper: p.customer_name })),
       detail: blockedRows,
     });
   }
 
-  // 部分行 archived 冲突 → 继续事务但全部跳过冲突行，导入完成后在响应里提示
+  // 部分行 archived 冲突 → 继续事务但：
+  //   forceArchive=1 + 超管 → DELETE 旧行 + INSERT 新行（forceOverwritten）
+  //   否则 → 全部跳过冲突行（archived_blocked）
   const submitter = operatorName(req);
-  let created = 0, overwritten = 0, skipped = 0, archivedBlocked = 0;
+  let created = 0, overwritten = 0, skipped = 0, archivedBlocked = 0, forceOverwritten = 0;
   const log = [];
   db.exec('BEGIN');
   try {
     for (const p of parsed) {
       const pc = PRECHECK.get(p.line);
 
-      // archived 冲突：强制跳过，不管前端 decision 是什么
+      // archived 冲突：
+      //   forceArchive=1 + 超管 → 执行覆盖（DELETE 旧行 + INSERT 新行）
+      //   否则 → 强制跳过，不管前端 decision 是什么
       if (pc && pc.archived_conflict) {
-        archivedBlocked++;
-        log.push({ line: p.line, action: 'archived_conflict', existing_work_id: pc.existing.work_id });
+        if (pc.forceOverwrite) {
+          // DELETE 旧行（先深拷贝 old blob 用于审计，因为 DELETE 后读不到了）
+          const oldRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(pc.existing.work_id);
+          db.prepare('DELETE FROM work_hours WHERE work_id=?').run(pc.existing.work_id);
+          // INSERT 新行（直接置 archived + 写入 submitter / submit_time）
+          const r = {
+            warehouse, work_type: '发货', customer_id: p.customer_id, customer_name: p.customer_name,
+            unit: p.unit, date: p.date, ship_orders: p.ship_orders,
+            main_hours: p.main_hours, other_hours: p.other_hours, shared_hours: 0,
+          };
+          svc.calcRow('发货', r);
+          const info = db.prepare(
+            `INSERT INTO work_hours
+              (warehouse,work_type,customer_id,customer_name,unit,date,ship_orders,main_hours,other_hours,shared_hours,
+               total_hours,efficiency,unit_cost,remark,owner_user_id,status,submitter,submit_time)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'archived', ?, datetime('now','localtime'))`
+          ).run(warehouse, '发货', r.customer_id, r.customer_name, r.unit, r.date, r.ship_orders,
+            r.main_hours, r.other_hours, r.shared_hours, r.total_hours, r.efficiency, r.unit_cost,
+            p.remark || null, req.user.user_id, submitter);
+          // 单条审计：force_archive_overwrite 明确标注这是覆盖已归档
+          writeAudit(req, 'force_archive_overwrite', pc.existing.work_id, oldRow, JSON.stringify({
+            new_work_id: Number(info.lastInsertRowid), ship_orders: r.ship_orders, main_hours: r.main_hours,
+          }));
+          forceOverwritten++;
+          log.push({ line: p.line, action: 'force_archive_overwrite', old_work_id: pc.existing.work_id, new_work_id: Number(info.lastInsertRowid) });
+        } else {
+          archivedBlocked++;
+          log.push({ line: p.line, action: 'archived_conflict', existing_work_id: pc.existing.work_id });
+        }
         continue;
       }
 
@@ -1038,11 +1081,19 @@ router.post('/import', upload.single('file'), (req, res) => {
   }
   writeAudit(req, 'import', 0, null, {
     warehouse, file: req.file.originalname, created, overwritten, skipped, archived_blocked: archivedBlocked,
-    lines: log, errors,
+    force_overwritten: forceOverwritten, lines: log, errors,
   });
-  const resp = { created, overwritten, skipped, archived_blocked: archivedBlocked, errors, lines: log };
+  const resp = {
+    created, overwritten, skipped, archived_blocked: archivedBlocked,
+    force_overwritten: forceOverwritten, errors, lines: log,
+  };
+  if (forceOverwritten > 0) {
+    resp.warn = `已强制覆盖 ${forceOverwritten} 行已归档数据（DELETE 旧行 + INSERT 新行），请核对覆盖内容是否正确。`;
+    resp.forceOverwritten = forceOverwritten;
+  }
   if (archivedBlocked > 0) {
-    resp.warn = `有 ${archivedBlocked} 行与已归档数据冲突，已自动跳过，未写入任何重复记录。请核对后调整 Excel 再导入。`;
+    const extra = resp.warn ? ' ' : '';
+    resp.warn = (resp.warn || '') + extra + `另 ${archivedBlocked} 行与已归档数据冲突，已自动跳过，未写入任何重复记录。`;
     resp.archivedConflictCount = archivedBlocked;
   }
   res.json(resp);

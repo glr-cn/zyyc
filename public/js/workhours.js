@@ -686,11 +686,25 @@ function createWorkhoursPage(warehouse) {
             </div>
             ${errHtml}
           </div>
-          <div class="modal-foot">
+          <div class="modal-foot" style="flex-wrap:wrap;gap:8px">
             <button type="button" class="imp-cancel">${allBlocked ? '关闭' : '取消'}</button>
-            ${allBlocked ? `
+            ${allBlocked && state.isSuper ? `
+              <label class="imp-force-archived" style="align-self:center;font-size:12px;color:#c23a1b;cursor:pointer;margin-left:16px">
+                <input type="checkbox" id="forceArchiveChk" style="margin-right:4px">
+                我知道这将强制覆盖 ${blockedCnt} 行已归档数据（DELETE 旧行 + INSERT 新行），请确认
+              </label>
+              <button type="button" class="primary imp-ok" style="display:none;background:#e74c3c;border-color:#e74c3c;color:#fff;margin-left:auto">确认覆盖已归档</button>
+              <button type="button" class="imp-go-list" style="margin-left:8px;background:#67c23a;border-color:#67c23a;color:#fff">去列表查看已归档</button>
+              <button type="button" class="imp-go-other" style="background:#409eff;border-color:#409eff;color:#fff">换个仓库重导</button>
+            ` : allBlocked ? `
               <button type="button" class="imp-go-list" style="margin-left:auto;background:#67c23a;border-color:#67c23a;color:#fff">去列表查看已归档</button>
               <button type="button" class="imp-go-other" style="background:#409eff;border-color:#409eff;color:#fff">换个仓库重导</button>
+            ` : hasArchived && state.isSuper ? `
+              <label class="imp-force-archived" style="align-self:center;font-size:12px;color:#c23a1b;cursor:pointer;margin-left:auto">
+                <input type="checkbox" id="forceArchiveChk" style="margin-right:4px">
+                同时强制覆盖 ${blockedCnt} 行已归档数据
+              </label>
+              <button type="button" class="primary imp-ok">确认导入</button>
             ` : hasArchived ? `
               <span class="imp-foot-warn" style="margin-left:auto;color:#c23a1b;font-size:12px;align-self:center">确认导入时将自动跳过 ${blockedCnt} 行归档冲突</span>
               <button type="button" class="primary imp-ok">确认导入</button>
@@ -724,6 +738,14 @@ function createWorkhoursPage(warehouse) {
           if (wsel) { wsel.focus(); wsel.click(); }
           toast('请选择另一个仓库后重新导入');
         };
+        // 超管 allBlocked 场景：checkbox 控制 imp-ok 按钮显示
+        const chk = overlay.querySelector('#forceArchiveChk');
+        const impOk = overlay.querySelector('.imp-ok');
+        if (chk && impOk) {
+          chk.onchange = () => {
+            impOk.style.display = chk.checked ? '' : 'none';
+          };
+        }
       }
 
       // 批量操作：只影响 pending 冲突行，archived 冲突行强制 blocked 不可改
@@ -738,10 +760,18 @@ function createWorkhoursPage(warehouse) {
         };
       });
 
-      // 只有非 allBlocked 场景才渲染了 imp-ok 按钮，有条件才绑 handler
+      // 只有渲染了 imp-ok 按钮才绑 handler（allBlocked 超管未勾 checkbox 时按钮隐藏，querySelector 仍能找到，但 display:none；
+      // 已删除的"非 allBlocked 不渲染"逻辑已经统一：现在三种场景都会渲染 imp-ok）
       const impOk = overlay.querySelector('.imp-ok');
       if (impOk) impOk.onclick = async () => {
-        // 1) 收集 decisions（pending 冲突行才收集；archived 冲突行强制 blocked 不走 decision）
+        // allBlocked 超管场景：没勾 checkbox → 按钮是 hidden 但仍能被点击（比如 Enter 键），需二次确认
+        const chk = overlay.querySelector('#forceArchiveChk');
+        const forceArchive = !!(chk && chk.checked);
+        if (allBlocked && !forceArchive) {
+          errAlert('请先确认', '请勾选「强制覆盖已归档数据」checkbox 后再提交');
+          return;
+        }
+        // 1) 收集 decisions（pending 冲突行才收集；archived 冲突行：forceArchive=1 时由后端 DELETE旧行+INSERT新行）
         const decisions = {};
         rows.forEach((r) => {
           if (!r.duplicate || r.archived_conflict) return;
@@ -753,22 +783,28 @@ function createWorkhoursPage(warehouse) {
         fd.append('decisions', JSON.stringify(decisions));
 
         const btn = overlay.querySelector('.imp-ok');
-        btn.disabled = true; btn.textContent = 'Loading…';
+        btn.disabled = true; btn.textContent = forceArchive ? '强制覆盖中…' : 'Loading…';
         try {
-          const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
+          const url = '/workhours/import?warehouse=' + encodeURIComponent(state.warehouse) + (forceArchive ? '&forceArchive=1' : '');
+          const res = await API.upload(url, fd);
           close();
-          const totalSuccess = (res.created || 0) + (res.overwritten || 0);
+          const totalSuccess = (res.created || 0) + (res.overwritten || 0) + (res.force_overwritten || 0);
           const skipped = res.skipped || 0;
           const blocked2 = res.archived_blocked || 0;
-          let msg = `成功导入并归档 ${totalSuccess} 条记录`;
-          if (skipped) msg += `（跳过 ${skipped} 条待提交重复）`;
-          if (blocked2) msg += `，但有 ${blocked2} 条与已归档数据冲突已被拦截`;
+          const fo = res.force_overwritten || 0;
+          let msg = forceArchive
+            ? `已强制覆盖归档 ${fo} 条${res.created ? `，新增 ${res.created} 条` : ''}${res.overwritten ? `，覆盖待提交 ${res.overwritten} 条` : ''}`
+            : `成功导入并归档 ${totalSuccess} 条记录`;
+          if (!forceArchive) {
+            if (skipped) msg += `（跳过 ${skipped} 条待提交重复）`;
+            if (blocked2) msg += `，但有 ${blocked2} 条与已归档数据冲突已被拦截`;
+          }
           if (res.errors && res.errors.length) msg += `，忽略 ${res.errors.length} 行格式不匹配`;
           toast(msg);
-          if (res.warn) errAlert('导入完成（含拦截）', res.warn);
+          if (res.warn) errAlert('导入完成', res.warn);
           state.page = 1; load();
         } catch (ex) {
-          btn.disabled = false; btn.textContent = '确认导入';
+          btn.disabled = false; btn.textContent = forceArchive ? '确认覆盖已归档' : '确认导入';
           errAlert('导入失败', friendlyErrMsg(ex));
         }
       };
