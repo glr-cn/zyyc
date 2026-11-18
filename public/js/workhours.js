@@ -123,25 +123,29 @@ function createWorkhoursPage(warehouse) {
       return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay';
+        // confirmOnly=true 时隐藏取消按钮（只留一个"跳过"按钮）
+        const footHtml = options.confirmOnly
+          ? `<button type="button" class="primary wh-ok" style="background:#409eff;border-color:#409eff">${escapeHtml(options.okText || '确认')}</button>`
+          : `<button type="button" class="wh-cancel">${escapeHtml(options.cancelText || '取消')}</button>
+             <button type="button" class="primary wh-ok" style="background:#e74c3c;border-color:#e74c3c">${escapeHtml(options.okText || '确认删除')}</button>`;
         overlay.innerHTML = `
           <div class="modal wh-confirm" style="min-width:360px">
             <div class="modal-head">
               <span>${escapeHtml(title)}</span>
-              <button class="close" type="button">×</button>
+              ${options.confirmOnly ? '' : '<button class="close" type="button">×</button>'}
             </div>
             <div class="modal-body">
-              <p style="color:#606266;font-size:14px;margin:0 0 4px">${escapeHtml(msg)}</p>
+              <p style="color:#606266;font-size:14px;margin:0 0 4px">${msg}</p>
               ${options.warn ? `<p style="color:#c23a1b;font-size:13px;margin:0;margin-top:8px">${escapeHtml(options.warn)}</p>` : ''}
             </div>
-            <div class="modal-foot">
-              <button type="button" class="wh-cancel">取消</button>
-              <button type="button" class="primary wh-ok" style="background:#e74c3c;border-color:#e74c3c">${escapeHtml(options.okText || '确认删除')}</button>
-            </div>
+            <div class="modal-foot">${footHtml}</div>
           </div>`;
         document.body.appendChild(overlay);
         const close = (val) => { overlay.remove(); resolve(!!val); };
-        overlay.querySelector('.close').onclick = () => close(false);
-        overlay.querySelector('.wh-cancel').onclick = () => close(false);
+        const closeBtn = overlay.querySelector('.close');
+        if (closeBtn) closeBtn.onclick = () => close(false);
+        const cancelBtn = overlay.querySelector('.wh-cancel');
+        if (cancelBtn) cancelBtn.onclick = () => close(false);
         overlay.querySelector('.wh-ok').onclick = () => close(true);
         overlay.onclick = (ev) => { if (ev.target === overlay) close(false); };
       });
@@ -670,17 +674,51 @@ function createWorkhoursPage(warehouse) {
       overlay.querySelector('.imp-cancel').onclick = close;
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
 
-      // 导入按钮 — 不传 decisions/forceArchive，后端自主判定规则 1-4
+      // 导入按钮 — 二次确认逻辑：
+      //   rule=1 全 create       → 直接发请求（静默执行，不弹窗）
+      //   rule=2 全 skip_exact   → 弹 confirmOnly（"跳过"按钮），不发请求（零写入）
+      //   rule=3 全 overwrite / rule=4 混合 → 弹标准 confirmDialog（取消+确认），用户确认后才发请求
       overlay.querySelector('.imp-ok').onclick = async () => {
-        const btn = overlay.querySelector('.imp-ok');
-        btn.disabled = true; btn.textContent = '导入中…';
+        const s = preview.stats; // { create, skip_exact, overwrite, rule }
+        const fmtMsg = () => {
+          const parts = [];
+          if (s.create) parts.push(`<span style="color:#67c23a"><b>新增 ${s.create}</b> 条</span>`);
+          if (s.skip_exact) parts.push(`<span style="color:#909399"><b>跳过 ${s.skip_exact}</b> 条（与归档完全一致）</span>`);
+          if (s.overwrite) parts.push(`<span style="color:#e6a23c"><b>覆盖 ${s.overwrite}</b> 条（字段有差异）</span>`);
+          return parts.join('<br>') || '无数据';
+        };
+
+        // 规则 2：全部是完全相同的重复，后端会返回 409，前端直接弹 confirmOnly 不发请求
+        if (s.rule === 2) {
+          close();
+          confirmDialog({
+            title: '所有数据均与已归档完全一致',
+            message: fmtMsg() + '<br><br>本次导入未写入任何新数据，请调整 Excel 后重新导入。',
+            confirmText: '跳过',
+            cancelText: null,
+            confirmOnly: true,
+          });
+          return;
+        }
+
+        // 规则 3 或 4：有 overwrite 或混合 → 弹二次确认
+        if (s.rule === 3 || s.rule === 4) {
+          const ok = await confirmDialog({
+            title: '确认导入操作',
+            message: `本次导入将处理以下数据：<br><br>${fmtMsg()}<br><br>请确认是否继续执行？`,
+            okText: '确认导入',
+            cancelText: '取消',
+            warn: s.overwrite ? `覆盖操作将删除归档库中的原记录并写入新数据，此操作不可撤销。` : '',
+          });
+          if (!ok) return; // 用户取消 → 留在预览弹窗，允许改 Excel 重传
+        }
+
+        // 规则 1（全 create）或规则 3/4 用户已确认 → 发请求
+        close();
         try {
           const fd = new FormData();
           fd.append('file', ctx.file);
-          // 只传文件，不传 decisions、forceArchive — 后端自己做 PRECHECK
           const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
-          close();
-          // 规则 1/3/4：成功 → toast + 刷新
           let msg = `已归档 ${res.created || 0} 行`;
           if (res.overwritten) msg += `，覆盖 ${res.overwritten} 行`;
           if (res.skip_exact) msg += `，跳过 ${res.skip_exact} 行（与归档完全一致）`;
@@ -688,20 +726,6 @@ function createWorkhoursPage(warehouse) {
           toast(msg);
           state.page = 1; load();
         } catch (ex) {
-          btn.disabled = false; btn.textContent = '导入';
-          // 规则 2：全 skip_exact → 409 + code=IMPORT_ALL_EXACT_MATCH → 弹窗提示
-          if (ex.status === 409 && ex.code === 'IMPORT_ALL_EXACT_MATCH') {
-            close();
-            confirmDialog({
-              title: '所有数据均与已归档完全一致',
-              message: (ex.detail || ex.message || '').replace(/\n/g, '<br>') + '<br><br>本次导入未写入任何新数据。',
-              confirmText: '跳过',
-              cancelText: null,  // 规则 2：弹窗只提供「跳过」唯一选项（无取消按钮）
-              confirmOnly: true,
-            });
-            return;
-          }
-          // 其他错误 → 标准 errAlert
           errAlert('导入失败', friendlyErrMsg(ex));
         }
       };
