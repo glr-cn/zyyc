@@ -186,6 +186,12 @@ if (roleCount === 0) {
 // 对已有数据的库完全无害（全部 INSERT OR IGNORE / 条件 UPDATE），业务数据一行不动。
 require('./seed').runSeed(_conn);
 
+// ★ 角色清理迁移（2026-11-18）：前端已 filter 隐藏 admin/operator/viewer 三个旧内置角色。
+// 数据库里它们会导致新建同名角色（如"仓库管理"）时被后端 UNIQUE 查重拒绝。
+// 必须放在所有种子脚本之后（否则种子又把它们加回来）。
+// 幂等、安全：仅在 super_admin 存在且无用户挂靠这些角色时才删除；有挂靠则跳过。
+require('./migrateRolesCleanup').run(_conn);
+
 // 轻量适配器：对外暴露与后续阶段代码一致的 prepare / exec 接口
 const db = {
   exec: (sql) => _conn.exec(sql),

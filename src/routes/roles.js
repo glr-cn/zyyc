@@ -45,9 +45,12 @@ router.post('/', menuGate('roles'), (req, res) => {
   try {
     const b = req.body || {};
     const role_name = String(b.role_name || '').trim();
+    console.log('[roles.create] payload:', JSON.stringify(b));
     if (!role_name) return res.status(400).json({ error: '角色名称必填', message: '角色名称必填' });
-    if (db.prepare('SELECT 1 FROM roles WHERE role_name=?').get(role_name)) {
-      return res.status(409).json({ error: '角色名称已存在', message: '角色名称已存在' });
+    const dup = db.prepare('SELECT role_id, role_name, role_code, is_system FROM roles WHERE role_name=?').get(role_name);
+    if (dup) {
+      console.warn('[roles.create] 角色名称已存在，冲突行:', dup);
+      return res.status(409).json({ error: '角色名称已存在', message: '角色名称已存在', conflict: dup });
     }
     // role_code 由后端自动生成（表单无需填写），保证 NOT NULL UNIQUE 约束始终满足
     const role_code = 'custom_' + Date.now().toString(36) + Math.floor(Math.random() * 36).toString(36);
