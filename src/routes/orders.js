@@ -10,13 +10,27 @@ const { ownerScope, readonlyGate, menuGate } = require('../middleware/rbac');
 const multer = require('multer');
 const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
+const XLSX = require('xlsx');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const UNITS = ['件', '箱', '托', '公斤'];
+const IMPORT_BATCH_LIMIT = 500; // 单次导入上限（超过提示分批）
+
+// ---------- 模板字段元数据（前端/后端共享） ----------
+const TEMPLATE_FIELDS = [
+  { key: 'order_no',      name: '订单号',     required: false, sample: 'ORD20250101001', note: '留空则系统自动生成（ORD+时间戳+随机数）' },
+  { key: 'customer_name', name: '客户名称',   required: true,  sample: '杭州绵绵的羊网络科技有限公司', note: '必须匹配 customers.company_name 或 short_name' },
+  { key: 'owner_name',    name: '货主名称',   required: true,  sample: '杭州绵绵的羊网络科技有限公司', note: '必须与客户名称/简称匹配，且该客户 coop_status=合作中' },
+  { key: 'ship_quantity', name: '发货量',     required: true,  sample: '1200', note: '正数；自动保留 3 位小数' },
+  { key: 'unit',          name: '单位',       required: true,  sample: '件',   note: '必须是：件 / 箱 / 托 / 公斤 四选一' },
+  { key: 'order_date',    name: '订单日期',   required: true,  sample: '2025-01-15', note: '日期格式 YYYY-MM-DD（Excel 日期序列号会自动转换）' },
+  { key: 'payment_status',name: '付款状态',   required: false, sample: '未收',  note: '未收（默认）/ 部分 / 已收' },
+];
+const REQUIRED_NAMES = TEMPLATE_FIELDS.filter((f) => f.required).map((f) => f.name);
 
 router.use(auth);
-router.use(readonlyGate); // 查看者仅可查看，禁止导入/修改
-router.use(menuGate('orders')); // RBAC：需「订单导入」菜单授权
+router.use(readonlyGate);
+router.use(menuGate('orders'));
 
 // 订单列表（搜索 + 分页，供核对/后续使用）+ 行级隔离（业务员仅自己）
 router.get('/', (req, res) => {
@@ -40,6 +54,92 @@ router.get('/', (req, res) => {
   res.json({ data: rows, total, page, pageSize });
 });
 
+// ---------- GET /api/orders/template ----------
+// 生成带样式的订单导入 xlsx 模板：Sheet1=数据录入页（必填列红色加粗）、Sheet2=填写说明
+router.get('/template', (req, res) => {
+  try {
+    // 构建主 sheet（含样式）
+    const headers = TEMPLATE_FIELDS.map((f) => f.name);
+    const sampleRow = TEMPLATE_FIELDS.map((f) => f.sample);
+    const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
+
+    // 列宽自动 + 必填列红色
+    const colW = TEMPLATE_FIELDS.map((f) => ({ wch: Math.max(f.name.length + 2, f.sample.length + 4, 12) }));
+    ws['!cols'] = colW;
+
+    // 给必填列表头加样式（XLSX 社区版有限样式能力：cell.s 的 fill + font）
+    // 遍历首行（表头），必填列用红色背景 + 加粗
+    headers.forEach((h, colIdx) => {
+      if (REQUIRED_NAMES.includes(h)) {
+        const addr = XLSX.utils.encode_cell({ r: 0, c: colIdx });
+        if (ws[addr]) {
+          ws[addr].s = {
+            font: { bold: true, color: { rgb: 'FFFFFFFF' } },
+            fill: { patternType: 'solid', fgColor: { rgb: 'FFE74C3C' } },
+            alignment: { horizontal: 'center', vertical: 'center' },
+            border: { top: { style: 'thin', color: { rgb: 'FFCCCCCC' } },
+                      bottom: { style: 'thin', color: { rgb: 'FFCCCCCC' } },
+                      left: { style: 'thin', color: { rgb: 'FFCCCCCC' } },
+                      right: { style: 'thin', color: { rgb: 'FFCCCCCC' } } },
+          };
+        }
+      } else {
+        const addr = XLSX.utils.encode_cell({ r: 0, c: colIdx });
+        if (ws[addr]) {
+          ws[addr].s = {
+            font: { bold: true },
+            fill: { patternType: 'solid', fgColor: { rgb: 'FFF0F0F0' } },
+            alignment: { horizontal: 'center', vertical: 'center' },
+          };
+        }
+      }
+    });
+    // 行高（表头更宽）
+    ws['!rows'] = [{ hpt: 28 }, { hpt: 22 }];
+
+    // 第二 sheet：填写说明
+    const guideAoA = [
+      ['列名', '是否必填', '填写说明', '数据格式示例', '校验规则'],
+      ...TEMPLATE_FIELDS.map((f) => [
+        f.name,
+        f.required ? '✅ 必填' : '选填',
+        f.note,
+        f.sample,
+        f.required ? '不能为空；' : '留空则取默认值；' +
+          (f.key === 'customer_name' || f.key === 'owner_name' ? '必须匹配 customers 表的 company_name 或 short_name；' : '') +
+          (f.key === 'owner_name' ? '且与客户名称/简称指向同一家公司；' : '') +
+          (f.key === 'ship_quantity' ? '必须是正数（>0），自动保留 3 位小数；' : '') +
+          (f.key === 'unit' ? '必须是 件 / 箱 / 托 / 公斤 四选一；' : '') +
+          (f.key === 'order_date' ? '日期格式 YYYY-MM-DD，Excel 日期序列号自动转换；' : '') +
+          (f.key === 'payment_status' ? '未收 / 部分 / 已收 三选一，默认 未收；' : ''),
+      ]),
+      ['', '', '', '', ''],
+      ['⚠️ 重要提示'],
+      ['1.', '首次使用建议先看本 sheet 的填写说明列。'],
+      ['2.', '客户名称/货主名称必须精确匹配系统内 customers 表的 company_name 或 short_name。'],
+      ['3.', '该客户 coop_status 必须是「合作中」，已停用/软删除的客户无法导入。'],
+      ['4.', '订单号留空系统会自动生成 ORD+时间戳+随机数，也可自行填写唯一订单号。'],
+      ['5.', '单次导入最多 500 行，超过请分批或联系管理员用后端脚本导入。'],
+    ];
+    const wsGuide = XLSX.utils.aoa_to_sheet(guideAoA);
+    wsGuide['!cols'] = [
+      { wch: 14 }, { wch: 10 }, { wch: 55 }, { wch: 30 }, { wch: 55 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '订单导入模板');
+    XLSX.utils.book_append_sheet(wb, wsGuide, '填写说明');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellStyles: true });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="orders_import_template.xlsx"');
+    res.send(buf);
+  } catch (e) {
+    console.error('[orders] 模板生成失败:', e);
+    res.status(500).json({ error: '模板生成失败：' + e.message });
+  }
+});
+
 router.post('/import', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请上传 Excel 文件' });
   let rows;
@@ -49,6 +149,15 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   if (!rows.length) return res.status(400).json({ error: '文件中没有数据行（请保留表头）' });
+
+  // 导入上限保护（避免大文件一次写太多阻塞）
+  if (rows.length > IMPORT_BATCH_LIMIT) {
+    return res.status(400).json({
+      error: `本次导入 ${rows.length} 行超过上限 ${IMPORT_BATCH_LIMIT} 行，请分批导入（每批 ≤ ${IMPORT_BATCH_LIMIT} 行）`,
+      limit: IMPORT_BATCH_LIMIT,
+      totalRows: rows.length,
+    });
+  }
 
   const failures = [];
   const successItems = [];
