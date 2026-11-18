@@ -12,9 +12,8 @@ const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
 const XLSX = require('xlsx');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const UNITS = ['件', '箱', '托', '公斤'];
-const IMPORT_BATCH_LIMIT = 500; // 单次导入上限（超过提示分批）
 
 // ---------- 模板字段元数据（前端/后端共享） ----------
 const TEMPLATE_FIELDS = [
@@ -119,7 +118,7 @@ router.get('/template', (req, res) => {
       ['2.', '客户名称/货主名称必须精确匹配系统内 customers 表的 company_name 或 short_name。'],
       ['3.', '该客户 coop_status 必须是「合作中」，已停用/软删除的客户无法导入。'],
       ['4.', '订单号留空系统会自动生成 ORD+时间戳+随机数，也可自行填写唯一订单号。'],
-      ['5.', '单次导入最多 500 行，超过请分批或联系管理员用后端脚本导入。'],
+      ['5.', '建议单次导入 ≤ 2000 行以获得最佳体验，超大批量请拆分分批导入（后端无硬限制）。'],
     ];
     const wsGuide = XLSX.utils.aoa_to_sheet(guideAoA);
     wsGuide['!cols'] = [
@@ -149,15 +148,8 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   if (!rows.length) return res.status(400).json({ error: '文件中没有数据行（请保留表头）' });
-
-  // 导入上限保护（避免大文件一次写太多阻塞）
-  if (rows.length > IMPORT_BATCH_LIMIT) {
-    return res.status(400).json({
-      error: `本次导入 ${rows.length} 行超过上限 ${IMPORT_BATCH_LIMIT} 行，请分批导入（每批 ≤ ${IMPORT_BATCH_LIMIT} 行）`,
-      limit: IMPORT_BATCH_LIMIT,
-      totalRows: rows.length,
-    });
-  }
+  // 注意：已移除 500 行上限（历史为了稳妥分批加的硬限制），后端支持任意行数
+  // 大批量导入时前端应考虑浏览器渲染性能（不影响后端写入）
 
   const failures = [];
   const successItems = [];

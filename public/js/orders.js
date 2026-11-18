@@ -10,7 +10,6 @@ const TPL_FIELDS_META = [
   { name: '订单日期', required: true },
   { name: '付款状态', required: false },
 ];
-const IMPORT_BATCH_LIMIT = 500;
 
 ERP_PAGES.orders = function (host) {
   host.innerHTML = '';
@@ -51,7 +50,7 @@ ERP_PAGES.orders = function (host) {
     '📤 第二步：上传填写好的 Excel 文件',
     `
     <p style="color:#606266;font-size:13px;margin:0 0 12px;line-height:1.7;">
-      支持 .xlsx / .xls 格式，单次最多 <b>${IMPORT_BATCH_LIMIT}</b> 行。超过请分批导入或联系管理员。
+      支持 .xlsx / .xls 格式，建议单次 ≤ 2000 行以获得最佳体验。
     </p>
     <div id="dropzone" style="
       border:2px dashed #dcdfe6;border-radius:8px;padding:40px 20px;text-align:center;
@@ -59,7 +58,7 @@ ERP_PAGES.orders = function (host) {
       font-size:13px;color:#909399;">
       <div style="font-size:42px;color:#c0c4cc;margin-bottom:8px;">📁</div>
       <div style="font-size:15px;color:#606266;margin-bottom:6px;">拖 Excel 文件到这里，或点击选择文件</div>
-      <div>支持 .xlsx / .xls，单次 ≤ ${IMPORT_BATCH_LIMIT} 行</div>
+      <div>支持 .xlsx / .xls</div>
       <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
     </div>
     <div id="fileInfo" style="display:none;margin-top:12px;padding:10px 14px;background:#f0f9eb;border-radius:4px;font-size:13px;color:#67c23a;"></div>
@@ -220,13 +219,8 @@ ERP_PAGES.orders = function (host) {
         </table>
       `);
     } else if (data.success === 0) {
-      // 400 + {error, limit, totalRows} 的超上限场景
-      if (data.limit) {
-        html.push(`<div style="color:#c23a1b;padding:14px;border:1px solid #fbc4c4;border-radius:4px;">${escape(data.error)}<br><br>
-          💡 解决办法：用 Excel 分成每批 ≤ ${data.limit} 行的多个文件，分别导入。</div>`);
-      } else {
-        html.push(`<div style="color:#c23a1b;padding:10px;">${escape(data.error || '导入失败')}</div>`);
-      }
+      // 400/413 等错误直接展示后端返回的 error 文本
+      html.push(`<div style="color:#c23a1b;padding:10px;">${escape(data.error || '导入失败')}</div>`);
     }
 
     resultArea.innerHTML = html.join('');
