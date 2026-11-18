@@ -118,7 +118,13 @@ function dashboardPage(host) {
     if (x == null || x === 0) return '0.000';
     return Number(x).toFixed(3);
   }
-  function num0(x) { return (x == null ? 0 : Number(x)).toFixed(0); }
+  /** 工时/时效/金额等普通数值：保留 2 位小数（0 → '0.00'） */
+  function num2(x) {
+    if (x == null || x === 0) return '0.00';
+    return Number(x).toFixed(2);
+  }
+  /** 单量/箱数/数量等计数：仅显示整数（Math.round，不保留小数） */
+  function num0(x) { return Math.round(x == null ? 0 : Number(x)).toFixed(0); }
 
   // ---------- 汇总行计算工具 ----------
   /** 求和：字符串/null 安全转数字 */
@@ -153,9 +159,12 @@ function dashboardPage(host) {
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  // 「本期」列强调：列名含"本期" → 追加 hi 类（加粗 + 字号+1，见 .db-table .hi 样式）
+  // 「本期」列强调：列名含"本期"，以及同属本期数据的「其他工时」「公摊工时」→ 追加 hi 类
+  // （加粗 + 字号+1 + 极浅主题色背景，见 .db-table .hi 样式）
   function colCls(c) {
-    return [c.cls || '', (c.label || '').includes('本期') ? 'hi' : ''].filter(Boolean).join(' ');
+    const l = c.label || '';
+    const hi = l.includes('本期') || l.includes('其他工时') || l.includes('公摊工时');
+    return [c.cls || '', hi ? 'hi' : ''].filter(Boolean).join(' ');
   }
   // 行拼接：按列定义输出 <td>（cust / num / hi 类），保证四张表列样式一致
   function rowHTML(cells, cols) {
@@ -205,14 +214,14 @@ function dashboardPage(host) {
         num0(o.cur_ship_qty),
         num0(o.prev_ship_qty),
         wowCell(o.ship_qty_wow),
-        num3(o.cur_main_hours),
-        num3(o.prev_main_hours),
+        num2(o.cur_main_hours),
+        num2(o.prev_main_hours),
         wowCell(o.main_hours_wow),
-        o.cur_efficiency ? num3(o.cur_efficiency) : '<span class="muted">-</span>',
-        o.prev_efficiency ? num3(o.prev_efficiency) : '<span class="muted">-</span>',
+        o.cur_efficiency ? num2(o.cur_efficiency) : '<span class="muted">-</span>',
+        o.prev_efficiency ? num2(o.prev_efficiency) : '<span class="muted">-</span>',
         wowCell(o.efficiency_wow),
-        num3(o.cur_other_hours),
-        num3(o.cur_shared_hours),
+        num2(o.cur_other_hours),
+        num2(o.cur_shared_hours),
         o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
       ];
       return rowHTML(cells, cols);
@@ -228,14 +237,14 @@ function dashboardPage(host) {
       num0(curQty),
       num0(prevQty),
       wowCell(ratioWow(curQty, prevQty)),
-      num3(curMain),
-      num3(prevMain),
+      num2(curMain),
+      num2(prevMain),
       wowCell(ratioWow(curMain, prevMain)),
-      curMain > 0 && curQty > 0 ? num3(curEff) : '<span class="muted">-</span>',
-      prevMain > 0 && prevQty > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      curMain > 0 && curQty > 0 ? num2(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevQty > 0 ? num2(prevEff) : '<span class="muted">-</span>',
       wowCell(ratioWow(curEff, prevEff)),
-      num3(sumBy(list, 'cur_other_hours')),
-      num3(sumBy(list, 'cur_shared_hours')),
+      num2(sumBy(list, 'cur_other_hours')),
+      num2(sumBy(list, 'cur_shared_hours')),
       curQty > 0 ? num3(weightedBy(list, 'cur_unit_cost', 'cur_ship_qty')) : '<span class="muted">-</span>',
     ];
     $('db-shipping').innerHTML = dbTableHTML(cols, rows, '暂无发货数据（所有客户本期/上期均无归档记录）', summary);
@@ -263,14 +272,14 @@ function dashboardPage(host) {
       num0(o.cur_cartons),
       num0(o.prev_cartons),
       wowCell(o.cartons_wow),
-      num3(o.cur_main_hours),
-      num3(o.prev_main_hours),
+      num2(o.cur_main_hours),
+      num2(o.prev_main_hours),
       wowCell(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '<span class="muted">-</span>',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '<span class="muted">-</span>',
+      o.cur_efficiency ? num2(o.cur_efficiency) : '<span class="muted">-</span>',
+      o.prev_efficiency ? num2(o.prev_efficiency) : '<span class="muted">-</span>',
       wowCell(o.efficiency_wow),
-      num3(o.cur_other_hours),
-      num3(o.cur_shared_hours),
+      num2(o.cur_other_hours),
+      num2(o.cur_shared_hours),
       o.cur_doc_cost ? num3(o.cur_doc_cost) : '<span class="muted">-</span>',
     ], cols));
     const curCartons = sumBy(list, 'cur_cartons');
@@ -284,14 +293,14 @@ function dashboardPage(host) {
       num0(curCartons),
       num0(prevCartons),
       wowCell(ratioWow(curCartons, prevCartons)),
-      num3(curMain),
-      num3(prevMain),
+      num2(curMain),
+      num2(prevMain),
       wowCell(ratioWow(curMain, prevMain)),
-      curMain > 0 && curCartons > 0 ? num3(curEff) : '<span class="muted">-</span>',
-      prevMain > 0 && prevCartons > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      curMain > 0 && curCartons > 0 ? num2(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevCartons > 0 ? num2(prevEff) : '<span class="muted">-</span>',
       wowCell(ratioWow(curEff, prevEff)),
-      num3(sumBy(list, 'cur_other_hours')),
-      num3(sumBy(list, 'cur_shared_hours')),
+      num2(sumBy(list, 'cur_other_hours')),
+      num2(sumBy(list, 'cur_shared_hours')),
       curCartons > 0 ? num3(weightedBy(list, 'cur_doc_cost', 'cur_cartons')) : '<span class="muted">-</span>',
     ];
     $('db-receiving').innerHTML = dbTableHTML(cols, rows, '暂无收货归档数据', summary);
@@ -318,13 +327,13 @@ function dashboardPage(host) {
       num0(o.cur_qty),
       num0(o.prev_qty),
       wowCell(o.qty_wow),
-      num3(o.cur_main_hours),
-      num3(o.prev_main_hours),
+      num2(o.cur_main_hours),
+      num2(o.prev_main_hours),
       wowCell(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '<span class="muted">-</span>',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '<span class="muted">-</span>',
+      o.cur_efficiency ? num2(o.cur_efficiency) : '<span class="muted">-</span>',
+      o.prev_efficiency ? num2(o.prev_efficiency) : '<span class="muted">-</span>',
       wowCell(o.efficiency_wow),
-      num3(o.cur_other_hours),
+      num2(o.cur_other_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '<span class="muted">-</span>',
     ], cols));
     const curQty = sumBy(list, 'cur_qty');
@@ -338,13 +347,13 @@ function dashboardPage(host) {
       num0(curQty),
       num0(prevQty),
       wowCell(ratioWow(curQty, prevQty)),
-      num3(curMain),
-      num3(prevMain),
+      num2(curMain),
+      num2(prevMain),
       wowCell(ratioWow(curMain, prevMain)),
-      curMain > 0 && curQty > 0 ? num3(curEff) : '<span class="muted">-</span>',
-      prevMain > 0 && prevQty > 0 ? num3(prevEff) : '<span class="muted">-</span>',
+      curMain > 0 && curQty > 0 ? num2(curEff) : '<span class="muted">-</span>',
+      prevMain > 0 && prevQty > 0 ? num2(prevEff) : '<span class="muted">-</span>',
       wowCell(ratioWow(curEff, prevEff)),
-      num3(sumBy(list, 'cur_other_hours')),
+      num2(sumBy(list, 'cur_other_hours')),
       curQty > 0 ? num3(weightedBy(list, 'cur_unit_cost', 'cur_qty')) : '<span class="muted">-</span>',
     ];
     $('db-internal').innerHTML = dbTableHTML(cols, rows, '暂无库内归档数据', summary);
@@ -364,12 +373,12 @@ function dashboardPage(host) {
     ];
     const rows = list.map(o => rowHTML([
       custCell(o.project),
-      o.cost_rate,
-      num3(o.cur_total_hours),
-      num3(o.prev_total_hours),
+      num2(o.cost_rate),
+      num2(o.cur_total_hours),
+      num2(o.prev_total_hours),
       wowCell(o.total_hours_wow),
-      num3(o.cur_cost),
-      num3(o.prev_cost),
+      num2(o.cur_cost),
+      num2(o.prev_cost),
       wowCell(o.cost_wow),
     ], cols));
     const curHours = sumBy(list, 'cur_total_hours');
@@ -380,12 +389,12 @@ function dashboardPage(host) {
     const avgRate = (curHours > 0 && curCost > 0) ? curCost / curHours : null;
     const summary = [
       '后勤汇总',
-      avgRate == null ? '<span class="muted">-</span>' : num3(avgRate),
-      num3(curHours),
-      num3(prevHours),
+      avgRate == null ? '<span class="muted">-</span>' : num2(avgRate),
+      num2(curHours),
+      num2(prevHours),
       wowCell(ratioWow(curHours, prevHours)),
-      num3(curCost),
-      num3(prevCost),
+      num2(curCost),
+      num2(prevCost),
       wowCell(ratioWow(curCost, prevCost)),
     ];
     $('db-logistics').innerHTML = dbTableHTML(cols, rows, '暂无后勤归档数据', summary);
@@ -430,32 +439,32 @@ function dashboardPage(host) {
 
     const aoaShip = aoaSheet(shipHeader, d.shippingList.map(o => [
       o.customer_name || '', num0(o.cur_ship_qty), num0(o.prev_ship_qty), wowStr(o.ship_qty_wow),
-      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
-      num3(o.cur_other_hours), num3(o.cur_shared_hours),
+      num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num2(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num2(o.cur_other_hours), num2(o.cur_shared_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
     ]));
     const aoaRecv = aoaSheet(recvHeader, d.receivingList.map(o => [
       o.customer_name || '', num0(o.cur_cartons), num0(o.prev_cartons), wowStr(o.cartons_wow),
-      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
-      num3(o.cur_other_hours), num3(o.cur_shared_hours),
+      num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num2(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num2(o.cur_other_hours), num2(o.cur_shared_hours),
       o.cur_doc_cost ? num3(o.cur_doc_cost) : '-',
     ]));
     const aoaInt = aoaSheet(intHeader, d.internalList.map(o => [
       o.project || '', num0(o.cur_qty), num0(o.prev_qty), wowStr(o.qty_wow),
-      num3(o.cur_main_hours), num3(o.prev_main_hours), wowStr(o.main_hours_wow),
-      o.cur_efficiency ? num3(o.cur_efficiency) : '-',
-      o.prev_efficiency ? num3(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
-      num3(o.cur_other_hours),
+      num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
+      o.cur_efficiency ? num2(o.cur_efficiency) : '-',
+      o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
+      num2(o.cur_other_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
     ]));
     const aoaLog = aoaSheet(logHeader, d.logisticsList.map(o => [
-      o.project || '', o.cost_rate,
-      num3(o.cur_total_hours), num3(o.prev_total_hours), wowStr(o.total_hours_wow),
-      num3(o.cur_cost), num3(o.prev_cost), wowStr(o.cost_wow),
+      o.project || '', num2(o.cost_rate),
+      num2(o.cur_total_hours), num2(o.prev_total_hours), wowStr(o.total_hours_wow),
+      num2(o.cur_cost), num2(o.prev_cost), wowStr(o.cost_wow),
     ]));
 
     const wb = XLSX.utils.book_new();
