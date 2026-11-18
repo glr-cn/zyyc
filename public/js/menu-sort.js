@@ -5,7 +5,6 @@
 //  路由：#/menu_sort → ERP_PAGES.menu_sort(host)
 //  后端：/api/admin/menus/tree + /api/admin/menus/reorder（roleGate 超管拦截）
 // ============================================================================
-const PAGE = 'menu_sort';
 window.ERP_PAGES = window.ERP_PAGES || {};
 
 // ---------- 小工具 ----------
@@ -371,4 +370,4 @@ function createPage(host) {
   reload();
 }
 
-ERP_PAGES[PAGE] = createPage;
+ERP_PAGES['menu_sort'] = createPage;

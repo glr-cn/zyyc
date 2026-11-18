@@ -5,7 +5,6 @@
 //  路由：#/data_migration → ERP_PAGES.data_migration(host)
 //  后端：/api/admin/migrate-sort/*（roleGate('super_admin') 全链拦截）
 // ============================================================================
-const PAGE = 'data_migration';
 window.ERP_PAGES = window.ERP_PAGES || {};
 
 // ---------- 小工具 ----------
@@ -310,4 +309,4 @@ function createPage(host) {
   loadStatus();
 }
 
-ERP_PAGES[PAGE] = createPage;
+ERP_PAGES['data_migration'] = createPage;
