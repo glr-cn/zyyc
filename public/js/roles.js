@@ -111,7 +111,9 @@ window.ERP_PAGES.roles = function (host) {
         <div style="display:flex;flex-direction:row;gap:8px;justify-content:center;align-items:center;white-space:nowrap;flex-wrap:nowrap;">
           <button id="perm_${r.role_id}">分配权限</button>
           <button id="redit_${r.role_id}">编辑</button>
-          ${r.is_system ? '' : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}
+          ${r.is_system
+            ? '<span class="ops-placeholder">删除</span>'
+            : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}
         </div>
       </td>
     </tr>`;

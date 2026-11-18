@@ -14,7 +14,7 @@ function roleGate(...roles) {
   return (req, res, next) => {
     const u = req.user;
     if (!u) return res.status(401).json({ error: '未登录' });
-    const ok = roles.some((r) => r === u.role || r === u.role_code || r === 'super_admin' && u.role_code === 'super_admin');
+    const ok = roles.some((r) => r === u.role || r === u.role_code);
     if (!ok) return res.status(403).json({ error: '当前角色无权限' });
     next();
   };
@@ -67,4 +67,4 @@ function menuGate(...paths) {
   };
 }
 
-module.exports = { ROLES: ['管理员', '业务员', '查看者', '超级管理员'], ownerScope, readonlyGate, roleGate, ensureOwn, menuGate, hasMenuPerm };
+module.exports = { ownerScope, readonlyGate, roleGate, ensureOwn, menuGate, hasMenuPerm };
