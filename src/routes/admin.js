@@ -231,4 +231,102 @@ router.delete('/migrate-sort/snapshot', (req, res) => {
   }
 });
 
+// ============================================================
+//  菜单排序（父级 + 子级 sort 批量调整）
+// ============================================================
+
+// ---------- GET /api/admin/menus/tree ----------
+// 返回完整两级菜单树（含 sort 值），供排序管理页面使用
+router.get('/menus/tree', (req, res) => {
+  try {
+    const all = db.prepare(
+      'SELECT menu_id, menu_code, parent_id, menu_name, path, icon, group_name, sort, is_built, is_enabled FROM menus ORDER BY sort, menu_id'
+    ).all();
+    const byParent = new Map();
+    for (const m of all) {
+      const k = m.parent_id ?? '__root__';
+      if (!byParent.has(k)) byParent.set(k, []);
+      byParent.get(k).push(m);
+    }
+    const parents = (byParent.get('__root__') || []).map((p) => ({
+      ...p,
+      children: (byParent.get(p.menu_id) || []).sort((a, b) => a.sort - b.sort || a.menu_id - b.menu_id),
+    }));
+    res.json({ ok: true, data: parents });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---------- PUT /api/admin/menus/reorder ----------
+// 批量更新菜单 sort 值。
+// body 格式：{ items: [{ menu_id: number, sort: number }, ...] }
+// 约束：menu_id 必须都存在于 menus 表；sort 为整数，负数允许。
+router.put('/menus/reorder', (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ ok: false, error: 'items 数组不能为空' });
+  }
+  if (items.length > 1000) {
+    return res.status(400).json({ ok: false, error: 'items 超过单次最大 1000 条' });
+  }
+
+  // 校验：所有 menu_id 必须存在；sort 必须是整数
+  const validMap = new Map();
+  const allIds = db.prepare('SELECT menu_id, menu_code, parent_id, sort FROM menus').all();
+  const byId = new Map(allIds.map((r) => [r.menu_id, r]));
+  for (const it of items) {
+    if (!byId.has(it.menu_id)) {
+      return res.status(400).json({ ok: false, error: `menu_id=${it.menu_id} 不存在` });
+    }
+    const sort = Number(it.sort);
+    if (!Number.isFinite(sort) || !Number.isInteger(sort)) {
+      return res.status(400).json({ ok: false, error: `menu_id=${it.menu_id} 的 sort 不是整数` });
+    }
+    validMap.set(it.menu_id, sort);
+  }
+
+  // 校验通过 → 事务更新
+  const stmt = db.prepare('UPDATE menus SET sort=? WHERE menu_id=?');
+  db.exec('BEGIN');
+  try {
+    const before = db.prepare('SELECT menu_id, menu_name, sort FROM menus WHERE menu_id IN (' + items.map(() => '?').join(',') + ')')
+      .all(...items.map((i) => i.menu_id));
+    for (const [mid, sort] of validMap) {
+      stmt.run(sort, mid);
+    }
+    db.exec('COMMIT');
+
+    // 审计日志：记录每个菜单的 sort 变更
+    const after = db.prepare('SELECT menu_id, menu_name, sort FROM menus WHERE menu_id IN (' + items.map(() => '?').join(',') + ')')
+      .all(...items.map((i) => i.menu_id));
+    const changes = before.map((b) => {
+      const a = after.find((x) => x.menu_id === b.menu_id);
+      return { menu_id: b.menu_id, menu_name: b.menu_name, before: b.sort, after: a ? a.sort : b.sort };
+    }).filter((c) => c.before !== c.after);
+
+    audit.writeLog(req, {
+      table: 'menus',
+      module: '系统/权限',
+      action: 'update',
+      targetId: 'menu_reorder',
+      content: {
+        op: 'reorder_menus',
+        operator: req.user.username,
+        changedCount: changes.length,
+        changes,
+      },
+    });
+
+    res.json({
+      ok: true,
+      message: `菜单排序已保存，${changes.length} 项变更，${items.length - changes.length} 项无变化`,
+      changedCount: changes.length,
+    });
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;

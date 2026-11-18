@@ -63,10 +63,10 @@ function runSeed(db) {
     db.prepare('UPDATE users SET role_id=? WHERE user_id=?').run(superRole.role_id, admin.user_id);
   }
 
-  // 数据迁移菜单（data_migration）仅对 super_admin 可见，普通 admin 角色撤销授权
-  // 安全理由：迁移涉及批量更新 + 回滚能力，仅限最高权限角色
+  // 数据迁移 / 菜单排序菜单 仅对 super_admin 可见，普通 admin 角色撤销授权
+  // 安全理由：两者涉及批量调整系统配置（客户排序号 / 菜单结构），仅限最高权限角色
   db.exec(`DELETE FROM role_menus WHERE role_id=(SELECT role_id FROM roles WHERE role_code='admin')
-           AND menu_id=(SELECT menu_id FROM menus WHERE menu_code='data_migration')`);
+           AND menu_id IN (SELECT menu_id FROM menus WHERE menu_code IN ('data_migration','menu_sort'))`);
 }
 
 module.exports = { runSeed };

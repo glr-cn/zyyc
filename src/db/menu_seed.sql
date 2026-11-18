@@ -54,7 +54,8 @@ INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,gro
  (404,'users',5,'用户管理','users',NULL,'权限',40,1),
  (405,'roles',5,'角色权限','roles',NULL,'权限',50,1),
  (406,'logi_quotes',5,'物流报价','logi_quotes',NULL,'物流',10,1),
- (407,'data_migration',5,'数据迁移','data_migration',NULL,'权限',60,1);
+ (407,'data_migration',5,'数据迁移','data_migration',NULL,'权限',60,1),
+ (408,'menu_sort',5,'菜单排序','menu_sort',NULL,'权限',70,1);
 
 -- 工时
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES

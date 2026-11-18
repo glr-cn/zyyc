@@ -48,6 +48,7 @@ ERP.PAGE_META = {
   log_all: { title: '全部日志', icon: '📚' },
   // 系统/权限专用（仅 super_admin 可见）
   data_migration: { title: '数据迁移', icon: '⚙️' },
+  menu_sort: { title: '菜单排序', icon: '🎯' },
 };
 
 // 默认打开页（登录后默认只打开「看板」）
