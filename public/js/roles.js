@@ -101,11 +101,10 @@ window.ERP_PAGES.roles = function (host) {
 
   function rowHtml(r) {
     const isSuper = r.role_code === 'super_admin';
-    const sysTag = r.is_system ? '<span class="badge">内置</span>' : '';
     const readonlyTag = r.is_readonly ? '<span class="badge off">只读</span>' : '';
     const scopeTag = r.data_scope === 'self' ? '<span class="badge">仅本人数据</span>' : '';
     return `<tr class="${currentRole && currentRole.role_id === r.role_id ? 'active-row' : ''}">
-      <td class="role-name">${escapeHtml(r.role_name)} ${sysTag}${readonlyTag}${scopeTag}</td>
+      <td class="role-name">${escapeHtml(r.role_name)} ${readonlyTag}${scopeTag}</td>
       <td class="role-desc">${escapeHtml(r.description || '')}</td>
       <td class="num">${r.user_count}</td>
       <td class="num">${isSuper ? '全部' : r.menu_count}</td>

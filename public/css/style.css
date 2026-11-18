@@ -385,19 +385,23 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
    ============================================================ */
 .roles-layout {
   display: flex; gap: 16px;
-  height: calc(100vh - 140px); min-height: 520px;
+  align-items: stretch;
+  height: calc(100vh - 140px); min-height: 520px;   /* 只用于右栏 ptree-panel flex:1 撑满 */
+  overflow: hidden;   /* 防止整体页面出现滚动条 */
 }
 .roles-left {
-  flex: 0 0 600px; width: 600px;
+  flex: 0 0 65%; width: 65%;
   display: flex; flex-direction: column;
+  overflow: visible;  /* 左栏不裁剪，表格多的话允许向外溢出（现在只有 1 个角色） */
 }
-.roles-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.roles-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .roles-layout .card {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 14px; box-sizing: border-box;
   display: flex; flex-direction: column;
 }
-.roles-layout .roles-left.card { overflow-y: auto; }
+/* ★ 左侧 card 不要固定高度、不要滚动条、自适应表格内容高度 */
+.roles-layout .roles-left.card { overflow: visible; }
 
 /* 左侧角色表格：table-layout:fixed 强制按 colgroup 列宽分配，拒绝内容挤压 */
 .roles-table {
