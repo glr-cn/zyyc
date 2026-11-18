@@ -1180,43 +1180,43 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
   color:var(--text); border-bottom:1px solid var(--line);
   background:linear-gradient(90deg, rgba(37,99,235,.08), transparent);
 }
-.db-sec-content { padding:0; overflow-x:hidden; }
+.db-sec-content { padding:0; overflow-x:auto; }
 
-/* 经营看板表格：table-layout:fixed 强制按比例分配列宽，拒绝内容撑破 */
-.db-table { width:100%; min-width:0; table-layout:fixed; border-collapse:collapse; }
+/* 经营看板表格：table-layout:auto 让表格按内容自然撑开，确保完整单行 */
+.db-table { width:auto; min-width:100%; border-collapse:collapse; }
 .db-table th, .db-table td {
   border:1px solid #e3e8ef;
   text-align:center;
   vertical-align:middle;
-  height:36px;
-  padding:3px 5px;
+  height:28px;
+  padding:2px 5px;
+  white-space:nowrap;
 }
-/* 表头：短文字强制不换行；缩小字号紧凑排布 */
+/* 表头：紧凑化 */
 .db-table th {
-  height:32px; font-size:13px; font-weight:700; color:#1f2329;
-  background:#eef0f4; white-space:nowrap;
+  height:26px; font-size:12px; font-weight:700; color:#1f2329;
+  background:#eef0f4;
 }
-/* 数据行：12px 紧凑；客户列/项目列允许换行 */
+/* 数据行：12px 紧凑 */
 .db-table td { font-size:12px; font-weight:400; color:#606266; }
-/* 数值列：数字不宜换行 */
-.db-table td.num, .db-table th.num { white-space:nowrap; }
-/* 环比 span 保留数字紧凑不换行 */
+/* 数值列：tabular-nums 对齐 */
+.db-table td.num { font-variant-numeric:tabular-nums; }
+/* 环比 span 数字紧凑不换行（已被 th/td 的 white-space:nowrap 覆盖，此处冗余但语义明确） */
 .db-table td .wow { white-space:nowrap; }
 /* 覆盖 .grid 的左对齐/右对齐 */
 .db-table th.num, .db-table th.cust { text-align:center; }
 .db-table td.num { text-align:center; }
-/* 客户/项目名称列：完整展示允许换行（无省略），靠左阅读更友好 */
-.db-table td.cust { text-align:left; font-weight:600; white-space:normal; word-break:break-all; }
+/* 客户/项目名称列：完整单行无省略、靠左阅读友好；悬浮 title 保留全名（原生） */
+.db-table td.cust { text-align:left; font-weight:600; white-space:nowrap; overflow:visible; }
 .db-table th.cust { font-weight:700; }
 .db-table td.cust .db-cust-ellipsis {
-  display:block; max-width:100%; overflow:visible;
-  word-break:break-all;
+  display:block; max-width:none; overflow:visible;
+  white-space:nowrap; text-overflow:clip;
 }
-.db-table td.num { font-variant-numeric:tabular-nums; }
 .db-table tr:last-child td { border-bottom:1px solid #e3e8ef; }
 .db-table tbody tr:nth-child(odd)  td { background:#ffffff; }
 .db-table tbody tr:nth-child(even) td { background:#f2f4f7; }
-/* 汇总行：浅灰底 + 加粗 + 顶部双线，与数据行明显区分 */
+/* 汇总行：浅灰底 + 加粗 + 顶部双线 */
 .db-table tfoot td {
   background:#f5f7fa;
   font-weight:700;
@@ -1225,8 +1225,8 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .db-table tfoot td.db-summary-title { background:#e8edf5; }
 .db-table tfoot tr:hover td { background:#f5f7fa; }
 
-/* 高亮列（本期/其他工时/公摊工时）：加粗 + 字号+1 + 极浅主题色背景 */
-.db-table th.hi { font-weight:700; font-size:13px; color:#1f2329; background:#e3effd; }
+/* 高亮列（本期/其他工时/公摊工时）：极浅主题色背景 + 加粗 */
+.db-table th.hi { font-weight:700; font-size:12px; color:#1f2329; background:#e3effd; }
 .db-table tbody tr td.hi { background:#f0f7ff; }
 .db-table td.hi { font-weight:600; font-size:12px; }
 .db-table tfoot td.hi { font-weight:700; font-size:12px; background:#f0f7ff; }
