@@ -490,10 +490,24 @@ function dashboardPage(host) {
     ]));
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaShip), '发货组');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaRecv), '收货组');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaInt),  '库内组');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaLog),  '后勤组');
+
+    // ★ 列宽/行高配置：客户/项目名完整展示(wch=25)，数值列紧凑(wch=12)
+    // XLSX 社区版不支持字体/底色/对齐，仅 !cols / !rows 可用
+    const fmtSheet = (aoa, name, nameColW, numColW) => {
+      const cols = aoa[1].map((_, i) => ({ wch: i === 0 ? nameColW : numColW }));
+      const rows = [];
+      rows[0] = { hpt: 28 };  // 标题行（第 1 行）稍大
+      rows[1] = { hpt: 22 };  // 表头行紧凑
+      for (let r = 2; r < aoa.length; r++) rows[r] = { hpt: 18 }; // 数据行紧凑
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = cols;
+      ws['!rows'] = rows;
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+    fmtSheet(aoaShip, '发货组', 25, 12);
+    fmtSheet(aoaRecv, '收货组', 25, 12);
+    fmtSheet(aoaInt,  '库内组', 25, 12);
+    fmtSheet(aoaLog,  '后勤组', 20, 12);
     XLSX.writeFile(wb, '佐雍云仓数据中心_经营看板_' + (d.periodLabel || _todayIso) + '.xlsx');
 
     btn.disabled = false; btn.textContent = '导出 Excel';
