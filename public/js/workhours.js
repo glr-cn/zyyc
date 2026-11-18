@@ -117,9 +117,22 @@ function createWorkhoursPage(warehouse) {
     }
 
     // 二次确认弹窗（Promise 风格，可取消）：批量删除等不可逆操作专用
-    // 风格沿用 errAlert 的 modal-overlay + modal，两个按钮（取消 / 确认）
-    function confirmDialog(title, msg, options) {
-      options = options || {};
+    // 支持两种调用签名：
+    //   confirmDialog(title, msg, options) —— 传统三参数（批量删除用）
+    //   confirmDialog({ title, message, okText, cancelText, confirmOnly, warn }) —— 单对象（导入确认用）
+    function confirmDialog(a1, a2, a3) {
+      let title, msg, options;
+      if (a1 && typeof a1 === 'object' && !Array.isArray(a1)) {
+        // 单对象签名：confirmDialog({ title, message, ... })
+        options = a1;
+        title = options.title || '';
+        msg = options.message || options.msg || '';
+      } else {
+        // 传统三参数签名
+        title = a1;
+        msg = a2;
+        options = a3 || {};
+      }
       return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay';
@@ -694,8 +707,7 @@ function createWorkhoursPage(warehouse) {
           confirmDialog({
             title: '所有数据均与已归档完全一致',
             message: fmtMsg() + '<br><br>本次导入未写入任何新数据，请调整 Excel 后重新导入。',
-            confirmText: '跳过',
-            cancelText: null,
+            okText: '跳过',
             confirmOnly: true,
           });
           return;
