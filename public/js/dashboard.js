@@ -369,6 +369,7 @@ function dashboardPage(host) {
       { label: '本期工时', cls: 'num' },
       { label: '上期工时', cls: 'num' },
       { label: '工时环比', cls: 'num' },
+      { label: '发货总单量', cls: 'num' },
       { label: '后勤单均成本(元/单)', cls: 'num' },
     ];
     // 发货组本期总单量（来自发货组汇总）；为 0 时显示 "-"，避免除零产生 NaN/Infinity
@@ -381,6 +382,7 @@ function dashboardPage(host) {
       num2(o.cur_total_hours),
       num2(o.prev_total_hours),
       wowCell(o.total_hours_wow),
+      num0(shipQty),
       shipQty > 0 ? num3(rowAmt(o) / shipQty) : '<span class="muted">-</span>',
     ], cols));
     const curHours = sumBy(list, 'cur_total_hours');
@@ -395,6 +397,8 @@ function dashboardPage(host) {
       num2(curHours),
       num2(prevHours),
       wowCell(ratioWow(curHours, prevHours)),
+      // 汇总行「发货总单量」同各行口径：直接取发货组汇总，不累加
+      num0(shipQty),
       // 汇总行单均成本 = 汇总金额 / 发货组总单量（3 位小数，不累加各行的单均成本）
       shipQty > 0 ? num3(curAmt / shipQty) : '<span class="muted">-</span>',
     ];
@@ -430,7 +434,7 @@ function dashboardPage(host) {
     const shipHeader = ['客户名称','本期单量','上期单量','单量环比','本期发货工时','上期发货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单均成本(元)'];
     const recvHeader = ['客户名称','本期箱数','上期箱数','箱数环比','本期收货工时','上期收货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单箱成本(元)'];
     const intHeader  = ['项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
-    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','后勤单均成本(元/单)'];
+    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','发货总单量','后勤单均成本(元/单)'];
 
     const aoaSheet = (header, rows) => [
       [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${d.periodLabel}）`],
@@ -468,6 +472,7 @@ function dashboardPage(host) {
     const aoaLog = aoaSheet(logHeader, d.logisticsList.map(o => [
       o.project || '', num2(o.cost_rate),
       num2(o.cur_total_hours), num2(o.prev_total_hours), wowStr(o.total_hours_wow),
+      num0(logShipQty),
       logShipQty > 0 ? num3(logAmt(o) / logShipQty) : '-',
     ]));
 
