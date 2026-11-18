@@ -137,6 +137,14 @@ body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Ari
    保持修复前「toast 高于弹窗」的相对关系，不因遮罩提层而倒退 */
 .erp-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: #1f2733; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: all .2s ease; z-index: 140; pointer-events: none; }
 .erp-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.erp-toast.erp-toast-error { background: #dc2626; }
+/* 客户名不在客户列表：输入框标红（收货工时实时校验） */
+.wh-cell-invalid {
+  border-color: #dc2626 !important;
+  background: #fff1f2 !important;
+  box-shadow: 0 0 0 1px #dc2626 inset !important;
+}
+.wh-cell-invalid:focus { outline: none; }
 .main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* 单行顶部 Header：左 Tab 标签栏 | 右 用户信息（两段式；品牌区已删除，

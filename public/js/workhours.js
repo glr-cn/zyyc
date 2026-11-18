@@ -68,8 +68,8 @@ function createWorkhoursPage(warehouse) {
     }
 
     // 轻提示：优先用全局 ERP.toast，未加载时降级为 alert
-    function toast(msg) {
-      if (window.ERP && typeof window.ERP.toast === 'function') window.ERP.toast(msg);
+    function toast(msg, kind) {
+      if (window.ERP && typeof window.ERP.toast === 'function') window.ERP.toast(msg, kind);
       else alert(msg);
     }
 
@@ -236,9 +236,14 @@ function createWorkhoursPage(warehouse) {
       $('resetBtn').onclick = () => {
         const today = todayStr();
         state.q = ''; state.dateFrom = today; state.dateTo = today;
+        state.status = 'pending';   // 修复：状态必须回到「未归档」
+        state.checked.clear();      // 清空勾选，避免已归档勾选残留
+        state.page = 1;
         $('q').value = '';
+        $('statusFilter').value = 'pending';
         if (drp) drp.setValue({ startDate: today, endDate: today }, true);
-        state.page = 1; load();
+        syncTabUI();                // 归档按钮 / 提示条随状态一起复位
+        load();
       };
       $('statusFilter').onchange = (e) => {
         state.status = e.target.value; state.page = 1; state.checked.clear();
@@ -488,6 +493,27 @@ function createWorkhoursPage(warehouse) {
         }
       };
     }
+    // ---------- 客户名校验（收货工时：只允许客户列表里的名称） ----------
+    // 以行内 datalist 为准，保证「看到的选项」和「校验的数据源」完全一致。
+    function customerOptionOf(input) {
+      if (!input) return null;
+      const v = String(input.value || '').trim();
+      if (!v) return null;
+      const dl = input.getAttribute('list') ? document.getElementById(input.getAttribute('list')) : null;
+      if (!dl) return null;
+      const norm = (s) => String(s || '').replace(/\s*\((已停用|已删除)\)\s*$/, '').trim();
+      return [...dl.options].find((o) => (o.value || '').trim() === v)
+          || [...dl.options].find((o) => norm(o.value) === norm(v))
+          || null;
+    }
+
+    function setCustomerInvalid(input, bad) {
+      if (!input) return;
+      input.classList.toggle('wh-cell-invalid', !!bad);
+      if (bad) input.setAttribute('aria-invalid', 'true');
+      else input.removeAttribute('aria-invalid');
+    }
+
     function readFilters() {
       state.q = $('q').value.trim();
       // 日期由 drp 组件的 onChange 同步；查询按钮/回车另经 syncDates() 兜底读取
@@ -681,10 +707,19 @@ function createWorkhoursPage(warehouse) {
               const curCid = (r.customer_id != null && r.customer_id !== '') ? String(r.customer_id) : '';
               const curName = curCid
                 ? ((state.customers || []).find((c) => String(c.customer_id) === curCid)?.owner_name || r.customer_name || '')
-                : '';
+                : (r.customer_name || '');
+              // 重渲染时按客户列表回判：非法名称继续标红（跨刷新保持错误态）
+              const known = new Set();
+              (state.customers || []).forEach((o) => {
+                const base = o.owner_name || o.company_name || '';
+                known.add(base);
+                known.add(base + (o.status === '已删除' ? ' (已删除)' : o.status === '停用' ? ' (已停用)' : ''));
+              });
+              const nameInvalid = !!curName && !known.has(curName);
               return `<td>
                 <datalist id="${dlId}">${opts}</datalist>
-                <input list="${dlId}" data-if="customer_name_cid" class="wh-cell-txt wh-cust-sel"
+                <input list="${dlId}" data-if="customer_name_cid" class="wh-cell-txt wh-cust-sel${nameInvalid ? ' wh-cell-invalid' : ''}"
+                  aria-invalid="${nameInvalid ? 'true' : 'false'}"
                   placeholder="* 输入客户名搜索（必填）" autocomplete="off"
                   value="${escapeAttr(curName)}" data-cur-cid="${curCid}"
                   onfocus="this.value=''"/>
@@ -975,9 +1010,11 @@ function createWorkhoursPage(warehouse) {
         // 收货客户：从 tr.dataset 读取（datalist 选择后维护）
         if (type === '收货') {
           const cid = tr.dataset.rowCid || '';
-          const cname = tr.dataset.rowCname || '';
+          const custEl = tr.querySelector('[data-if="customer_name_cid"]');
+          const typed = custEl ? String(custEl.value || '').trim() : '';
           row.customer_id = cid ? Number(cid) : null;
-          row.customer_name = cname || null;
+          // 保留用户实际输入（含未匹配的非法值），否则重渲染会悄悄清空、红框也丢掉
+          row.customer_name = (typed || tr.dataset.rowCname || '') || null;
         }
       };
       // 实时计算列：发货→efficiency(ship/main)；收货→efficiency(cartons/main)；库内/后勤→total_hours
@@ -1016,6 +1053,15 @@ function createWorkhoursPage(warehouse) {
         if (type === '收货') {
           // 严格必填：日期 / 客户 / 箱数 / 主工时，缺一拦截
           const date = tr.dataset.rowDate || val('date') || '';
+          const custEl = tr.querySelector('[data-if="customer_name_cid"]');
+          const typedName = custEl ? String(custEl.value || '').trim() : '';
+          // 客户名非空但不在客户列表 → 立即拦截（不等必填检查）
+          if (typedName && !customerOptionOf(custEl)) {
+            setCustomerInvalid(custEl, true);
+            toast('该客户不存在，禁止录入！', 'error');
+            if (explicit) alert('该客户不存在，禁止录入！');
+            return false;
+          }
           const cidSel = tr.dataset.rowCid || '';
           const cartons = Number(val('cartons')) || 0;
           const missing = [];
@@ -1119,31 +1165,38 @@ function createWorkhoursPage(warehouse) {
         //   input 事件 → 遍历 datalist options 精确匹配 option.value（label），取 option.data-cid 写 dataset。
         //   写完 dataset 后再 syncBack 回写 state.lastRows。
         if (type === '收货' && e.dataset && e.dataset.if === 'customer_name_cid') {
-          const dlId = e.getAttribute('list');
-          e.addEventListener('input', () => {
+          // ★ 实时校验：输入时只回写/标红，change / blur 再弹红色提示，避免打字过程刷屏。
+          //   校验数据源就是本行 datalist（即客户列表渲染出来的选项）。
+          let lastWarned = '';
+          const applyCustomer = (showToast) => {
             const v = e.value.trim();
-            if (!v) { tr.dataset.rowCid = ''; tr.dataset.rowCname = ''; syncBack(); recalc(); return; }
-            const dl = dlId ? document.getElementById(dlId) : null;
-            const opts = dl ? dl.options : [];
-            // 精确匹配 option.value（label）
-            const hit = [...opts].find((o) => (o.value || '').trim() === v)
-                     || [...opts].find((o) => (o.value || '').includes(v));
+            const hit = customerOptionOf(e);
+            if (!v) {
+              tr.dataset.rowCid = ''; tr.dataset.rowCname = '';
+              setCustomerInvalid(e, false);
+              lastWarned = '';
+              return true;
+            }
             if (hit) {
               tr.dataset.rowCid = hit.dataset.cid || '';
               tr.dataset.rowCname = hit.value || '';
-            } else {
-              tr.dataset.rowCid = ''; tr.dataset.rowCname = '';
+              setCustomerInvalid(e, false);
+              lastWarned = '';
+              return true;
             }
-            syncBack(); recalc();
-          });
-          e.addEventListener('change', () => {
-            const v = e.value.trim();
-            if (!v) { tr.dataset.rowCid = ''; tr.dataset.rowCname = ''; syncBack(); recalc(); return; }
-            const dl = dlId ? document.getElementById(dlId) : null;
-            const opts = dl ? dl.options : [];
-            const hit = [...opts].find((o) => (o.value || '').trim() === v);
-            if (hit) { tr.dataset.rowCid = hit.dataset.cid || ''; tr.dataset.rowCname = hit.value || ''; }
-            syncBack(); recalc();
+            tr.dataset.rowCid = ''; tr.dataset.rowCname = '';
+            setCustomerInvalid(e, true);
+            if (showToast && lastWarned !== v) {
+              lastWarned = v;
+              toast('该客户不存在，禁止录入！', 'error');
+            }
+            return false;
+          };
+          e.addEventListener('input', () => { applyCustomer(false); syncBack(); recalc(); });
+          e.addEventListener('change', () => { applyCustomer(true); syncBack(); recalc(); });
+          // 先校验，再交给下面的通用 blur 保存；校验失败则跳过本次自动保存
+          e.addEventListener('blur', () => {
+            if (!applyCustomer(true)) tr.dataset.skipBlurSave = '1';
           });
         }
         e.addEventListener('blur', () => {

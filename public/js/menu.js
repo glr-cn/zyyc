@@ -381,7 +381,7 @@ ERP.setActiveMenu = function (page) {
 };
 
 // 轻提示（功能建设中）
-ERP.toast = function (msg) {
+ERP.toast = function (msg, kind) {
   let t = document.getElementById('erp-toast');
   if (!t) {
     t = document.createElement('div');
@@ -390,6 +390,8 @@ ERP.toast = function (msg) {
     document.body.appendChild(t);
   }
   t.textContent = msg;
+  // kind='error' → 红色警示提示（如客户名校验失败）
+  t.classList.toggle('erp-toast-error', kind === 'error');
   t.classList.add('show');
   clearTimeout(ERP._toastTimer);
   ERP._toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
