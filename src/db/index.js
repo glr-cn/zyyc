@@ -56,6 +56,17 @@ function snapshotDb(reason) {
 
 const _raw = openDatabase(DB_PATH);
 _raw.exec('PRAGMA foreign_keys = ON;');
+// PRAGMA integrity_check 启动自检：返回 'ok' 表示数据库文件完好，
+// 返回字符串表示损坏（值为问题描述）。不阻断启动，只 warn。
+try {
+  const chk = _raw.prepare('PRAGMA integrity_check').get();
+  const ok = chk && (chk.integrity_check === 'ok' || chk['integrity_check'] === 'ok');
+  if (!ok) {
+    console.warn('[db] ⚠️ integrity_check 未通过：', chk);
+  } else {
+    console.log('[db] integrity_check: ok');
+  }
+} catch (e) { console.warn('[db] integrity_check 异常：', e.message); }
 console.log('[db] 驱动：' + _raw.driver + '（库：' + DB_PATH + '）');
 
 // ============================================================================
@@ -72,6 +83,15 @@ console.log('[db] 驱动：' + _raw.driver + '（库：' + DB_PATH + '）');
 function openConnection() {
   const conn = openDatabase(DB_PATH);
   conn.exec('PRAGMA foreign_keys = ON;');
+  // 自愈恢复后的新连接也跑一遍 integrity_check
+  try {
+    const chk = conn.prepare('PRAGMA integrity_check').get();
+    if (chk && chk.integrity_check !== 'ok' && chk['integrity_check'] !== 'ok') {
+      console.warn('[db-selfheal] ⚠️ integrity_check 未通过：', chk);
+    } else {
+      console.log('[db-selfheal] integrity_check: ok');
+    }
+  } catch (e) { /* ignore */ }
   return conn;
 }
 

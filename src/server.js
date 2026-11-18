@@ -18,7 +18,10 @@ const smartQuoteRouter = require('./routes/smart-quote');
 const logsRouter = require('./routes/logs');
 
 const app = express();
-app.use(express.json());
+// 请求体上限 2MB：上传 Excel 另有 multer limit，JSON/URL 表单不超过 2MB 足够
+// 防止恶意用户传 100MB+ 卡死 EventLoop（2025-11-18 生产加固）
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // 静态前端（public/）
 app.use(express.static(path.join(__dirname, '..', 'public')));
