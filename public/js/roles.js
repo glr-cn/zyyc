@@ -99,9 +99,11 @@ window.ERP_PAGES.roles = function (host) {
       <td class="num">${r.user_count}</td>
       <td class="num">${isSuper ? '全部' : r.menu_count}</td>
       <td class="ops">
-        <button id="perm_${r.role_id}">分配权限</button>
-        <button id="redit_${r.role_id}">编辑</button>
-        ${r.is_system ? '' : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}
+        <div class="ops-inner">
+          <button id="perm_${r.role_id}">分配权限</button>
+          <button id="redit_${r.role_id}">编辑</button>
+          ${r.is_system ? '' : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}
+        </div>
       </td>
     </tr>`;
   }
