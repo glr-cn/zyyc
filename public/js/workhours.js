@@ -76,22 +76,29 @@ function createWorkhoursPage(warehouse) {
       else alert(msg);
     }
 
-    // 阻塞式错误弹窗（替代 alert/toast error）：必须点「确定」才能关闭，遮罩不允许点击关闭
-    // title: 弹窗标题（如「保存失败」）；msg: 详细错误原因（可换行）；options.confirmText: 按钮文字（默认「确定」）
+    // 阻塞式错误弹窗（替代 alert/toast error）
+    // title: 弹窗标题；msg: 详细错误原因（可换行）；
+    // options.confirmText: 主按钮文字（默认「确定」）；
+    // options.blocking: true 时强制阻塞（必须点主按钮才能关闭，遮罩/ESC/关闭按钮均禁用）
+    // 默认（blocking=false）支持：× 关闭按钮 + ESC + 点击遮罩 + 主按钮 四种关闭方式
     function errAlert(title, msg, options) {
       options = options || {};
+      const blocking = !!options.blocking;
       // 自动注入 modal 样式（幂等，多次调用只注入一次）
       if (!document.getElementById('__wh_err_modal_css')) {
         const st = document.createElement('style');
         st.id = '__wh_err_modal_css';
         st.textContent = [
           '.wh-err-mask{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99999;display:flex;align-items:center;justify-content:center;}',
-          '.wh-err-modal{background:#fff;border-radius:8px;min-width:320px;max-width:520px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:20px 24px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}',
-          '.wh-err-modal h4{margin:0 0 10px;font-size:16px;color:#1f2329;display:flex;align-items:center;gap:8px;}',
-          '.wh-err-modal h4::before{content:"";display:inline-block;width:18px;height:18px;border-radius:50%;background:#f56c6c;position:relative;}',
-          '.wh-err-modal h4::after{content:"!";position:absolute;color:#fff;font-weight:700;font-size:13px;line-height:18px;margin-left:-14px;}',
-          '.wh-err-modal .wh-err-body{font-size:14px;color:#606266;white-space:pre-wrap;word-break:break-word;line-height:1.6;margin:8px 0 16px;}',
-          '.wh-err-modal .wh-err-foot{text-align:right;}',
+          '.wh-err-modal{background:#fff;border-radius:8px;min-width:320px;max-width:520px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;overflow:hidden;display:flex;flex-direction:column;max-height:85vh;}',
+          '.wh-err-modal .wh-err-head{display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid #ebeef5;}',
+          '.wh-err-modal .wh-err-head .wh-err-title{font-size:15px;color:#1f2329;font-weight:600;flex:1;display:flex;align-items:center;gap:8px;}',
+          '.wh-err-modal .wh-err-head .wh-err-title::before{content:"";display:inline-block;width:16px;height:16px;border-radius:50%;background:#f56c6c;position:relative;flex-shrink:0;}',
+          '.wh-err-modal .wh-err-head .wh-err-title::after{content:"!";position:absolute;color:#fff;font-weight:700;font-size:12px;line-height:16px;margin-left:-12px;}',
+          '.wh-err-modal .wh-err-head .wh-close-btn{background:none;border:none;font-size:18px;color:#909399;cursor:pointer;padding:0 4px;line-height:1;width:28px;height:28px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;}',
+          '.wh-err-modal .wh-err-head .wh-close-btn:hover{background:#f5f7fa;color:#606266;}',
+          '.wh-err-modal .wh-err-body{padding:16px 20px;font-size:14px;color:#606266;white-space:pre-wrap;word-break:break-word;line-height:1.6;overflow-y:auto;}',
+          '.wh-err-modal .wh-err-foot{padding:12px 20px;border-top:1px solid #ebeef5;text-align:right;}',
           '.wh-err-modal .wh-err-foot button{background:#409eff;color:#fff;border:none;border-radius:4px;padding:6px 18px;font-size:13px;cursor:pointer;}',
           '.wh-err-modal .wh-err-foot button:hover{background:#66b1ff;}'
         ].join('\n');
@@ -101,19 +108,40 @@ function createWorkhoursPage(warehouse) {
       mask.className = 'wh-err-mask';
       mask.innerHTML = `
         <div class="wh-err-modal" role="alertdialog" aria-modal="true">
-          <h4>${escapeHtml(title || '出错了')}</h4>
+          <div class="wh-err-head">
+            <span class="wh-err-title">${escapeHtml(title || '出错了')}</span>
+            ${blocking ? '' : '<button class="wh-close-btn" type="button" aria-label="关闭">×</button>'}
+          </div>
           <div class="wh-err-body">${escapeHtml(msg == null ? '' : String(msg))}</div>
           <div class="wh-err-foot"><button type="button">${escapeAttr(options.confirmText || '确定')}</button></div>
         </div>`;
-      // 按钮关闭：focus 后点选，遮罩/ESC 都不关闭（强制用户确认）
-      const btn = mask.querySelector('button');
-      btn.addEventListener('click', () => { mask.remove(); document.removeEventListener('keydown', _esc); });
-      const _esc = (e) => { if (e.key === 'Escape') e.preventDefault(); }; // 阻止 ESC 意外关闭
-      document.addEventListener('keydown', _esc);
+
+      let _esc = null;
+      const close = () => {
+        mask.remove();
+        if (_esc) document.removeEventListener('keydown', _esc);
+      };
+
+      // 主按钮关闭 + 清理 ESC 监听
+      const btn = mask.querySelector('button:not(.wh-close-btn)');
+      btn.addEventListener('click', close);
+
+      if (!blocking) {
+        // 非阻塞：支持 × 按钮 + ESC + 遮罩点击 三种便捷关闭
+        const closeBtn = mask.querySelector('.wh-close-btn');
+        if (closeBtn) closeBtn.addEventListener('click', close);
+        mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+        _esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+        document.addEventListener('keydown', _esc);
+      } else {
+        // 阻塞：ESC 被拦截但不关闭；遮罩点击只聚焦按钮
+        _esc = (e) => { if (e.key === 'Escape') e.preventDefault(); };
+        document.addEventListener('keydown', _esc);
+        mask.addEventListener('click', (e) => { if (e.target === mask) btn.focus(); });
+      }
+
       document.body.appendChild(mask);
       btn.focus();
-      // 禁止遮罩点击关闭
-      mask.addEventListener('click', (e) => { if (e.target === mask) btn.focus(); });
     }
 
     // 二次确认弹窗（Promise 风格，可取消）：批量删除等不可逆操作专用
