@@ -16,6 +16,7 @@ const menusRouter = require('./routes/menus');
 const logisticsQuotesRouter = require('./routes/logistics-quotes');
 const smartQuoteRouter = require('./routes/smart-quote');
 const logsRouter = require('./routes/logs');
+const adminRouter = require('./routes/admin');
 
 const app = express();
 // 请求体上限 2MB：上传 Excel 另有 multer limit，JSON/URL 表单不超过 2MB 足够
@@ -42,6 +43,7 @@ app.use('/api/menus', menusRouter);
 app.use('/api/logistics-quotes', logisticsQuotesRouter);
 app.use('/api/smart-quote', smartQuoteRouter);
 app.use('/api/logs', logsRouter);
+app.use('/api/admin', adminRouter);
 
 // 数据库运行诊断（供 /api/health 返回）
 // 用途：一眼看出「当前实例连的是哪个库、有没有业务数据、有没有可回滚的快照」，

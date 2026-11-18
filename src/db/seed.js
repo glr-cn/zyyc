@@ -62,6 +62,11 @@ function runSeed(db) {
   if (admin && admin.role_id !== superRole.role_id) {
     db.prepare('UPDATE users SET role_id=? WHERE user_id=?').run(superRole.role_id, admin.user_id);
   }
+
+  // 数据迁移菜单（data_migration）仅对 super_admin 可见，普通 admin 角色撤销授权
+  // 安全理由：迁移涉及批量更新 + 回滚能力，仅限最高权限角色
+  db.exec(`DELETE FROM role_menus WHERE role_id=(SELECT role_id FROM roles WHERE role_code='admin')
+           AND menu_id=(SELECT menu_id FROM menus WHERE menu_code='data_migration')`);
 }
 
 module.exports = { runSeed };

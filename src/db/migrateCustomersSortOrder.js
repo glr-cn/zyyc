@@ -80,7 +80,8 @@ function markApplied(db) {
 /**
  * 迁移入口
  * @param {any} db  已打开的 SQLite 句柄（node:sqlite DatabaseSync / 或 wasm Database，两者 prepared().get/run 口径一致）
- * @param {{verbose?:boolean, dryRun?:boolean}} opts
+ * @param {{verbose?:boolean, dryRun?:boolean, force?:boolean}} opts
+ *   - force=true：绕过指纹标记，每次都执行（超管手动刷新场景；服务启动自动迁移传 false 或不传）
  * @returns {{addedColumns:string[], matched:number, unmatched:string[], touchedCustomers:string[], skippedDuplicates:string[]}}
  */
 function run(db, opts = {}) {
@@ -105,10 +106,13 @@ function run(db, opts = {}) {
     if (opts.verbose) console.log('[customers.sort_order] 列已存在，跳过 ALTER');
   }
 
-  // 2) 如果指纹已标记（数据刷过），直接返回
-  if (isApplied(db)) {
-    if (opts.verbose) console.log('[customers.sort_order] 指纹已标记，跳过名单刷入');
+  // 2) 如果指纹已标记（数据刷过）且非强制模式，直接返回
+  if (isApplied(db) && !opts.force) {
+    if (opts.verbose) console.log('[customers.sort_order] 指纹已标记，跳过名单刷入（force=true 可强制重刷）');
     return { addedColumns, matched: 0, unmatched: [], touchedCustomers: [], skippedDuplicates: [] };
+  }
+  if (opts.force && isApplied(db)) {
+    if (opts.verbose) console.log('[customers.sort_order] force=true 模式，忽略指纹，强制执行名单刷入');
   }
 
   // 3) 按名单刷入（严格等值匹配；重名全部刷入同值）
