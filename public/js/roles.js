@@ -16,11 +16,11 @@ window.ERP_PAGES.roles = function (host) {
         </div>
         <table class="grid roles-table">
           <colgroup>
-            <col style="width:130px">
-            <col style="width:auto">
-            <col style="width:72px">
-            <col style="width:72px">
-            <col style="width:180px">
+            <col style="width:140px">
+            <col style="width:200px">
+            <col style="width:70px">
+            <col style="width:70px">
+            <col style="width:200px">
           </colgroup>
           <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>菜单数</th><th>操作</th></tr></thead>
           <tbody id="roleBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
@@ -67,8 +67,12 @@ window.ERP_PAGES.roles = function (host) {
     try {
       const r = await API.get('/roles');
       // 数据兜底：返回 null/undefined/非数组时一律降级为空数组，杜绝 .length/.map 崩溃
-      const rows = Array.isArray(r && r.data) ? r.data : [];
-      console.log('[roles] 角色列表加载成功，共', rows.length, '个角色:', r);
+      const rowsRaw = Array.isArray(r && r.data) ? r.data : [];
+      // ★ 前端过滤：只展示超级管理员（角色管理暂时只暴露超级管理员一个入口）
+      const rows = rowsRaw.filter((x) =>
+        (x.role_code === 'super_admin') || (x.role_name && x.role_name.includes('超级管理员'))
+      );
+      console.log('[roles] 角色列表加载成功，共', rowsRaw.length, '个角色，过滤后展示', rows.length, '个:', r);
       body.innerHTML = rows.length
         ? rows.map(rowHtml).join('')
         : '<tr><td colspan="5" class="empty">暂无角色</td></tr>';
@@ -102,11 +106,11 @@ window.ERP_PAGES.roles = function (host) {
     const scopeTag = r.data_scope === 'self' ? '<span class="badge">仅本人数据</span>' : '';
     return `<tr class="${currentRole && currentRole.role_id === r.role_id ? 'active-row' : ''}">
       <td class="role-name">${escapeHtml(r.role_name)} ${sysTag}${readonlyTag}${scopeTag}</td>
-      <td class="role-desc" title="${escapeHtml(r.description || '')}">${escapeHtml(r.description || '')}</td>
+      <td class="role-desc">${escapeHtml(r.description || '')}</td>
       <td class="num">${r.user_count}</td>
       <td class="num">${isSuper ? '全部' : r.menu_count}</td>
       <td class="ops">
-        <div style="display:flex;flex-direction:row;gap:6px;justify-content:flex-start;align-items:center;white-space:nowrap;">
+        <div style="display:flex;flex-direction:row;gap:8px;justify-content:center;align-items:center;white-space:nowrap;flex-wrap:nowrap;">
           <button id="perm_${r.role_id}">分配权限</button>
           <button id="redit_${r.role_id}">编辑</button>
           ${r.is_system ? '' : `<button id="rdel_${r.role_id}" class="danger">删除</button>`}

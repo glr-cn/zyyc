@@ -376,19 +376,19 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
 /* ============================================================
    RBAC：角色权限页 / 权限树 / 403 拦截页
    ------------------------------------------------------------
-   ★ 2026-11-18 重写：上次把 .roles-left .grid 设成 display:flex
-     直接破坏了原生 <table> 布局模型（thead/tbody/tr/td 全变 flex item），
-     导致表格被挤压成竖排、文字换行。这次彻底修正：
-       - table 保持原生 display:table
-       - 列宽由 colgroup（roles.js 模板里）+ table-layout:fixed 锁定
-       - 不手动控制 tbody 滚动，让 table 自然撑满 card
+   ★ 2026-11-18 重写 v2：
+     - 左栏 600px + table-layout:fixed + colgroup 锁定列宽
+     - th 单独 nowrap（防止短表头如「用户数」被挤压成竖排）
+     - 描述列 td.role-desc：允许正常换行 + 小字号 + 固定列宽撑不破
+     - 其余 td 保持 nowrap
+     - 操作列按钮 inline style + CSS !important 双重强制横排
    ============================================================ */
 .roles-layout {
   display: flex; gap: 16px;
   height: calc(100vh - 140px); min-height: 520px;
 }
 .roles-left {
-  flex: 0 0 500px; width: 500px;
+  flex: 0 0 600px; width: 600px;
   display: flex; flex-direction: column;
 }
 .roles-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
@@ -396,36 +396,55 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 14px; box-sizing: border-box;
   display: flex; flex-direction: column;
-  overflow: hidden;  /* 关键：card 裁剪内部溢出，不生成页面级滚动条 */
 }
-.roles-layout .roles-left.card { overflow-y: auto; }  /* 左栏 card 本身可滚 */
+.roles-layout .roles-left.card { overflow-y: auto; }
 
 /* 左侧角色表格：table-layout:fixed 强制按 colgroup 列宽分配，拒绝内容挤压 */
 .roles-table {
   table-layout: fixed;
   width: 100%;
-  flex: 0 0 auto;   /* table 不要 flex-grow，让内容自然撑 */
+  flex: 0 0 auto;
   border-collapse: collapse;
 }
-.roles-table th, .roles-table td {
-  white-space: nowrap;          /* ★ 关键：拒绝所有单元格自动换行 */
+/* ★ 表头单独 nowrap：防止「用户数」「菜单数」这种短表头被挤压成竖排 */
+.roles-table th {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 9px 10px;
+  text-align: center;
+}
+/* ★ 绝大多数 td 仍然 nowrap：角色名称/用户数/菜单数/操作列 都不换行 */
+.roles-table td {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 9px 10px;
 }
-/* 描述列：单行省略号 + hover tooltip（title 属性已加在 td 上） */
-.roles-table td.role-desc { text-align: left; }
-/* 角色名称列也单行省略 */
+/* 角色名称列：左对齐 + 单行省略 */
 .roles-table td.role-name { text-align: left; }
-/* 操作列：按钮已经 inline style flex nowrap，这里只保证 td 不挤压 */
-.roles-table td.ops { white-space: nowrap; }
-/* 操作列内按钮行：强制横排不换行（rowHtml 已 inline style，这里兜底） */
-.roles-table td.ops > div { display: flex !important; flex-direction: row !important; gap: 6px !important;
-  justify-content: flex-start !important; align-items: center !important;
-  white-space: nowrap !important; flex-wrap: nowrap !important; }
-.roles-table td.ops button { margin-right: 0; }  /* 覆盖 .grid .ops button 的 margin-right */
+/* ★★ 描述列：允许正常换行 + 小字号 + 固定列宽撑不破
+   colgroup 已锁定 width:200px，table-layout:fixed 下列宽不会被撑破 */
+.roles-table td.role-desc {
+  white-space: normal !important;  /* 恢复正常换行，覆盖 td 的 nowrap */
+  overflow: hidden;                 /* 但超宽内容仍隐藏（table-layout:fixed 兜底） */
+  text-overflow: clip;              /* 不用省略号，因为已经换行了 */
+  font-size: 12px;
+  color: #666;
+  line-height: 1.5;
+  text-align: left;
+  vertical-align: top;              /* 多行描述从顶部开始，不垂直居中 */
+}
+/* 操作列：按钮已经 inline style flex，这里保证 td 不挤压 + 按钮强制横排居中 */
+.roles-table td.ops > div {
+  display: flex !important; flex-direction: row !important;
+  gap: 8px !important; justify-content: center !important;
+  align-items: center !important;
+  white-space: nowrap !important; flex-wrap: nowrap !important;
+}
+.roles-table td.ops button { margin-right: 0; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
 
-/* 工具栏：flex:0 不被压缩 */
+/* 工具栏 + 表格都 flex:0，不伸缩 */
 .roles-left .toolbar { flex: 0 0 auto; margin-bottom: 10px; }
 
 /* 右栏 card 的 flex column 子项 */
@@ -437,7 +456,7 @@ h3 { font-size: 15px; margin: 18px 0 10px; }
 .ptree-panel {
   border: 1px solid var(--line); border-radius: 8px;
   padding: 10px 14px;
-  flex: 1 1 auto; min-height: 0;   /* min-height:0 是 flex item 能缩小的关键 */
+  flex: 1 1 auto; min-height: 0;
   overflow-y: auto;
   font-size: 14px; background: var(--bg);
 }
