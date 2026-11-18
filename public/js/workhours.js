@@ -39,22 +39,20 @@ function createWorkhoursPage(warehouse) {
         { key: 'cartons', label: '箱数', num: true },
         { key: 'tons', label: '吨', num: true }, { key: 'cubic', label: '方', num: true }, { key: 'pallets', label: '托盘', num: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
-        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' },
         { key: 'submitter', label: '提交人' },
         // 已隐藏冗余列：unit/效率/单据成本（仅 UI 层删，后端数据 calc 不变）
+        // ★ 公摊工时不在录入 UI 展示：仅由经营看板后端按库内工时自动分摊，禁止手动输入（提交省略字段，后端默认 0）
       ],
       库内: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true }, { key: 'unit', label: '单位' },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
-        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
         { key: 'submitter', label: '提交人' },
       ],
       后勤: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
-        { key: 'shared_hours', label: '公摊工时', num: true },
         { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
         { key: 'submitter', label: '提交人' },
       ],
@@ -296,7 +294,7 @@ function createWorkhoursPage(warehouse) {
         tempId: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
         work_id: 0, filled: 1, status: 'pending', submitter: null, submit_time: null,
         warehouse: state.warehouse, work_type: type, date: today, suggest_date: today, need_backfill: 0,
-        remark: '', main_hours: '', other_hours: '', shared_hours: '', total_hours: '', efficiency: '',
+        remark: '', main_hours: '', other_hours: '', total_hours: '', efficiency: '',
       };
       if (type === '发货' || type === '收货') {
         base.customer_id = ''; base.customer_name = ''; base.customer_status = '启用';
@@ -590,17 +588,16 @@ function createWorkhoursPage(warehouse) {
 
     // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
-    // 公摊工时列 84：★ 需求一新增（收货/库内/后勤），与主工时列同宽
+    // ★ 公摊工时列已从录入 UI 移除（仅看板自动分摊），列宽表恢复原状
     // 发货：勾选34 / 日期124 / 客户150 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注116 / 提交人72 / 操作96
-    // 收货：日期124 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主78 / 其他84 / 公摊84 / 备注116 / 提交人72 / 操作96（无勾选列）
-    // 库内：日期124 / 项目200 / 单位62 / 主78 / 其他84 / 公摊84 / 备注116 / 总工时? / 提交人72 / 操作96
-    // 后勤：日期124 / 项目200 / 主78 / 其他84 / 公摊84 / 备注116 / 总工时? / 提交人72 / 操作96
-    // 注：库内/后勤的「总工时」列为实时计算展示列，随 colgroup 空分配均分宽度
+    // 收货：日期124 / 客户180 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注116 / 提交人72 / 操作96（无勾选列）
+    // 库内：日期124 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注116 / 总工时96 / 提交人72 / 操作96
+    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注116 / 总工时96 / 提交人72 / 操作96
     const INLINE_WIDTHS = {
       发货: [34, 124, 150, 62, 80, 78, 72, 84, 116, 72, 96],
-      收货: [124, 180, 80, 72, 72, 80, 78, 84, 84, 116, 72, 96],
-      库内: [124, 200, 62, 78, 84, 84, 116, 96, 72, 96],
-      后勤: [124, 200, 78, 84, 84, 116, 96, 72, 96],
+      收货: [124, 180, 80, 72, 72, 80, 78, 84, 116, 72, 96],
+      库内: [124, 200, 62, 78, 84, 116, 96, 72, 96],
+      后勤: [124, 200, 78, 84, 116, 96, 72, 96],
     };
 
     function renderHead() {
@@ -676,7 +673,9 @@ function createWorkhoursPage(warehouse) {
     function projectOptions(type, sel, placeholder) {
       const ph = placeholder || '—';
       const list = PROJECT_OPTIONS[type] || [];
-      return `<option value="" ${!sel ? 'selected' : ''}>${escapeHtml(ph)}</option>`
+      // ★ 需求二：占位项 disabled + hidden —— 下拉列表只显示实际可选项（上架/补货…），
+      //   占位文字不可点击选中；未选择时闭合框显示占位文字（配合 required + :invalid 呈灰色）
+      return `<option value="" disabled${!sel ? ' selected' : ''} hidden>${escapeHtml(ph)}</option>`
         + list.map((p) => `<option value="${escapeAttr(p)}" ${p === sel ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('');
     }
 
@@ -754,12 +753,12 @@ function createWorkhoursPage(warehouse) {
             else if (r.customer_status === '停用') tag = ' <span class="cust-tag cust-tag-stop">(已停用)</span>';
             return `<td>${escapeHtml(r.customer_name || '')}${tag}</td>`;
           }
-          // —— 项目（库内/后勤）：下拉框；必填项加 placeholder 必填标记
+          // —— 项目（库内/后勤）：下拉框；必填项用占位提示（占位项 disabled+hidden 不可选中）
           if (col.key === 'project') {
             const type = state.workType;
-            const ph = (type === '库内' || type === '后勤') ? '* 请选择项目（必填）' : '—';
+            const ph = (type === '库内' || type === '后勤') ? '请选择项目（必填）' : '—';
             // 名称列（项目）内容靠左对齐（表头仍居中）
-            return `<td class="wh-name-cell"><select data-if="project" class="wh-cell-sel">${projectOptions(type, r.project || '', ph)}</select></td>`;
+            return `<td class="wh-name-cell"><select data-if="project" class="wh-cell-sel"${(type === '库内' || type === '后勤') ? ' required' : ''}>${projectOptions(type, r.project || '', ph)}</select></td>`;
           }
           // —— 单位（发货/收货/库内）：下拉；后勤没有此列
           if (col.key === 'unit') {
@@ -773,8 +772,6 @@ function createWorkhoursPage(warehouse) {
             return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="${escapeAttr(ph)}"></td>`;
           }
           if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
-          // ★ 需求一：公摊工时从弹窗迁移到行内输入（收货/库内/后勤；后端 calcRow 用它算总工时/单据成本）
-          if (col.key === 'shared_hours') return `<td><input data-if="shared_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.shared_hours)}" placeholder="公摊"></td>`;
           // —— 发货专属
           if (col.key === 'ship_orders') return `<td><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
           // —— 收货专属
@@ -959,10 +956,10 @@ function createWorkhoursPage(warehouse) {
       // 备注：trim 后真空 → null（后端 CREATE TABLE remark TEXT DEFAULT NULL 口径）
       const remark = (val('remark') || '').trim();
       base.remark = remark || null;
-      // 工时通用（★ 公摊工时改为行内输入取数，后端 calcRow 依此算总工时/单据成本）
+      // 工时通用（★ 公摊工时不在录入 UI 输入：提交省略该字段，后端默认 0 / PUT 保留旧值；
+      //   看板公摊由后端按库内工时自动分摊，禁止手动输入）
       base.main_hours = Number(val('main_hours')) || 0;
       base.other_hours = Number(val('other_hours')) || 0;
-      base.shared_hours = Number(val('shared_hours')) || 0;
 
       if (type === '发货' || type === '收货') {
         if (type === '收货') {
@@ -1023,8 +1020,6 @@ function createWorkhoursPage(warehouse) {
         const dateEl = el('date'); if (dateEl) row.date = dateEl.value || row.date;
         const mainEl = el('main_hours'); if (mainEl) row.main_hours = mainEl.value === '' ? '' : Number(mainEl.value);
         const otherEl = el('other_hours'); if (otherEl) row.other_hours = otherEl.value === '' ? '' : Number(otherEl.value);
-        // ★ 公摊工时：行内输入值回写草稿，重渲染不丢
-        const sharedEl = el('shared_hours'); if (sharedEl) row.shared_hours = sharedEl.value === '' ? '' : Number(sharedEl.value);
         const remarkEl = el('remark'); if (remarkEl) row.remark = remarkEl.value || '';
         // 项目（仅库内/后勤有此列）
         const projEl = el('project'); if (projEl) row.project = projEl.value || null;
@@ -1063,12 +1058,10 @@ function createWorkhoursPage(warehouse) {
             ? (Math.round((cartons / main + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
         }
         if (type === '库内' || type === '后勤') {
-          // ★ 总工时 = 主 + 其他 + 公摊（行内实时计算）
-          const shared = Number(val('shared_hours')) || 0;
-          const total = main + other + shared;
+          // 总工时 = 主 + 其他（公摊不在录入 UI 展示，由看板后端自动分摊）
           const out = tr.querySelector('[data-out="total_hours"]');
-          if (out) out.textContent = total > 0
-            ? (Math.round((total + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
+          if (out) out.textContent = (main + other) > 0
+            ? (Math.round((main + other + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
         }
       };
       const resetRow = () => {
@@ -1293,7 +1286,7 @@ function createWorkhoursPage(warehouse) {
       }
       fields.push(`<label>主工时(小时)<input id="f_main" type="number" step="0.001" min="0" value="${cur.main_hours != null ? cur.main_hours : 0}"></label>`);
       fields.push(`<label>其他工时(小时)<input id="f_other" type="number" step="0.001" min="0" value="${cur.other_hours != null ? cur.other_hours : 0}"></label>`);
-      fields.push(`<label>公摊工时(小时)<input id="f_shared" type="number" step="0.001" min="0" value="${cur.shared_hours != null ? cur.shared_hours : 0}"></label>`);
+      // ★ 公摊工时不在编辑弹窗展示：仅由经营看板后端自动分摊，禁止手动输入（PUT 省略字段 → 后端保留旧值）
       fields.push(`<label class="full">备注<textarea id="f_remark" rows="2">${escapeHtml(cur.remark || '')}</textarea></label>`);
 
       const modal = document.createElement('div');
@@ -1339,8 +1332,8 @@ function createWorkhoursPage(warehouse) {
       function preview() {
         const m = Number(modal.querySelector('#f_main').value) || 0;
         const o = Number(modal.querySelector('#f_other').value) || 0;
-        const s = Number(modal.querySelector('#f_shared').value) || 0;
-        const total = Math.round((m + o + s + Number.EPSILON) * 1000) / 1000;
+        // 总工时 = 主 + 其他（公摊不在弹窗展示，由看板后端自动分摊）
+        const total = Math.round((m + o + Number.EPSILON) * 1000) / 1000;
         modal.querySelector('#f_total').textContent = total.toFixed(3);
         let extra = '';
         if (workType === '发货') {
@@ -1356,7 +1349,7 @@ function createWorkhoursPage(warehouse) {
         }
         modal.querySelector('#f_extra').innerHTML = extra;
       }
-      ['#f_main', '#f_other', '#f_shared', '#f_ship', '#f_cartons'].forEach((sel) => { const el = modal.querySelector(sel); if (el) el.oninput = preview; });
+      ['#f_main', '#f_other', '#f_ship', '#f_cartons'].forEach((sel) => { const el = modal.querySelector(sel); if (el) el.oninput = preview; });
       preview();
 
       // ★ 修复：readonly「查看」模式下 saveBtn 已被移除，必须判空再绑定（否则点击查看即抛 TypeError）
@@ -1368,7 +1361,6 @@ function createWorkhoursPage(warehouse) {
           date: modal.querySelector('#f_date').value,
           main_hours: modal.querySelector('#f_main').value,
           other_hours: modal.querySelector('#f_other').value,
-          shared_hours: modal.querySelector('#f_shared').value,
           remark: (modal.querySelector('#f_remark').value || '').trim() || null,
         };
         if (workType === '发货' || workType === '收货') {
