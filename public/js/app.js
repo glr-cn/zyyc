@@ -141,4 +141,19 @@
     await ERP_CLOUD.refreshSession();
     renderCloudState();
   })();
+
+  // ---------- 全局 Escape 关闭弹窗 ----------
+  // 覆盖所有 modal-overlay（7 个文件、19 处弹窗：errAlert / confirmDialog / openImportConfirm / 编辑弹窗等）
+  // 策略：优先触发弹窗内的 .close 按钮 click（复用已有关闭逻辑：清理状态、移除 overlay），
+  // 没有 .close 按钮（如 confirmDialog 的 confirmOnly 模式）就直接 remove()
+  // 嵌套弹窗处理：querySelectorAll 后取最后一个（DOM 中最后 appendChild 的 = 最上层）
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const overlays = document.querySelectorAll('.modal-overlay');
+    if (!overlays.length) return;
+    const top = overlays[overlays.length - 1];
+    const closeBtn = top.querySelector('.close');
+    if (closeBtn) closeBtn.click();
+    else top.remove();
+  });
 })();
