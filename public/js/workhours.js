@@ -594,46 +594,29 @@ function createWorkhoursPage(warehouse) {
       } catch (ex) { errAlert('批量提交失败', friendlyErrMsg(ex)); }
     }
 
-    // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
-    // 【修复】区分 pending 冲突（可覆盖/跳过）与 archived 冲突（强制禁止导入）
-    // 【路径1 改造】按 blockedCnt 占比分三种场景渲染底部按钮：
-    //   1) allBlocked（全部命中归档）→ 隐藏确认导入，给引导按钮（换仓/去列表修正/关闭）
-    //   2) 有部分 blocked → 保留确认导入 + warn 提示"自动跳过 X 行归档冲突"
-    //   3) 无 blocked → 历史行为
+    // 导入确认弹窗：前端只展示三态预览结果，后端自主判定规则 1-4
+    // 行级标签：create=新增 / skip_exact=完全相同·跳过 / overwrite=有差异·覆盖
+    // 底部两个按钮：取消 + 导入。不传 decisions/forceArchive，后端自己做 PRECHECK
     function openImportConfirm(ctx) {
       const { rows, errors, preview } = ctx;
-      const blockedCnt = preview.archivedConflictCount || rows.filter((r) => r.archived_conflict).length;
-      const dupCnt = (preview.duplicateCount || rows.filter((r) => r.duplicate).length) - blockedCnt;
-      const newCnt = rows.length - blockedCnt - dupCnt;
-      const allBlocked = blockedCnt > 0 && blockedCnt === rows.length;
-      const hasArchived = blockedCnt > 0;
+      const stats = preview.stats || { create: 0, skip_exact: 0, overwrite: 0 };
 
       const rowsHtml = rows.map((r) => {
-        const blocked = r.archived_conflict;
-        const dup = r.duplicate && !blocked;
+        const act = r.action; // 'create' | 'skip_exact' | 'overwrite'
         const ex = r.existing;
-        let decideHtml;
-        if (blocked) {
-          decideHtml = `<span class="imp-blocked-tag">已归档 · 禁止导入</span>`;
-        } else if (dup) {
-          decideHtml = `<div class="imp-decide">
-            <label><input type="radio" name="dec_${r.line}" value="skip" checked><span>跳过</span></label>
-            <label><input type="radio" name="dec_${r.line}" value="overwrite"><span>覆盖</span></label>
-          </div>`;
-        } else {
-          decideHtml = `<span class="imp-new-tag">新增</span>`;
-        }
-        const existTxt = ex ? `已有：${ex.ship_orders} 单 / ${ex.main_hours}h（${ex.status === 'archived' ? '已归档' : '待提交'}）` : '';
-        return `<tr class="${blocked ? 'imp-blocked' : (dup ? 'imp-dup' : '')}">
+        let tag, cls;
+        if (act === 'skip_exact') { tag = '完全相同·跳过'; cls = 'imp-skip-exact'; }
+        else if (act === 'overwrite') { tag = '有差异·覆盖'; cls = 'imp-overwrite'; }
+        else { tag = '新增'; cls = 'imp-create'; }
+        const existTxt = ex ? `已有：${ex.ship_orders || 0} 单 / ${ex.main_hours || 0}h（已归档）` : '';
+        return `<tr class="imp-${act}">
           <td>${r.line}</td>
           <td>${escapeHtml(r.date)}</td>
           <td>${escapeHtml(r.customer_name)}</td>
           <td>${r.ship_orders}</td>
           <td>${r.main_hours}</td>
-          <td>${blocked
-            ? '<span class="cust-tag cust-tag-stop">归档冲突</span> ' + escapeHtml(existTxt)
-            : (dup ? '<span class="cust-tag cust-tag-warn">待提交重复</span> ' + escapeHtml(existTxt) : '<span class="imp-new-tag-empty">—</span>')}</td>
-          <td>${decideHtml}</td>
+          <td>${existTxt ? '<span class="cust-tag cust-tag-warn">归档</span> ' + escapeHtml(existTxt) : '—'}</td>
+          <td><span class="imp-action-tag ${cls}">${tag}</span></td>
         </tr>`;
       }).join('');
 
@@ -651,24 +634,13 @@ function createWorkhoursPage(warehouse) {
           </div>
           <div class="modal-body">
             <div class="imp-alert">
-              <b>注意：</b>
-              ${blockedCnt
-                ? `<span style="color:#c23a1b"><b>${blockedCnt} 行已归档冲突，导入时将被强制跳过，无法覆盖。</b></span>`
-                : `重复行请逐条选择「覆盖」或「跳过」，未选择时默认 <b style="color:#b26a00">跳过</b>。`}
-              确认导入后，后端将在单个数据库事务内写入，任意一行失败则整体回滚。
+              后端已检测出数据状态，导入操作将在单个事务内完成，任意一行失败则整体回滚。
             </div>
             <div class="imp-summary">
               <span>共 <span class="cnt">${rows.length}</span> 行</span>
-              ${blockedCnt ? `<span>归档冲突 <span class="cnt cnt-dup">${blockedCnt}</span> 行</span>` : ''}
-              ${dupCnt ? `<span>待提交重复 <span class="cnt cnt-dup">${dupCnt}</span> 行</span>` : ''}
-              <span>新增 <span class="cnt cnt-new">${newCnt}</span> 行</span>
-              ${blockedCnt
-                ? `<span class="muted">归档冲突行已被系统锁定，无法覆盖，请调整 Excel 数据后重新导入</span>`
-                : `<span class="muted">重复行默认跳过，可在表格内改为覆盖</span>`}
-              ${dupCnt && !blockedCnt ? `<span style="margin-left:auto;display:inline-flex;gap:6px">
-                <button type="button" class="imp-batch" data-batch="skip">全部跳过</button>
-                <button type="button" class="imp-batch" data-batch="overwrite">全部覆盖</button>
-              </span>` : ''}
+              ${stats.create ? `<span>新增 <span class="cnt cnt-new">${stats.create}</span> 行</span>` : ''}
+              ${stats.skip_exact ? `<span>完全相同 <span class="cnt cnt-skipexact">${stats.skip_exact}</span> 行</span>` : ''}
+              ${stats.overwrite ? `<span>有差异需覆盖 <span class="cnt cnt-overwrite">${stats.overwrite}</span> 行</span>` : ''}
             </div>
             <div class="imp-grid-wrap">
               <table class="imp-grid">
@@ -678,39 +650,17 @@ function createWorkhoursPage(warehouse) {
                   <th>客户名称</th>
                   <th style="width:90px">发货单量</th>
                   <th style="width:90px">主工时</th>
-                  <th>重复提示</th>
-                  <th style="width:150px">处理方式</th>
+                  <th>归档记录</th>
+                  <th style="width:140px">处理方式</th>
                 </tr></thead>
                 <tbody>${rowsHtml}</tbody>
               </table>
             </div>
             ${errHtml}
           </div>
-          <div class="modal-foot" style="flex-wrap:wrap;gap:8px">
-            <button type="button" class="imp-cancel">${allBlocked ? '关闭' : '取消'}</button>
-            ${allBlocked && state.isSuper ? `
-              <label class="imp-force-archived" style="align-self:center;font-size:12px;color:#c23a1b;cursor:pointer;margin-left:16px">
-                <input type="checkbox" id="forceArchiveChk" style="margin-right:4px">
-                我知道这将强制覆盖 ${blockedCnt} 行已归档数据（DELETE 旧行 + INSERT 新行），请确认
-              </label>
-              <button type="button" class="primary imp-ok" style="display:none;background:#e74c3c;border-color:#e74c3c;color:#fff;margin-left:auto">确认覆盖已归档</button>
-              <button type="button" class="imp-go-list" style="margin-left:8px;background:#67c23a;border-color:#67c23a;color:#fff">去列表查看已归档</button>
-              <button type="button" class="imp-go-other" style="background:#409eff;border-color:#409eff;color:#fff">换个仓库重导</button>
-            ` : allBlocked ? `
-              <button type="button" class="imp-go-list" style="margin-left:auto;background:#67c23a;border-color:#67c23a;color:#fff">去列表查看已归档</button>
-              <button type="button" class="imp-go-other" style="background:#409eff;border-color:#409eff;color:#fff">换个仓库重导</button>
-            ` : hasArchived && state.isSuper ? `
-              <label class="imp-force-archived" style="align-self:center;font-size:12px;color:#c23a1b;cursor:pointer;margin-left:auto">
-                <input type="checkbox" id="forceArchiveChk" style="margin-right:4px">
-                同时强制覆盖 ${blockedCnt} 行已归档数据
-              </label>
-              <button type="button" class="primary imp-ok">确认导入</button>
-            ` : hasArchived ? `
-              <span class="imp-foot-warn" style="margin-left:auto;color:#c23a1b;font-size:12px;align-self:center">确认导入时将自动跳过 ${blockedCnt} 行归档冲突</span>
-              <button type="button" class="primary imp-ok">确认导入</button>
-            ` : `
-              <button type="button" class="primary imp-ok">确认导入</button>
-            `}
+          <div class="modal-foot">
+            <button type="button" class="imp-cancel">取消</button>
+            <button type="button" class="primary imp-ok" style="margin-left:auto">导入</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -720,91 +670,38 @@ function createWorkhoursPage(warehouse) {
       overlay.querySelector('.imp-cancel').onclick = close;
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
 
-      // allBlocked 场景引导按钮
-      if (allBlocked) {
-        const goList = overlay.querySelector('.imp-go-list');
-        const goOther = overlay.querySelector('.imp-go-other');
-        if (goList) goList.onclick = () => {
-          close();
-          // 切到已归档状态，方便用户找到这批已归档数据
-          const sel = $('statusFilter');
-          if (sel) { sel.value = 'archived'; sel.dispatchEvent(new Event('change')); }
-          toast('已切换到「已归档」视图，请在列表中找到对应数据进行修正');
-        };
-        if (goOther) goOther.onclick = () => {
-          close();
-          // 仓库下拉 focus，让用户直接选另一个仓
-          const wsel = $('warehouse');
-          if (wsel) { wsel.focus(); wsel.click(); }
-          toast('请选择另一个仓库后重新导入');
-        };
-        // 超管 allBlocked 场景：checkbox 控制 imp-ok 按钮显示
-        const chk = overlay.querySelector('#forceArchiveChk');
-        const impOk = overlay.querySelector('.imp-ok');
-        if (chk && impOk) {
-          chk.onchange = () => {
-            impOk.style.display = chk.checked ? '' : 'none';
-          };
-        }
-      }
-
-      // 批量操作：只影响 pending 冲突行，archived 冲突行强制 blocked 不可改
-      overlay.querySelectorAll('.imp-batch').forEach((btn) => {
-        btn.onclick = () => {
-          const target = btn.dataset.batch;   // 'skip' | 'overwrite'
-          rows.forEach((r) => {
-            if (!r.duplicate || r.archived_conflict) return; // 跳过归档冲突行
-            const input = overlay.querySelector(`input[name="dec_${r.line}"][value="${target}"]`);
-            if (input) input.checked = true;
-          });
-        };
-      });
-
-      // 只有渲染了 imp-ok 按钮才绑 handler（allBlocked 超管未勾 checkbox 时按钮隐藏，querySelector 仍能找到，但 display:none；
-      // 已删除的"非 allBlocked 不渲染"逻辑已经统一：现在三种场景都会渲染 imp-ok）
-      const impOk = overlay.querySelector('.imp-ok');
-      if (impOk) impOk.onclick = async () => {
-        // allBlocked 超管场景：没勾 checkbox → 按钮是 hidden 但仍能被点击（比如 Enter 键），需二次确认
-        const chk = overlay.querySelector('#forceArchiveChk');
-        const forceArchive = !!(chk && chk.checked);
-        if (allBlocked && !forceArchive) {
-          errAlert('请先确认', '请勾选「强制覆盖已归档数据」checkbox 后再提交');
-          return;
-        }
-        // 1) 收集 decisions（pending 冲突行才收集；archived 冲突行：forceArchive=1 时由后端 DELETE旧行+INSERT新行）
-        const decisions = {};
-        rows.forEach((r) => {
-          if (!r.duplicate || r.archived_conflict) return;
-          const sel = overlay.querySelector(`input[name="dec_${r.line}"]:checked`);
-          decisions[r.line] = sel ? sel.value : 'skip';
-        });
-        const fd = new FormData();
-        fd.append('file', ctx.file);
-        fd.append('decisions', JSON.stringify(decisions));
-
+      // 导入按钮 — 不传 decisions/forceArchive，后端自主判定规则 1-4
+      overlay.querySelector('.imp-ok').onclick = async () => {
         const btn = overlay.querySelector('.imp-ok');
-        btn.disabled = true; btn.textContent = forceArchive ? '强制覆盖中…' : 'Loading…';
+        btn.disabled = true; btn.textContent = '导入中…';
         try {
-          const url = '/workhours/import?warehouse=' + encodeURIComponent(state.warehouse) + (forceArchive ? '&forceArchive=1' : '');
-          const res = await API.upload(url, fd);
+          const fd = new FormData();
+          fd.append('file', ctx.file);
+          // 只传文件，不传 decisions、forceArchive — 后端自己做 PRECHECK
+          const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
           close();
-          const totalSuccess = (res.created || 0) + (res.overwritten || 0) + (res.force_overwritten || 0);
-          const skipped = res.skipped || 0;
-          const blocked2 = res.archived_blocked || 0;
-          const fo = res.force_overwritten || 0;
-          let msg = forceArchive
-            ? `已强制覆盖归档 ${fo} 条${res.created ? `，新增 ${res.created} 条` : ''}${res.overwritten ? `，覆盖待提交 ${res.overwritten} 条` : ''}`
-            : `成功导入并归档 ${totalSuccess} 条记录`;
-          if (!forceArchive) {
-            if (skipped) msg += `（跳过 ${skipped} 条待提交重复）`;
-            if (blocked2) msg += `，但有 ${blocked2} 条与已归档数据冲突已被拦截`;
-          }
+          // 规则 1/3/4：成功 → toast + 刷新
+          let msg = `已归档 ${res.created || 0} 行`;
+          if (res.overwritten) msg += `，覆盖 ${res.overwritten} 行`;
+          if (res.skip_exact) msg += `，跳过 ${res.skip_exact} 行（与归档完全一致）`;
           if (res.errors && res.errors.length) msg += `，忽略 ${res.errors.length} 行格式不匹配`;
           toast(msg);
-          if (res.warn) errAlert('导入完成', res.warn);
           state.page = 1; load();
         } catch (ex) {
-          btn.disabled = false; btn.textContent = forceArchive ? '确认覆盖已归档' : '确认导入';
+          btn.disabled = false; btn.textContent = '导入';
+          // 规则 2：全 skip_exact → 409 + code=IMPORT_ALL_EXACT_MATCH → 弹窗提示
+          if (ex.status === 409 && ex.code === 'IMPORT_ALL_EXACT_MATCH') {
+            close();
+            confirmDialog({
+              title: '所有数据均与已归档完全一致',
+              message: (ex.detail || ex.message || '').replace(/\n/g, '<br>') + '<br><br>本次导入未写入任何新数据。',
+              confirmText: '跳过',
+              cancelText: null,  // 规则 2：弹窗只提供「跳过」唯一选项（无取消按钮）
+              confirmOnly: true,
+            });
+            return;
+          }
+          // 其他错误 → 标准 errAlert
           errAlert('导入失败', friendlyErrMsg(ex));
         }
       };
