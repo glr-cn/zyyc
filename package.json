@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
+    "test": "node --test tests/",
     "migrate:logs": "node scripts/migrate_audit_logs.js",
     "verify:data": "node scripts/verify_data_integrity.js"
   },

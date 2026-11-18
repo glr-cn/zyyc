@@ -36,12 +36,19 @@ const API = {
   },
   // 非成功响应 → 解析后端 JSON 的 error；若响应不是 JSON（如网关 502 HTML 页），
   // 则带上 HTTP 状态码与响应片段，便于定位（替代笼统的「请求失败」）
+  // 结构化错误：Error 对象保留 status / code / detail / conflicts 字段，供业务层定制提示
   async _fail(res) {
     const text = await res.text().catch(() => '');
     let msg = '';
+    let code = '';
+    let detail = null;
+    let conflicts = null;
     try {
       const j = JSON.parse(text);
       msg = j.error || j.message || '';
+      code = j.code || '';
+      detail = j.detail || null;
+      conflicts = j.conflicts || null;
     } catch (e) { /* 响应不是 JSON */ }
     if (!msg) {
       const snippet = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -53,6 +60,9 @@ const API = {
     }
     const e = new Error(msg);
     e.status = res.status;
+    if (code) e.code = code;
+    if (detail) e.detail = detail;
+    if (conflicts) e.conflicts = conflicts;
     throw e;
   },
   async req(method, url, body) {

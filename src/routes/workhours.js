@@ -105,10 +105,20 @@ function checkUnique(workType, { warehouse, date, customer_id, customer_name, pr
 
   if (!row) return null;
 
-  const label = (workType === '发货')
+  const conflictLabel = (workType === '发货')
     ? (customer_name || ('客户ID=' + customer_id))
     : (project || '');
-  return `该${workType === '发货' ? '客户' : '项目'}「${label}」在 ${date} 已存在归档工时记录，请勿重复提交或请前往已归档列表修改。`;
+
+  // 结构化冲突详情：前端可直接读取日期 + 货主/项目名拼接用户友好消息
+  return {
+    code: 'DUPLICATE_ARCHIVED',
+    date: date,
+    shipper: (workType === '发货') ? conflictLabel : null,
+    project: (workType !== '发货') ? conflictLabel : null,
+    work_type: workType,
+    archived_work_id: row.work_id,
+    message: `该${workType === '发货' ? '客户' : '项目'}「${conflictLabel}」在 ${date} 已存在归档工时记录，请勿重复提交或请前往已归档列表修改。`,
+  };
 }
 
 
@@ -318,15 +328,16 @@ router.post('/archive', (req, res) => {
     for (const id of targetIds) {
       const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
       if (!row) continue;
-      const uqErr = checkUnique(workType, {
+      const uqDetail = checkUnique(workType, {
         warehouse: row.warehouse, date: row.date,
         customer_id: row.customer_id, customer_name: row.customer_name, project: row.project,
       });
-      if (uqErr) duplicates.push({ work_id: id, error: uqErr });
+      if (uqDetail) duplicates.push({ work_id: id, error: uqDetail.message, detail: uqDetail });
     }
     if (duplicates.length) {
       return res.status(409).json({
         error: '有 ' + duplicates.length + ' 条记录与已归档数据冲突，无法归档',
+        code: 'BATCH_DUPLICATE_ARCHIVED',
         conflicts: duplicates,
       });
     }
@@ -382,15 +393,16 @@ router.post('/batch-submit', (req, res) => {
     for (const id of allowed) {
       const row = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(id);
       if (!row) continue;
-      const uqErr = checkUnique(workType, {
+      const uqDetail = checkUnique(workType, {
         warehouse: row.warehouse, date: row.date,
         customer_id: row.customer_id, customer_name: row.customer_name, project: row.project,
       });
-      if (uqErr) duplicates.push({ work_id: id, error: uqErr });
+      if (uqDetail) duplicates.push({ work_id: id, error: uqDetail.message, detail: uqDetail });
     }
     if (duplicates.length) {
       return res.status(409).json({
         error: '有 ' + duplicates.length + ' 条记录与已归档数据冲突，无法提交',
+        code: 'BATCH_DUPLICATE_ARCHIVED',
         conflicts: duplicates,
       });
     }
@@ -425,11 +437,11 @@ router.post('/:id/submit', (req, res) => {
 
   // 单条提交归档前的唯一性校验
   if (old.work_type !== '收货') {
-    const uqErr = checkUnique(old.work_type, {
+    const uqDetail = checkUnique(old.work_type, {
       warehouse: old.warehouse, date: old.date,
       customer_id: old.customer_id, customer_name: old.customer_name, project: old.project,
     });
-    if (uqErr) return res.status(409).json({ error: uqErr });
+    if (uqDetail) return res.status(409).json({ error: uqDetail.message, code: uqDetail.code, detail: uqDetail });
   }
 
   const submitter = operatorName(req);
@@ -578,11 +590,11 @@ router.post('/', (req, res) => {
 
   // 唯一性校验（仅 autoArchive 才校验 archived 状态；pending 草稿允许同维度多条）
   if (autoArchive) {
-    const uqErr = checkUnique(workType, {
+    const uqDetail = checkUnique(workType, {
       warehouse: r.warehouse, date: r.date,
       customer_id: r.customer_id, customer_name: r.customer_name, project: r.project,
     });
-    if (uqErr) return res.status(409).json({ error: uqErr });
+    if (uqDetail) return res.status(409).json({ error: uqDetail.message, code: uqDetail.code, detail: uqDetail });
   }
 
   const info = db
@@ -677,11 +689,11 @@ router.put('/:id', (req, res) => {
   // 唯一性校验：编辑后若状态仍为 archived 或目标为 pending 但即将通过 archive 接口归档，
   // 这里先拦 archived 状态的重复冲突（archive 接口也会再校一次，双重保险）
   if (old.status === 'archived') {
-    const uqErr = checkUnique(workType, {
+    const uqDetail = checkUnique(workType, {
       warehouse: merged.warehouse, date: merged.date,
       customer_id: merged.customer_id, customer_name: merged.customer_name, project: merged.project,
     }, { excludeWorkId: old.work_id });
-    if (uqErr) return res.status(409).json({ error: uqErr });
+    if (uqDetail) return res.status(409).json({ error: uqDetail.message, code: uqDetail.code, detail: uqDetail });
   }
 
   db.prepare(

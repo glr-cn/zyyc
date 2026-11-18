@@ -116,6 +116,37 @@ function createWorkhoursPage(warehouse) {
       mask.addEventListener('click', (e) => { if (e.target === mask) btn.focus(); });
     }
 
+    // 将后端结构化错误（ex.status/code/detail/conflicts）转为用户友好消息
+    // 支持单条重复、批量重复、其他异常三种分支
+    function friendlyErrMsg(ex, fallbackMsg) {
+      // 分支1：单条 DUPLICATE_ARCHIVED —— 用 date + shipper 拼精确提示
+      if (ex && ex.code === 'DUPLICATE_ARCHIVED' && ex.detail) {
+        const d = ex.detail;
+        const label = d.shipper ? d.shipper : (d.project || '');
+        const whoType = d.shipper ? '货主' : (d.project ? '项目' : '');
+        const date = d.date || '';
+        if (label && whoType) {
+          return `当前提交失败：归档中已存在 ${date} 日期、${label} ${whoType}的对应数据，请核对后重新提交。`;
+        }
+      }
+      // 分支2：批量 BATCH_DUPLICATE_ARCHIVED —— 列出前几条冲突详情
+      if (ex && ex.code === 'BATCH_DUPLICATE_ARCHIVED' && ex.conflicts && ex.conflicts.length) {
+        const lines = ex.conflicts.slice(0, 3).map((c) => {
+          const d = c.detail || {};
+          const who = d.shipper || d.project || '';
+          const whoType = d.shipper ? '货主' : (d.project ? '项目' : '');
+          return `· ${d.date || ''}、${who} ${whoType}`;
+        });
+        const more = ex.conflicts.length > 3 ? `\n... 共 ${ex.conflicts.length} 条冲突` : '';
+        return `当前提交失败：归档中已存在以下数据，请核对后重新提交：\n${lines.join('\n')}${more}`;
+      }
+      // 分支3：带 detail 但 code 未知（兜底）
+      if (ex && ex.detail && ex.detail.message) return ex.detail.message;
+      // 分支4：纯 ex.message（其他 4xx/5xx）
+      if (ex && ex.message) return ex.message;
+      return fallbackMsg || '操作失败，请稍后重试';
+    }
+
     // 虚拟行屏蔽：超管「删除」缺口行时，把 customer_id + date 组合存入 localStorage；
     // 下次 load() 时对当前仓库的缺口行自动过滤。键按仓库隔离（不同仓屏蔽互不影响）。
     const GAP_BLOCK_KEY = 'erp_gap_block_v1';
@@ -499,7 +530,7 @@ function createWorkhoursPage(warehouse) {
         state.checked.clear();
         toast(`成功批量提交 ${n} 条记录，已自动跳过 ${y} 条未填写记录`);
         load();
-      } catch (ex) { errAlert('批量提交失败', ex.message); }
+      } catch (ex) { errAlert('批量提交失败', friendlyErrMsg(ex)); }
     }
 
     // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
@@ -1005,7 +1036,7 @@ function createWorkhoursPage(warehouse) {
         const btn = e.target; btn.disabled = true;
         API.post('/workhours/' + id + '/submit', { warehouse: state.warehouse, work_type: state.workType })
           .then(() => { alert('已提交归档'); load(); })
-          .catch((ex) => { btn.disabled = false; errAlert('提交失败', ex.message); });
+          .catch((ex) => { btn.disabled = false; errAlert('提交失败', friendlyErrMsg(ex)); });
         return;
       }
       // 撤回：archived → pending，撤回后回到「未归档」可继续行内编辑
@@ -1281,11 +1312,16 @@ function createWorkhoursPage(warehouse) {
             errDiv.className = 'row-inline-error';
             tr.appendChild(errDiv);
           }
-          errDiv.textContent = (archive ? '提交失败：' : '保存失败：') + (ex.message || ex);
+          const friendlyMsg = friendlyErrMsg(ex, ex.message || ex);
+          errDiv.textContent = (archive ? '提交失败：' : '保存失败：') + friendlyMsg;
           errDiv.style.display = 'block';
           // 5 秒后自动隐藏
           clearTimeout(tr.__errTimer);
           tr.__errTimer = setTimeout(() => { errDiv.style.display = 'none'; }, 5000);
+          // 提交场景（用户显式点击提交按钮）额外弹全局错误弹窗，确保用户必然注意到
+          if (archive) {
+            errAlert('提交失败', friendlyMsg);
+          }
           return false;
         } finally {
           tr.__saving = null;
@@ -1528,7 +1564,11 @@ function createWorkhoursPage(warehouse) {
         try {
           await API.put('/workhours/' + id, payload);
           modal.remove(); load();
-        } catch (ex) { errEl.textContent = ex.message; }
+        } catch (ex) {
+          // 弹窗编辑：同时在弹窗内和全局展示错误，重复冲突等关键错误强提醒
+          errEl.textContent = friendlyErrMsg(ex);
+          errAlert('保存失败', friendlyErrMsg(ex));
+        }
       };
     }
 
