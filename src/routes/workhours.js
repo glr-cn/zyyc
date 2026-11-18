@@ -208,7 +208,7 @@ router.get('/', (req, res) => {
       SELECT * FROM (
         SELECT w.work_id, w.warehouse, w.work_type, w.customer_id,
                COALESCE(cl.company_name, w.customer_name) AS customer_name,
-               w.unit, w.date, w.ship_orders, w.cartons, w.tons, w.cubic, w.pallets, w.project,
+               w.unit, w.date, w.ship_orders, w.cartons, w.tons, w.cubic, w.pallets, w.workload, w.project,
                w.main_hours, w.other_hours, w.shared_hours, w.total_hours,
                w.efficiency, w.unit_cost, w.doc_cost, w.remark, w.owner_user_id,
                w.status, w.submitter, w.submit_time,
@@ -219,7 +219,7 @@ router.get('/', (req, res) => {
         UNION ALL
         SELECT 0 AS work_id, ? AS warehouse, '发货' AS work_type, c.customer_id,
                c.company_name AS customer_name,   -- 与已填行 COALESCE(cl.company_name,...) 口径一致：填前填后名字不变
-               COALESCE(c.default_unit, '单') AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, '' AS project,
+               COALESCE(c.default_unit, '单') AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, NULL AS workload, '' AS project,
                0 AS main_hours, 0 AS other_hours, 0 AS shared_hours, 0 AS total_hours,
                0 AS efficiency, 0 AS unit_cost, 0 AS doc_cost, '' AS remark, c.owner_user_id,
                'pending' AS status, NULL AS submitter, NULL AS submit_time,
@@ -566,6 +566,7 @@ router.post('/', (req, res) => {
     tons: b.tons != null ? Number(b.tons) : null,
     cubic: b.cubic != null ? Number(b.cubic) : null,
     pallets: b.pallets != null ? Number(b.pallets) : null,
+    workload: b.workload != null && b.workload !== '' ? Number(b.workload) : null,
     project: b.project || null,
     main_hours: Number(b.main_hours) || 0,
     other_hours: Number(b.other_hours) || 0,
@@ -587,10 +588,10 @@ router.post('/', (req, res) => {
   const info = db
     .prepare(
       `INSERT INTO work_hours
-        (warehouse,work_type,customer_id,customer_name,unit,date,ship_orders,cartons,tons,cubic,pallets,project,
+        (warehouse,work_type,customer_id,customer_name,unit,date,ship_orders,cartons,tons,cubic,pallets,workload,project,
          main_hours,other_hours,shared_hours,total_hours,efficiency,unit_cost,doc_cost,remark,owner_user_id,status,
          submitter,submit_time)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                CASE WHEN ?='archived' THEN datetime('now','localtime') ELSE NULL END)`
     )
     .run(
@@ -600,6 +601,7 @@ router.post('/', (req, res) => {
       r.tons != null ? r.tons : null,
       r.cubic != null ? r.cubic : null,
       r.pallets != null ? r.pallets : null,
+      r.workload != null ? r.workload : null,
       r.project,
       r.main_hours, r.other_hours, r.shared_hours, r.total_hours,
       r.efficiency != null ? r.efficiency : null,
@@ -663,6 +665,7 @@ router.put('/:id', (req, res) => {
     tons: b.tons != null ? Number(b.tons) : old.tons,
     cubic: b.cubic != null ? Number(b.cubic) : old.cubic,
     pallets: b.pallets != null ? Number(b.pallets) : old.pallets,
+    workload: b.workload != null && b.workload !== '' ? Number(b.workload) : (b.workload === '' ? null : old.workload),
     project: b.project !== undefined ? b.project : old.project,
     main_hours: b.main_hours != null ? Number(b.main_hours) : old.main_hours,
     other_hours: b.other_hours != null ? Number(b.other_hours) : old.other_hours,
@@ -683,7 +686,7 @@ router.put('/:id', (req, res) => {
 
   db.prepare(
     `UPDATE work_hours SET
-      warehouse=?,work_type=?,customer_id=?,customer_name=?,unit=?,date=?,ship_orders=?,cartons=?,tons=?,cubic=?,pallets=?,project=?,
+      warehouse=?,work_type=?,customer_id=?,customer_name=?,unit=?,date=?,ship_orders=?,cartons=?,tons=?,cubic=?,pallets=?,workload=?,project=?,
       main_hours=?,other_hours=?,shared_hours=?,total_hours=?,efficiency=?,unit_cost=?,doc_cost=?,remark=?
      WHERE work_id=?`
   ).run(
@@ -693,6 +696,7 @@ router.put('/:id', (req, res) => {
     merged.tons != null ? merged.tons : null,
     merged.cubic != null ? merged.cubic : null,
     merged.pallets != null ? merged.pallets : null,
+    merged.workload != null ? merged.workload : null,
     merged.project,
     merged.main_hours, merged.other_hours, merged.shared_hours, merged.total_hours,
     merged.efficiency != null ? merged.efficiency : null,

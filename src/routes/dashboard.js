@@ -93,9 +93,10 @@ function wow(cur, prev) {
 }
 
 // ========== 库内"核心数量"选取规则 ==========
-// 优先 cartons → 再 pallets → 再 tons。绝不混加。
+// 优先 cartons → 再 workload（库内作业量）→ 再 pallets → 再 tons。绝不混加。
 function coreQty(row) {
   if (row.cartons != null && Number(row.cartons) > 0) return Number(row.cartons);
+  if (row.workload != null && Number(row.workload) > 0) return Number(row.workload);
   if (row.pallets != null && Number(row.pallets) > 0) return Number(row.pallets);
   if (row.tons != null && Number(row.tons) > 0)       return Number(row.tons);
   return 0;
@@ -113,7 +114,7 @@ function fetchArchivedRows({ req, warehouse, workType, startDate, endDate }) {
   clauses.push('date >= ?'); params.push(startDate);
   clauses.push('date <= ?'); params.push(endDate);
   const sql = `SELECT warehouse, work_type, customer_id, customer_name, project,
-                      unit, ship_orders, cartons, tons, cubic, pallets,
+                      unit, ship_orders, cartons, tons, cubic, pallets, workload,
                       main_hours, other_hours, shared_hours, date
                FROM work_hours WHERE ${clauses.join(' AND ')}`;
   return db.prepare(sql).all(...params);
@@ -374,7 +375,7 @@ function buildReceivingList({ req, warehouse, curStart, curEnd, prevStart, prevE
 }
 
 // ========== 库内组 ==========
-// 库内行没有单独 cartons 求和列——先按 project 聚合原始行，再对每行取 coreQty(cartons→pallets→tons) 然后求和
+// 库内行没有单独 cartons 求和列——先按 project 聚合原始行，再对每行取 coreQty(cartons→workload→pallets→tons) 然后求和
 function aggregateInternalByProject(rows) {
   const map = new Map();
   for (const r of rows) {
@@ -386,7 +387,7 @@ function aggregateInternalByProject(rows) {
     o.main_hours   += Number(r.main_hours)   || 0;
     o.other_hours  += Number(r.other_hours)  || 0;
     o.shared_hours += Number(r.shared_hours) || 0;
-    // 核心数量：cartons → pallets → tons（绝不变量混加）
+    // 核心数量：cartons → workload（库内作业量）→ pallets → tons（绝不变量混加）
     o.qty += coreQty(r);
   }
   return [...map.values()];

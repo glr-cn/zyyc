@@ -43,8 +43,8 @@ const TYPE_CONFIG = {
   },
   internal: {
     label: '库内工时',
-    fields: ['project', 'date', 'unit', 'main_hours', 'other_hours', 'remark'],
-    columns: ['date', 'project', 'unit', 'main_hours', 'other_hours', 'remark', 'total_hours'],
+    fields: ['project', 'date', 'unit', 'workload', 'main_hours', 'other_hours', 'remark'],
+    columns: ['date', 'project', 'unit', 'workload', 'main_hours', 'other_hours', 'remark'],
     trendKeys: [],
     calc: (r) => {
       r.total_hours = round3(Number(r.main_hours) + Number(r.other_hours) + Number(r.shared_hours));
@@ -155,6 +155,11 @@ function validateByType(name, b, db, opts = {}) {
       return '箱数/吨/方/托盘不得为负';
   } else if (name === '库内') {
     if (!b.project || !PROJECT_OPTIONS['库内'].includes(b.project)) return '项目非法（库内下拉项）';
+    // 作业量：可空；填了就必须是不小于 0 的数字
+    if (b.workload != null && b.workload !== '') {
+      const wl = Number(b.workload);
+      if (!Number.isFinite(wl) || wl < 0) return '作业量必须为不小于 0 的数字';
+    }
   } else if (name === '后勤') {
     if (!b.project || !PROJECT_OPTIONS['后勤'].includes(b.project)) return '项目非法（后勤下拉项）';
   }

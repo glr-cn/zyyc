@@ -46,9 +46,11 @@ function createWorkhoursPage(warehouse) {
       ],
       库内: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true }, { key: 'unit', label: '单位' },
+        { key: 'workload', label: '作业量', num: true },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
-        { key: 'remark', label: '备注' }, { key: 'total_hours', label: '总工时', num: true },
+        { key: 'remark', label: '备注' },
         { key: 'submitter', label: '提交人' },
+        // ★ 总工时列已从 UI 移除（派生值后端仍计算入库，仅展示层去掉）
       ],
       后勤: [
         { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true },
@@ -661,12 +663,12 @@ function createWorkhoursPage(warehouse) {
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
     // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作120
     // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120（无勾选列）
-    // 库内：日期124 / 项目200 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
+    // 库内：日期124 / 项目200 / 单位62 / 作业量80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120
     // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
     const INLINE_WIDTHS = {
       发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 120],
       收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 120],
-      库内: [124, 200, 62, 78, 84, 150, 96, 72, 120],
+      库内: [124, 200, 62, 80, 78, 84, 150, 72, 120],
       后勤: [124, 200, 78, 84, 150, 96, 72, 120],
     };
 
@@ -679,16 +681,14 @@ function createWorkhoursPage(warehouse) {
       if (table) table.classList.toggle('wh-inline-grid', inline);
       const cg = $('whColGroup');
       if (cg) {
-        if (inline && INLINE_WIDTHS[state.workType]) {
-          // 发货：精确列宽锁定（含勾选列 34 + 操作列 96）
-          const widths = INLINE_WIDTHS[state.workType];
-          cg.innerHTML = widths.map((w) => `<col style="width:${w}px">`).join('');
-        } else if (inline) {
-          // 收货/库内/后勤：空 colgroup + table-layout:fixed → 浏览器均分；后续可按需扩展
-          cg.innerHTML = '';
-        } else {
-          cg.innerHTML = '';
-        }
+        // ★ 列数一致性保护：colgroup 宽度项必须与「数据列 + 勾选列 + 操作列」完全一致，
+        //   否则多出的 <col> 会撑出一个空表头列（历史错位问题的根因）。不一致直接退回自动布局。
+        const ckCols = state.workType === '发货' && state.status === 'pending' ? 1 : 0;
+        const needCols = cols.length + ckCols + 1;
+        const widths = INLINE_WIDTHS[state.workType];
+        cg.innerHTML = (inline && widths && widths.length === needCols)
+          ? widths.map((w) => `<col style="width:${w}px">`).join('')
+          : '';
       }
       // 勾选列（仅发货 pending；其他类型批量提交按钮也未启用）
       const ck = state.workType === '发货' && state.status === 'pending'
@@ -835,7 +835,10 @@ function createWorkhoursPage(warehouse) {
             const defUnit = state.workType === '发货' ? (r.unit || r.default_unit || '单') : (r.unit || '单');
             return `<td><select data-if="unit" class="wh-cell-sel">${unitOptions(defUnit)}</select></td>`;
           }
-          // —— 发货/收货/库内/后勤：工时通用数字框
+          // —— 库内「作业量」：数字输入（可空；填了必须 >= 0，后端同步校验）
+          if (col.key === 'workload') {
+            return `<td><input data-if="workload" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.workload)}" placeholder="作业量"></td>`;
+          }
           // —— 发货/收货/库内/后勤：工时通用数字框；主工时对库内/后勤也是必填（与收货口径一致）
           if (col.key === 'main_hours')  {
             const ph = state.workType === '发货' ? '请输入主工时' : '* 主工时（必填）';
@@ -877,6 +880,8 @@ function createWorkhoursPage(warehouse) {
         }
         if (col.trend && trend) return trendCell(r[col.key], trend[col.key]);
         if (col.key === 'submitter') return `<td>${escapeHtml(r.submitter || '-')}</td>`;
+        // 作业量可空：未录入显示 "-"，避免误显示 0.000
+        if (col.key === 'workload') return `<td class="num">${r.workload != null ? num(r.workload) : '<span class="muted">-</span>'}</td>`;
         if (col.num) return `<td class="num">${num(r[col.key])}</td>`;
         if (col.key === 'customer_name') {
           const name = escapeHtml(r.customer_name == null ? '' : r.customer_name);
@@ -1066,6 +1071,9 @@ function createWorkhoursPage(warehouse) {
       }
       if (type === '库内') {
         base.unit = val('unit') || '单';
+        // 作业量：空 → null（后端可空），否则数值
+        const wlRaw = val('workload');
+        base.workload = String(wlRaw).trim() === '' ? null : Number(wlRaw);
       }
       return base;
     }
@@ -1102,6 +1110,8 @@ function createWorkhoursPage(warehouse) {
         const tonsEl = el('tons'); if (tonsEl) row.tons = tonsEl.value === '' ? '' : Number(tonsEl.value);
         const cubicEl = el('cubic'); if (cubicEl) row.cubic = cubicEl.value === '' ? '' : Number(cubicEl.value);
         const palletsEl = el('pallets'); if (palletsEl) row.pallets = palletsEl.value === '' ? '' : Number(palletsEl.value);
+        // 库内专属：作业量（可空，数字）
+        const wlEl = el('workload'); if (wlEl) row.workload = wlEl.value === '' ? null : Number(wlEl.value);
         // 收货客户：从 tr.dataset 读取（datalist 选择后维护）
         if (type === '收货') {
           const cid = tr.dataset.rowCid || '';
@@ -1127,8 +1137,8 @@ function createWorkhoursPage(warehouse) {
           if (out) out.textContent = (cartons > 0 && main > 0)
             ? (Math.round((cartons / main + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
         }
-        if (type === '库内' || type === '后勤') {
-          // 总工时 = 主 + 其他（公摊不在录入 UI 展示，由看板后端自动分摊）
+        if (type === '后勤') {
+          // 总工时 = 主 + 其他（库内已移除总工时列；公摊不在录入 UI 展示，由看板后端自动分摊）
           const out = tr.querySelector('[data-out="total_hours"]');
           if (out) out.textContent = (main + other) > 0
             ? (Math.round((main + other + Number.EPSILON) * 1000) / 1000).toFixed(3) : '-';
@@ -1175,6 +1185,14 @@ function createWorkhoursPage(warehouse) {
           if (!proj) missing.push('项目');
           if (!(main > 0)) missing.push('主工时');
           if (missing.length) { ok = false; hint = '请填写完整的必填项（日期、项目、主工时）'; }
+          // 作业量（仅库内，可空）：只允许不小于 0 的数字
+          if (ok && type === '库内') {
+            const wlRaw = String(val('workload')).trim();
+            if (wlRaw !== '') {
+              const wl = Number(wlRaw);
+              if (!Number.isFinite(wl) || wl < 0) { ok = false; hint = '作业量必须为不小于 0 的数字'; }
+            }
+          }
         } else if (type === '发货') {
           const ship = Number(val('ship_orders')) || 0;
           ok = (ship > 0) || (main > 0) || !!remark;
@@ -1354,7 +1372,10 @@ function createWorkhoursPage(warehouse) {
       }
       if (workType === '库内' || workType === '后勤') {
         fields.push(`<label>项目*<select id="f_project">${projOpts}</select></label>`);
-        if (workType === '库内') fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
+        if (workType === '库内') {
+          fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
+          fields.push(`<label>作业量<input id="f_workload" type="number" step="0.001" min="0" value="${cur.workload != null ? cur.workload : ''}"></label>`);
+        }
       }
       fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
       if (workType === '发货') fields.push(`<label>发货单量*<input id="f_ship" type="number" step="0.001" min="0" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
@@ -1451,6 +1472,10 @@ function createWorkhoursPage(warehouse) {
           payload.customer_name = opt ? opt.textContent.replace(/ \((已删除|已停用)\)$/, '') : sel.value;
         }
         if (workType === '库内' || workType === '后勤') payload.project = modal.querySelector('#f_project').value;
+        if (workType === '库内') {
+          const wlEl = modal.querySelector('#f_workload');
+          payload.workload = wlEl && String(wlEl.value).trim() !== '' ? Number(wlEl.value) : null;
+        }
         if (workType === '发货') payload.ship_orders = modal.querySelector('#f_ship').value;
         if (workType === '收货') {
           payload.cartons = modal.querySelector('#f_cartons').value;

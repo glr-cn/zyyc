@@ -137,6 +137,10 @@ require('./migrateWorkhoursStatus').run(_conn);
 // 幂等、全事务、迁移前后校验原有列指纹，失败即回滚阻止启动。
 require('./migrateWorkhoursSubmitter').run(_conn);
 
+// 库内「作业量」字段迁移：旧库补 work_hours.workload（可空，历史行保持 NULL）。
+// 幂等、全事务、迁移前后校验原有列指纹，失败即回滚阻止启动。
+require('./migrateWorkhoursWorkload').run(_conn);
+
 // customers.sort_order 字段迁移：旧库补 customers.sort_order（NOT NULL DEFAULT 9999），
 // 并按固定名单刷入排序号 1..38；名单外/未匹配保持默认 9999。幂等、全事务、失败即回滚。
 require('./migrateCustomersSortOrder').run(_conn);

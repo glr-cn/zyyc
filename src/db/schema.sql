@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS work_hours (
   tons           REAL,                          -- 吨（收货）
   cubic          REAL,                          -- 方（收货）
   pallets        REAL,                          -- 托盘（收货）
+  workload       REAL,                          -- 作业量（库内录入；可空，看板库内数量优先取它）
   project        TEXT,                          -- 项目（库内/后勤下拉）
   main_hours     REAL NOT NULL DEFAULT 0,        -- 主工时（小时）
   other_hours    REAL NOT NULL DEFAULT 0,        -- 其他工时（小时）
