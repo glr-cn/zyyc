@@ -45,8 +45,8 @@ function createWorkhoursPage(warehouse) {
         // ★ 公摊工时不在录入 UI 展示：仅由经营看板后端按库内工时自动分摊，禁止手动输入（提交省略字段，后端默认 0）
       ],
       库内: [
-        { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true }, { key: 'unit', label: '单位' },
-        { key: 'workload', label: '作业量', num: true },
+        { key: 'date', label: '日期' }, { key: 'project', label: '项目', left: true },
+        { key: 'workload', label: '作业量', num: true }, { key: 'unit', label: '单位' },
         { key: 'main_hours', label: '主工时', num: true }, { key: 'other_hours', label: '其他工时', num: true },
         { key: 'remark', label: '备注' },
         { key: 'submitter', label: '提交人' },
@@ -663,12 +663,12 @@ function createWorkhoursPage(warehouse) {
     // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
     // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作120
     // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120（无勾选列）
-    // 库内：日期124 / 项目200 / 单位62 / 作业量80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120
+    // 库内：日期124 / 项目200 / 作业量80 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作120
     // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作120
     const INLINE_WIDTHS = {
       发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 120],
       收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 120],
-      库内: [124, 200, 62, 80, 78, 84, 150, 72, 120],
+      库内: [124, 200, 80, 62, 78, 84, 150, 72, 120],
       后勤: [124, 200, 78, 84, 150, 96, 72, 120],
     };
 
@@ -1373,8 +1373,8 @@ function createWorkhoursPage(warehouse) {
       if (workType === '库内' || workType === '后勤') {
         fields.push(`<label>项目*<select id="f_project">${projOpts}</select></label>`);
         if (workType === '库内') {
-          fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
           fields.push(`<label>作业量<input id="f_workload" type="number" step="0.001" min="0" value="${cur.workload != null ? cur.workload : ''}"></label>`);
+          fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
         }
       }
       fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
