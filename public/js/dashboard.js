@@ -16,6 +16,7 @@ function dashboardPage(host) {
     startDate: _todayIso,
     endDate: _todayIso,
     data: null,
+    shipCurQty: 0, // 发货组本期总单量（供后勤组「单均成本」计算）
   };
 
   c.innerHTML = `
@@ -36,7 +37,7 @@ function dashboardPage(host) {
       <div class="db-sections">
         ${sectionHTML('shipping', '发货组')}
         ${sectionHTML('receiving', '收货组')}
-        ${sectionHTML('internal', '库内组')}
+        ${sectionHTML('internal', '库内组 (已公摊到发货组)')}
         ${sectionHTML('logistics', '后勤组')}
       </div>
     </div>
@@ -227,6 +228,7 @@ function dashboardPage(host) {
       return rowHTML(cells, cols);
     });
     const curQty = sumBy(list, 'cur_ship_qty');
+    state.shipCurQty = curQty; // 供后勤组「后勤单均成本」计算（renderLogistics 在其后调用）
     const prevQty = sumBy(list, 'prev_ship_qty');
     const curMain = sumBy(list, 'cur_main_hours');
     const prevMain = sumBy(list, 'prev_main_hours');
@@ -367,35 +369,34 @@ function dashboardPage(host) {
       { label: '本期工时', cls: 'num' },
       { label: '上期工时', cls: 'num' },
       { label: '工时环比', cls: 'num' },
-      { label: '本期金额(元)', cls: 'num' },
-      { label: '上期金额(元)', cls: 'num' },
-      { label: '金额环比', cls: 'num' },
+      { label: '后勤单均成本(元/单)', cls: 'num' },
     ];
+    // 发货组本期总单量（来自发货组汇总）；为 0 时显示 "-"，避免除零产生 NaN/Infinity
+    const shipQty = state.shipCurQty || 0;
+    // 行金额 = 工时单价 × 本期工时（金额列已从 UI 移除，但底层数据仍按行计算）
+    const rowAmt = (o) => (Number(o.cost_rate) || 0) * (Number(o.cur_total_hours) || 0);
     const rows = list.map(o => rowHTML([
       custCell(o.project),
       num2(o.cost_rate),
       num2(o.cur_total_hours),
       num2(o.prev_total_hours),
       wowCell(o.total_hours_wow),
-      num2(o.cur_cost),
-      num2(o.prev_cost),
-      wowCell(o.cost_wow),
+      shipQty > 0 ? num3(rowAmt(o) / shipQty) : '<span class="muted">-</span>',
     ], cols));
     const curHours = sumBy(list, 'cur_total_hours');
     const prevHours = sumBy(list, 'prev_total_hours');
-    const curCost = sumBy(list, 'cur_cost');
-    const prevCost = sumBy(list, 'prev_cost');
+    // 后勤组本期总金额 = Σ(每行工时单价 × 本期工时)
+    const curAmt = list.reduce((s, o) => s + rowAmt(o), 0);
     // 工时单价是比率，不能求和：按「总金额 / 总工时」加权，无工时显示 "-"
-    const avgRate = (curHours > 0 && curCost > 0) ? curCost / curHours : null;
+    const avgRate = (curHours > 0 && curAmt > 0) ? curAmt / curHours : null;
     const summary = [
       '后勤汇总',
       avgRate == null ? '<span class="muted">-</span>' : num2(avgRate),
       num2(curHours),
       num2(prevHours),
       wowCell(ratioWow(curHours, prevHours)),
-      num2(curCost),
-      num2(prevCost),
-      wowCell(ratioWow(curCost, prevCost)),
+      // 汇总行单均成本 = 汇总金额 / 发货组总单量（3 位小数，不累加各行的单均成本）
+      shipQty > 0 ? num3(curAmt / shipQty) : '<span class="muted">-</span>',
     ];
     $('db-logistics').innerHTML = dbTableHTML(cols, rows, '暂无后勤归档数据', summary);
   }
@@ -429,7 +430,7 @@ function dashboardPage(host) {
     const shipHeader = ['客户名称','本期单量','上期单量','单量环比','本期发货工时','上期发货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单均成本(元)'];
     const recvHeader = ['客户名称','本期箱数','上期箱数','箱数环比','本期收货工时','上期收货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单箱成本(元)'];
     const intHeader  = ['项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
-    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','本期金额(元)','上期金额(元)','金额环比'];
+    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','后勤单均成本(元/单)'];
 
     const aoaSheet = (header, rows) => [
       [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${d.periodLabel}）`],
@@ -461,10 +462,13 @@ function dashboardPage(host) {
       num2(o.cur_other_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
     ]));
+    // 后勤组：单均成本 = 行金额(单价×工时) / 发货组本期总单量（与页面同口径；总单量为 0 → '-'）
+    const logShipQty = d.shippingList.reduce((s, o) => s + (Number(o.cur_ship_qty) || 0), 0);
+    const logAmt = (o) => (Number(o.cost_rate) || 0) * (Number(o.cur_total_hours) || 0);
     const aoaLog = aoaSheet(logHeader, d.logisticsList.map(o => [
       o.project || '', num2(o.cost_rate),
       num2(o.cur_total_hours), num2(o.prev_total_hours), wowStr(o.total_hours_wow),
-      num2(o.cur_cost), num2(o.prev_cost), wowStr(o.cost_wow),
+      logShipQty > 0 ? num3(logAmt(o) / logShipQty) : '-',
     ]));
 
     const wb = XLSX.utils.book_new();
