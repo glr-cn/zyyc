@@ -877,13 +877,24 @@ function createWorkhoursPage(warehouse) {
 
     function renderPager(total, cur, size) {
       const pages = Math.ceil(total / size) || 1;
+      const OPTIONS = [20, 50, 100, 200, 500, 1000];
+      const isCustom = OPTIONS.indexOf(size) < 0;
+      const selHtml = OPTIONS.map((n) =>
+        `<option value="${n}" ${n === size ? 'selected' : ''}>${n}条/页</option>`
+      ).join('');
       const p = $('pager');
-      p.innerHTML = `共 ${total} 条 · 第 ${cur}/${pages} 页`;
+      p.innerHTML = `
+        共 ${total} 条 · 第 ${cur}/${pages} 页
+        <select id="pageSizeSel" title="每页行数" style="margin-left:12px;padding:2px 6px;border:1px solid var(--line);border-radius:4px;font-size:12px;background:var(--bg);color:var(--text)">
+          ${selHtml}
+        </select>`;
       const prev = document.createElement('button');
       prev.textContent = '上一页'; prev.disabled = cur <= 1; prev.onclick = () => { state.page = cur - 1; load(); };
       const next = document.createElement('button');
       next.textContent = '下一页'; next.disabled = cur >= pages; next.onclick = () => { state.page = cur + 1; load(); };
       p.appendChild(prev); p.appendChild(next);
+      const sel = p.querySelector('#pageSizeSel');
+      if (sel) sel.onchange = (e) => { state.pageSize = Number(e.target.value); state.page = 1; load(); };
     }
 
     function trendCell(val, t) {

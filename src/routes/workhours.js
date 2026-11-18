@@ -151,7 +151,7 @@ router.get('/', (req, res) => {
   const period = resolvePeriod(dateFrom, dateTo); // 缺口行严格按本期口径联动
   const trend = ['day', 'week', 'month'].includes(req.query.trend) ? req.query.trend : null;
   const page = Math.max(1, parseInt(req.query.page || '1', 10));
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
+  const pageSize = Math.min(1000, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
 
   // 列名歧义防护：工时表别名 w，客户表别名 cl；关联客户最新名覆盖快照名，并附客户状态供前端打标签。
   // 客户已被软删除时行仍在 → LEFT JOIN 依然取到名字，历史工时绝不空白/报错。
