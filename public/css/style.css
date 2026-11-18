@@ -156,7 +156,7 @@ body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Ari
 }
 .app-header .user { flex: 0 0 auto; color: var(--muted); display: flex; align-items: center; gap: 12px; white-space: nowrap; }
 /* 主内容区：吃掉 Header 之外的全部剩余高度，自身独立滚动 */
-.content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: auto; padding: 20px; }
+.content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px; }
 
 /* 窄屏：压缩间距，给 Tab 栏让出宽度 */
 @media (max-width: 900px) {
@@ -794,7 +794,7 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 /* ★ Bug#1+#5 修复：收货客户 datalist input 与普通 text input 样式一致 */
 .wh-cust-sel { padding:4px 6px; }
 /* 发货行内直编表格：固定列宽布局，输入框不再撑破；操作列 sticky 贴右完整显示 */
-.grid.wh-inline-grid { table-layout:fixed; width:100%; min-width:780px; }
+.grid.wh-inline-grid { table-layout:fixed; width:100%; min-width:0; }
 .grid.wh-inline-grid th, .grid.wh-inline-grid td { padding:6px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .grid.wh-inline-grid th.ops-head, .grid.wh-inline-grid td.ops {
   position:sticky; right:0; z-index:3; background:var(--panel);
@@ -828,7 +828,7 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 
 /* ===== ★ 问题二：行内编辑布局优化 ===== */
 /* 表格横向滚动容器：列宽加大后超宽可滚动，操作列 sticky 固定右侧 */
-.wh-tbl-scroll { overflow-x:auto; }
+.wh-tbl-scroll { overflow-x:hidden; }
 /* 输入框 border-less：默认无边框透明底，悬停轻边框提示可编辑，聚焦亮蓝边框 */
 /* （wh-cell-invalid 的 !important 标红仍优先生效） */
 .grid.wh-table .wh-cell-num, .grid.wh-table .wh-cell-txt,
@@ -1180,34 +1180,37 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
   color:var(--text); border-bottom:1px solid var(--line);
   background:linear-gradient(90deg, rgba(37,99,235,.08), transparent);
 }
-.db-sec-content { padding:0; overflow-x:auto; }
+.db-sec-content { padding:0; overflow-x:hidden; }
 
-/* 经营看板表格：全边框 + 表头/单元格全部居中 + 统一行高 */
-.db-table { width:100%; min-width:900px; border-collapse:collapse; }
+/* 经营看板表格：table-layout:fixed 强制按比例分配列宽，拒绝内容撑破 */
+.db-table { width:100%; min-width:0; table-layout:fixed; border-collapse:collapse; }
 .db-table th, .db-table td {
   border:1px solid #e3e8ef;
   text-align:center;
   vertical-align:middle;
   height:48px;
-  padding:6px 10px;
-  white-space:nowrap;
+  padding:6px 8px;
 }
-/* 表头：更深背景 + 更深加粗文字 + 15px，与数据行明显区分 */
+/* 表头：短文字强制不换行；更深背景 + 更深加粗文字 + 15px，与数据行明显区分 */
 .db-table th {
   height:44px; font-size:15px; font-weight:700; color:#1f2329;
-  background:#eef0f4;
+  background:#eef0f4; white-space:nowrap;
 }
-/* 数据行：常规颜色 13px，行高 48px */
-.db-table td { font-size:13px; font-weight:400; color:#606266; }
-/* 覆盖 .grid 的左对齐/右对齐与「最后一行去边框」 */
+/* 数据行：常规颜色 13px；默认允许换行，数值列单独保 nowrap */
+.db-table td { font-size:13px; font-weight:400; color:#606266; white-space:normal; word-break:break-word; }
+/* 数值列：数字不宜换行（环比列的 td 也带 num 类，内部 span.wow 保留 nowrap） */
+.db-table td.num, .db-table th.num { white-space:nowrap; }
+/* 环比 span 保留数字紧凑不换行 */
+.db-table td .wow { white-space:nowrap; }
+/* 覆盖 .grid 的左对齐/右对齐 */
 .db-table th.num, .db-table th.cust { text-align:center; }
 .db-table td.num { text-align:center; }
-/* 客户/项目名称列：表头居中、内容靠左；超长省略 + 悬浮显示全名（等价 show-overflow-tooltip） */
-.db-table td.cust { text-align:left; font-weight:600; }
+/* 客户/项目名称列：表头居中、内容靠左；超长省略 + 悬浮显示全名 */
+.db-table td.cust { text-align:left; font-weight:600; white-space:nowrap; overflow:hidden; }
 .db-table th.cust { font-weight:700; }
 .db-table td.cust .db-cust-ellipsis {
-  display:inline-block; max-width:220px; overflow:hidden;
-  text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;
+  display:block; max-width:100%; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
 }
 .db-table td.num { font-variant-numeric:tabular-nums; }
 .db-table tr:last-child td { border-bottom:1px solid #e3e8ef; }
