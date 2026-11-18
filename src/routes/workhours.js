@@ -82,8 +82,10 @@ function checkUnique(workType, { warehouse, date, customer_id, customer_name, pr
 
   if (warehouse == null || date == null || keyVal == null) return null; // 缺失关键字段跳过（validateByType 会拦）
 
-  const clauses = ["warehouse = ?", "work_type = ?", "date = ?", "status = 'archived'"];
-  const params = [warehouse, workType, date];
+  // warehouse 匹配口径统一用 LIKE（与 ownersOfWarehouse / 客户关联一致）：
+  // 允许 work_hours 表中存多仓逗号串（如 "龙湖仓,佳新仓"），同时兼容简称/全称差异。
+  const clauses = ["warehouse LIKE ?", "work_type = ?", "date = ?", "status = 'archived'"];
+  const params = ['%' + warehouse + '%', workType, date];
 
   if (workType === '发货' && keyVal != null) {
     // 优先按 customer_id 精确匹配；如果 customer_id 是 null（导入可能），fallback customer_name
@@ -750,7 +752,13 @@ router.delete('/batch', (req, res) => {
       `SELECT * FROM work_hours WHERE work_id IN (${placeholders})`
     ).all(...cleaned);
     const toDelete = rows.filter((r) => {
-      if (warehouse && r.warehouse !== warehouse) return false; // 跨仓保护
+      // 跨仓保护（与 checkUnique / preview 的 LIKE 口径一致：双向包含即视为同仓）
+      if (warehouse) {
+        const rw = (r.warehouse || '').trim();
+        if (!rw) return false;
+        const same = rw.includes(warehouse) || warehouse.includes(rw);
+        if (!same) return false;
+      }
       return true;
     });
     if (toDelete.length === 0) {
@@ -883,12 +891,13 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // 查重复：本仓 + 发货 + 同客户 + 同日；同时覆盖 pending 和 archived
+  // warehouse 用 LIKE 模糊匹配（与 checkUnique / ownersOfWarehouse 统一口径）
   const rows = parsed.map((p) => {
     const any = db.prepare(
       `SELECT work_id, status, ship_orders, main_hours, total_hours FROM work_hours
-        WHERE warehouse=? AND work_type='发货' AND customer_id=? AND date=?
+        WHERE warehouse LIKE ? AND work_type='发货' AND customer_id=? AND date=?
         ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id LIMIT 1`
-    ).get(warehouse, p.customer_id, p.date);
+    ).get('%' + warehouse + '%', p.customer_id, p.date);
     const archivedExists = any && any.status === 'archived';
     const pendingExists = any && any.status === 'pending';
     if (archivedExists) {
@@ -928,14 +937,16 @@ router.post('/import', upload.single('file'), (req, res) => {
   //  - archived 冲突 → 禁止导入，计入 archived_blocked
   //  - pending 冲突   → 允许 overwrite / skip（历史行为不变）
   // ============================================================
+  // warehouse 统一 LIKE 模糊匹配（与 checkUnique / preview / ownersOfWarehouse 一致）
   const findAny = db.prepare(
     `SELECT work_id, status FROM work_hours
-      WHERE warehouse=? AND work_type='发货' AND customer_id=? AND date=?
+      WHERE warehouse LIKE ? AND work_type='发货' AND customer_id=? AND date=?
       ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id LIMIT 1`
   );
   const PRECHECK = new Map(); // line → { archived_conflict, pending_conflict, existing }
+  const warehouseLike = '%' + warehouse + '%';
   for (const p of parsed) {
-    const any = findAny.get(warehouse, p.customer_id, p.date);
+    const any = findAny.get(warehouseLike, p.customer_id, p.date);
     if (any) {
       PRECHECK.set(p.line, {
         archived_conflict: any.status === 'archived',
