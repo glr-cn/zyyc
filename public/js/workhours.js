@@ -596,11 +596,17 @@ function createWorkhoursPage(warehouse) {
 
     // 导入确认弹窗（重构版）：顶部 Alert + 统计条 + 固定表头表格 + 行内「覆盖/跳过」默认跳过
     // 【修复】区分 pending 冲突（可覆盖/跳过）与 archived 冲突（强制禁止导入）
+    // 【路径1 改造】按 blockedCnt 占比分三种场景渲染底部按钮：
+    //   1) allBlocked（全部命中归档）→ 隐藏确认导入，给引导按钮（换仓/去列表修正/关闭）
+    //   2) 有部分 blocked → 保留确认导入 + warn 提示"自动跳过 X 行归档冲突"
+    //   3) 无 blocked → 历史行为
     function openImportConfirm(ctx) {
       const { rows, errors, preview } = ctx;
       const blockedCnt = preview.archivedConflictCount || rows.filter((r) => r.archived_conflict).length;
       const dupCnt = (preview.duplicateCount || rows.filter((r) => r.duplicate).length) - blockedCnt;
       const newCnt = rows.length - blockedCnt - dupCnt;
+      const allBlocked = blockedCnt > 0 && blockedCnt === rows.length;
+      const hasArchived = blockedCnt > 0;
 
       const rowsHtml = rows.map((r) => {
         const blocked = r.archived_conflict;
@@ -681,8 +687,16 @@ function createWorkhoursPage(warehouse) {
             ${errHtml}
           </div>
           <div class="modal-foot">
-            <button type="button" class="imp-cancel">取消</button>
-            <button type="button" class="primary imp-ok">确认导入</button>
+            <button type="button" class="imp-cancel">${allBlocked ? '关闭' : '取消'}</button>
+            ${allBlocked ? `
+              <button type="button" class="imp-go-list" style="margin-left:auto;background:#67c23a;border-color:#67c23a;color:#fff">去列表查看已归档</button>
+              <button type="button" class="imp-go-other" style="background:#409eff;border-color:#409eff;color:#fff">换个仓库重导</button>
+            ` : hasArchived ? `
+              <span class="imp-foot-warn" style="margin-left:auto;color:#c23a1b;font-size:12px;align-self:center">确认导入时将自动跳过 ${blockedCnt} 行归档冲突</span>
+              <button type="button" class="primary imp-ok">确认导入</button>
+            ` : `
+              <button type="button" class="primary imp-ok">确认导入</button>
+            `}
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -691,6 +705,26 @@ function createWorkhoursPage(warehouse) {
       overlay.querySelector('.close').onclick = close;
       overlay.querySelector('.imp-cancel').onclick = close;
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+
+      // allBlocked 场景引导按钮
+      if (allBlocked) {
+        const goList = overlay.querySelector('.imp-go-list');
+        const goOther = overlay.querySelector('.imp-go-other');
+        if (goList) goList.onclick = () => {
+          close();
+          // 切到已归档状态，方便用户找到这批已归档数据
+          const sel = $('statusFilter');
+          if (sel) { sel.value = 'archived'; sel.dispatchEvent(new Event('change')); }
+          toast('已切换到「已归档」视图，请在列表中找到对应数据进行修正');
+        };
+        if (goOther) goOther.onclick = () => {
+          close();
+          // 仓库下拉 focus，让用户直接选另一个仓
+          const wsel = $('warehouse');
+          if (wsel) { wsel.focus(); wsel.click(); }
+          toast('请选择另一个仓库后重新导入');
+        };
+      }
 
       // 批量操作：只影响 pending 冲突行，archived 冲突行强制 blocked 不可改
       overlay.querySelectorAll('.imp-batch').forEach((btn) => {
@@ -704,7 +738,9 @@ function createWorkhoursPage(warehouse) {
         };
       });
 
-      overlay.querySelector('.imp-ok').onclick = async () => {
+      // 只有非 allBlocked 场景才渲染了 imp-ok 按钮，有条件才绑 handler
+      const impOk = overlay.querySelector('.imp-ok');
+      if (impOk) impOk.onclick = async () => {
         // 1) 收集 decisions（pending 冲突行才收集；archived 冲突行强制 blocked 不走 decision）
         const decisions = {};
         rows.forEach((r) => {
