@@ -68,10 +68,13 @@ window.ERP_PAGES.roles = function (host) {
       const r = await API.get('/roles');
       // 数据兜底：返回 null/undefined/非数组时一律降级为空数组，杜绝 .length/.map 崩溃
       const rowsRaw = Array.isArray(r && r.data) ? r.data : [];
-      // ★ 前端过滤：只展示超级管理员（角色管理暂时只暴露超级管理员一个入口）
-      const rows = rowsRaw.filter((x) =>
-        (x.role_code === 'super_admin') || (x.role_name && x.role_name.includes('超级管理员'))
-      );
+      // ★ 前端过滤：只展示超级管理员 和 仓库管理
+      const rows = rowsRaw.filter((x) => {
+        const name = x.role_name || '';
+        const code = x.role_code || '';
+        return code === 'super_admin' || name.includes('超级管理员')
+            || name === '仓库管理';
+      });
       console.log('[roles] 角色列表加载成功，共', rowsRaw.length, '个角色，过滤后展示', rows.length, '个:', r);
       body.innerHTML = rows.length
         ? rows.map(rowHtml).join('')
