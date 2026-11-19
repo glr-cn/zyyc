@@ -1,0 +1,5 @@
+{"env":"prod","level":"error","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","method":"POST","service":"light-erp","status":400,"url":"/api/auth/login"}
+{"env":"prod","level":"error","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","method":"POST","service":"light-erp","status":400,"url":"/api/auth/login"}
+{"env":"prod","level":"error","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","method":"POST","service":"light-erp","status":400,"url":"/api/auth/login"}
+{"env":"prod","level":"error","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","method":"POST","service":"light-erp","status":400,"url":"/api/auth/login"}
+{"env":"prod","level":"error","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","method":"POST","service":"light-erp","status":400,"url":"/api/auth/login"}

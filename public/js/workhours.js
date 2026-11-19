@@ -77,7 +77,7 @@ function createWorkhoursPage(warehouse) {
       week:  { start: _fmt(_weekStart),           end: _fmt(_weekEnd) },
       month: { start: _fmt(new Date(_todayDate.getFullYear(), _todayDate.getMonth(), 1)), end: _fmt(_monthEnd) },
     };
-    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: RANGE_BY_MODE.day.start, dateTo: RANGE_BY_MODE.day.end, dateMode: 'day', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [], unreportedCustomers: [] };
+    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: RANGE_BY_MODE.day.start, dateTo: RANGE_BY_MODE.day.end, dateMode: 'day', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
 
     // ---------- 草稿持久化（localStorage） ----------
     // 需求：用户新增工时草稿后，关闭 banner tab / 切换页面再回来，草稿不应丢失。
@@ -388,8 +388,6 @@ function createWorkhoursPage(warehouse) {
       </table>
       </div>
       <div class="pager" id="pager"></div>
-      <!-- ★ 发货 + pending 专属：本期未报客户完整资料区块（默认隐藏，load 后按需渲染） -->
-      <div id="unreportedArea" style="display:none;margin-top:18px;border:1px solid #f0d0d0;border-radius:6px;background:#fff8f8;"></div>
       </div>`;
       renderTabs();
       bindToolbar();
@@ -882,15 +880,12 @@ function createWorkhoursPage(warehouse) {
       ]);
       state.lastRows = r.data || [];
       state.lastTotal = r.total || 0;
-      // ★ 未报客户完整资料（仅发货+pending API 才返回）
-      state.unreportedCustomers = r.unreported_customers || [];
       // 合并草稿到顶部
       if (drafts.length && state.status === 'pending') {
         state.lastRows = drafts.concat(state.lastRows);
       }
       renderRows();
       renderPager(state.lastTotal, r.page || 1, r.pageSize || state.pageSize);
-      renderUnreportedArea();
 
       // ★ 非核心接口：下拉框数据 idle 时加载（不阻塞核心表格渲染）
       const _loadCustomers = async () => {
@@ -1003,35 +998,6 @@ function createWorkhoursPage(warehouse) {
           });
         };
       }
-    }
-
-    // ★ 未报客户清单（发货 + pending 专属）：在表格下方显示所有"合作中但本期没报"的客户完整资料
-    function renderUnreportedArea() {
-      const area = $('unreportedArea');
-      if (!area) return;
-      const show = state.workType === '发货' && state.status === 'pending' && state.unreportedCustomers && state.unreportedCustomers.length > 0;
-      if (!show) { area.style.display = 'none'; area.innerHTML = ''; return; }
-      const list = state.unreportedCustomers;
-      const rows = list.map((c) => {
-        const short = c.short_name && c.short_name !== c.company_name ? `<span class="u-short">（${escapeHtml(c.short_name)}）</span>` : '';
-        const contact = c.contact_person ? escapeHtml(c.contact_person) : '<span class="u-dim">—</span>';
-        const phone = c.phone ? escapeHtml(c.phone) : '<span class="u-dim">—</span>';
-        return `<div class="u-card" data-cid="${c.customer_id}">
-          <div class="u-name" title="${escapeHtml(c.company_name)}">${escapeHtml(c.company_name)}${short}</div>
-          <div class="u-meta"><span class="u-label">联系人</span>${contact}</div>
-          <div class="u-meta"><span class="u-label">电话</span>${phone}</div>
-          <div class="u-tag">未报${state.period ? ' · ' + state.period.from + ' ~ ' + state.period.to : ''}</div>
-        </div>`;
-      }).join('');
-      area.innerHTML = `
-        <div class="u-head">
-          <span class="u-title">⚠ 本期未报客户</span>
-          <span class="u-count">共 ${list.length} 家</span>
-          <span class="u-tip" style="margin-left:auto;color:#999;font-size:12px">点击上方表格中对应行直接录入</span>
-        </div>
-        <div class="u-grid">${rows}</div>
-      `;
-      area.style.display = '';
     }
 
     function renderPager(total, cur, size) {

@@ -264,19 +264,7 @@ router.get('/', (req, res) => {
       const enrichedFilled = enriched.filter((r) => r.filled === 1);
       svc.attachTrend(enrichedFilled, trend, db);
     }
-    // ★ 未报客户完整资料（发货 pending 专属，供前端渲染下方"未报客户清单"区块）
-    const unreportedCustomers = db.prepare(`
-      SELECT c.customer_id, c.company_name, c.short_name, c.contact_person, c.phone, c.coop_status, c.warehouse
-        FROM customers c
-       WHERE ${ownerWhereSql}
-         AND NOT EXISTS (
-           SELECT 1 FROM work_hours w
-            WHERE w.warehouse=? AND w.work_type='发货'
-              AND w.customer_id=c.customer_id AND ${periodWhere}
-         )
-       ORDER BY c.sort_order ASC, c.company_name
-    `).all(...ownerParams, warehouse, period.from, period.to);
-    return res.json({ data: enriched, total, page, pageSize, period, unreported_customers: unreportedCustomers });
+    return res.json({ data: enriched, total, page, pageSize, period });
   }
 
   // ---- 原查询：其余类型 / 归档视图 ----

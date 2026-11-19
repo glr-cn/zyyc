@@ -6,6 +6,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { auth, SECRET } = require('../middleware/auth');
 const menuService = require('../services/menuService');
+const { validate, rules, body } = require('../middleware/validate');
+const logger = require('../utils/logger');
 
 // JWT 只带身份标识，不带菜单列表（避免 token 膨胀、改权限需重登）；
 // role 字段仅作旧客户端兼容显示，鉴权以 auth 中间件按 role_id 查库刷新为准。
@@ -39,16 +41,17 @@ function authPayload(u) {
   };
 }
 
-router.post('/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
+router.post('/login', rules.login, validate(400), (req, res) => {
+  const { username, password } = req.body;
   const u = db
     .prepare(`SELECT u.*, r.role_name, r.role_code, r.data_scope, r.is_readonly
               FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.username=?`)
     .get(username);
   if (!u || !bcrypt.compareSync(password, u.password_hash)) {
+    logger.warn('登录失败', { username, ip: req.ip });
     return res.status(401).json({ error: '用户名或密码错误' });
   }
+  logger.info('用户登录', { userId: u.user_id, username: u.username, ip: req.ip });
   res.json(authPayload(u));
 });
 
