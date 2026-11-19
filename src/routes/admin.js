@@ -357,4 +357,28 @@ router.put('/menus/reorder', (req, res) => {
   }
 });
 
+// ---------- DELETE /api/admin/business-data ----------
+// ⚠️ 批量删除业务数据（工时 + 客户 + 排序配置）。保留表结构 + 用户/角色/菜单。
+// 仅限 super_admin，操作写审计日志。
+// body: { confirm: 'YES' }
+router.delete('/business-data', (req, res) => {
+  if ((req.body || {}).confirm !== 'YES') {
+    return res.status(400).json({ ok: false, error: '必须传 { confirm: "YES" }' });
+  }
+  const before = {
+    customers: db.prepare('SELECT COUNT(*) c FROM customers').get().c,
+    work_hours: db.prepare('SELECT COUNT(*) c FROM work_hours').get().c,
+    warehouse_sort_config: db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c,
+  };
+  db._raw.exec('DELETE FROM work_hours');
+  db._raw.exec('DELETE FROM warehouse_sort_config');
+  db._raw.exec('DELETE FROM customers');
+  const after = {
+    customers: db.prepare('SELECT COUNT(*) c FROM customers').get().c,
+    work_hours: db.prepare('SELECT COUNT(*) c FROM work_hours').get().c,
+  };
+  audit.log(req.user, 'clear', 'business-data', null, { before, after });
+  res.json({ ok: true, before, after });
+});
+
 module.exports = router;
