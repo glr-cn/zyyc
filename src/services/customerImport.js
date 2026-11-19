@@ -3,16 +3,15 @@
 const xlsx = require('xlsx');
 const round3 = require('../utils/round');
 
-// 严格 21 列表头（「序号」「排序号」「默认单位」为可选列；其余 18 列必填）
-//   * 模板下载：首列自带「序号」+ 连续递增示例值 1,2,3...（用户可手动填，也可留空）
-//     新增「排序号」列：可选正整数，空=排最后；导入后写入 customers.sort_order
-//     新增「默认单位」列：可选，值=单/件/箱；空=兜底 '单'；导入后写入 customers.default_unit
-//   * 导入时：表头若含「序号」列则忽略其值；若表头不含「序号」列也通过（兼容旧模板）
-//   * 错误定位：始终用真实 Excel 行号（从 2 开始，表头=1），与是否有序号列无关
+// 严格 20 列表头（「排序号」「默认单位」为可选列；其余 18 列必填）
+//   * 模板下载：含「排序号」（可选正整数，空=排最后）+「默认单位」（可选，值=单/件/箱，空=兜底'单'）
+//   * 导入时：表头若含「序号」列会被静默忽略（旧模板兼容，不进 extra 报错，不参与 parseRow）
+//   * 错误定位：始终用真实 Excel 行号（从 2 开始，表头=1）
 const DEFAULT_UNITS = ['单', '件', '箱'];
-const OPTIONAL_HEADERS = new Set(['序号', '排序号', '默认单位']);
+const IGNORED_LEGACY_HEADERS = new Set(['序号']);  // 旧模板遗留列，合法但忽略
+const OPTIONAL_HEADERS = new Set(['排序号', '默认单位']);
 const HEADERS = [
-  '序号', '排序号',
+  '排序号',
   '货主代码', '公司全称', '客户简称', '所在仓库', '客户联系人', '联系电话', '客户地址',
   'ERP版本名称', '产品类型', '电商平台', '商品种类数', '打款账户', '预充单价', '截单时间',
   '物流公司控制', '效期管理', '合作状态', '默认单位', '备注',
@@ -49,8 +48,8 @@ function readSheet(buffer) {
   // 必填列（HEADERS 去掉可选列）
   const REQUIRED_HEADERS = HEADERS.filter((h) => !OPTIONAL_HEADERS.has(h));
   const missing = REQUIRED_HEADERS.filter((h) => !head.includes(h));
-  // 未知列：不在 HEADERS 全集里的才算（可选列也算合法）
-  const extra = head.filter((h) => h && !HEADERS.includes(h));
+  // 未知列：不在 HEADERS 全集也不是旧模板遗留的才算
+  const extra = head.filter((h) => h && !HEADERS.includes(h) && !IGNORED_LEGACY_HEADERS.has(h));
   if (missing.length || extra.length) {
     const parts = [];
     if (missing.length) parts.push('缺少[' + missing.join('、') + ']');
@@ -183,26 +182,26 @@ function parseRow(raw, { requireWarehouse = true } = {}) {
 function buildTemplate(withSample = true) {
   const aoa = [HEADERS.slice()];
   if (withSample) {
-    // 3 行示例：序号连续 1/2/3；排序号显式填 1/2/3 示范；默认单位显式填 单 示范
+    // 3 行示例：排序号 1/2/3 示范；默认单位 单/件/箱 示范；空=排最后/兜底'单'
     aoa.push([
-      1, 1, 'C0001', '示例客户有限公司', '示例', '龙湖仓,佳新仓', '张三', '13800000000', '上海市浦东新区',
+      1, 'C0001', '示例客户有限公司', '示例', '龙湖仓,佳新仓', '张三', '13800000000', '上海市浦东新区',
       '旺店通', '日用百货', '淘宝,抖音', 120, '6222****1234', 0.35, '16:00', '申通', '是', '合作中', '单',
       '示例行，正式导入前请删除',
     ]);
     aoa.push([
-      2, 2, 'C0002', '示例电商贸易', '电商示例', '速远仓', '李四', '13900000000', '广州市白云区',
+      2, 'C0002', '示例电商贸易', '电商示例', '速远仓', '李四', '13900000000', '广州市白云区',
       '聚水潭', '家居用品', '拼多多', 85, '6228****5678', 0.42, '15:30', '中通', '否', '合作中', '件',
       '',
     ]);
     aoa.push([
-      3, 3, 'C0003', '示例供应链公司', '供应链示例', '开元仓,龙湖仓', '王五', '13700000000', '深圳市宝安区',
+      3, 'C0003', '示例供应链公司', '供应链示例', '开元仓,龙湖仓', '王五', '13700000000', '深圳市宝安区',
       '万里牛', '食品饮料', '京东', 200, '6217****9012', 0.28, '17:00', '顺丰', '是', '暂停', '箱',
       '暂停合作，待确认',
     ]);
   }
   const ws = xlsx.utils.aoa_to_sheet(aoa);
-  // 序号列宽 6，其他列宽 16
-  ws['!cols'] = HEADERS.map((h, i) => ({ wch: i === 0 ? 6 : 16 }));
+  // 排序号列宽 8，其他列宽 16
+  ws['!cols'] = HEADERS.map((h, i) => ({ wch: i === 0 ? 8 : 16 }));
   const wb = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(wb, ws, '仓储客户');
   return xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
