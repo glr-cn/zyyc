@@ -31,7 +31,8 @@
     cust_shared:    'js/customers.js',
     cust_express:   'js/customers.js',
     // 工时汇总（用 charts.js 里的图表）
-    analytics:      'js/analytics.js',
+    // analytics（工时模块下的工时汇总）复用 dashboard.js，确保三个入口数据一致
+    analytics:      'js/dashboard.js',
     // 用户/角色/权限树
     users:          'js/users.js',
     roles:          'js/roles.js',
@@ -65,7 +66,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=6';
+  const BUILD_VERSION = 'v=7';
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

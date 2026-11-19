@@ -58,10 +58,10 @@
   }
 
   // =========================================================================
-  // Tab 1: 批量导入（保留 Ctrl+V + 导入记录）
+  // Tab 1: 批量导入（全页面拖拽上传 + 导入记录）
   // =========================================================================
   let _platforms = null;
-  let _pasteCleanup = null;   // 单例：页面重复打开时先解绑旧监听，避免监听器叠加
+  let _dragCleanup = null;   // 单例：页面重复打开时先解绑旧监听，避免监听器叠加
 
   // 文件列表 / 删除按钮样式（用 CSS 类实现 hover / active / focus / disabled，
   // 避免内联 style 覆盖伪类状态，也便于键盘操作时给出焦点反馈）
@@ -118,11 +118,10 @@
           </select>
         </div>
       </div>
-      <div id="odDropZone" style="border:2px dashed #c0ccda;border-radius:8px;padding:40px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:16px;">
+      <div id="odDropZone" style="border:2px dashed #c0ccda;border-radius:8px;padding:40px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:16px;transition:border-color .15s,background .15s;">
         <div style="font-size:48px;color:#909399;margin-bottom:8px;">📁</div>
-        <div style="color:#606266;font-size:15px;margin-bottom:4px;">点击或拖拽 Excel / CSV 文件到此处</div>
+        <div style="color:#606266;font-size:15px;margin-bottom:4px;">点击选择文件，或将文件拖到页面任意位置</div>
         <div style="color:#909399;font-size:12px;">支持 .xlsx / .xls / .csv · 无行数/文件大小硬性限制</div>
-        <div style="color:#409eff;font-size:12px;margin-top:6px;">💡 也可以按 <kbd style="padding:1px 6px;background:#fff;border:1px solid #dcdfe6;border-radius:3px;">Ctrl+V</kbd> 粘贴 Excel 表格或文件</div>
         <input type="file" id="odFile" accept=".xlsx,.xls,.csv" style="display:none;" />
       </div>
       <div id="odPreview" style="display:none;margin-bottom:16px;"></div>
@@ -169,15 +168,6 @@
     let _selectedFiles = [];   // 多文件列表
     let _busy = false;         // 导入中：禁用删除/提交，避免中途改列表
     dropZone.onclick = () => fileInput.click();
-    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#409eff'; };
-    dropZone.ondragleave = () => { dropZone.style.borderColor = '#c0ccda'; };
-    dropZone.ondrop = (e) => {
-      e.preventDefault(); dropZone.style.borderColor = '#c0ccda';
-      if (e.dataTransfer.files.length) {
-        // 支持一次拖入多个文件
-        Array.from(e.dataTransfer.files).forEach((f) => onFile(f));
-      }
-    };
     fileInput.onchange = () => {
       if (fileInput.files.length) {
         Array.from(fileInput.files).forEach((f) => onFile(f));
@@ -185,52 +175,84 @@
       fileInput.value = ''; // 清空以便再次选择同名文件
     };
 
-    // Ctrl+V / Cmd+V 粘贴导入
-    // ⚠️ 关键：Chrome / Edge / Safari 的 paste 事件里 ctrlKey / metaKey 恒为 false
-    //    （只有 Firefox 会带修饰键），所以不能靠 e.ctrlKey 判断，否则这些浏览器里
-    //    按 Ctrl+V 会被直接 return 掉 → 表现为「粘贴完全没反应」。
-    //    能收到 paste 事件本身就代表用户执行了粘贴（快捷键或右键菜单）。
-    function onPaste(e) {
-      // 只在当前页面可见时响应（切到其它 Tab / 页面不响应）
-      if (!panel.isConnected || !panel.getClientRects().length) return;
-      const target = e.target;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
-        || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    // ---------- 全页面拖拽上传 ----------
+    // 不再限制必须拖到上传框内：文件拖到当前页面任意可见区域松手都能加入待上传列表。
+    const dragMask = document.createElement('div');
+    dragMask.id = 'odDragMask';
+    dragMask.innerHTML = `
+      <div style="pointer-events:none;text-align:center;color:#fff;">
+        <div style="font-size:56px;line-height:1;margin-bottom:14px;">📥</div>
+        <div style="font-size:18px;font-weight:600;">松开鼠标，添加到待上传列表</div>
+        <div style="font-size:13px;opacity:.88;margin-top:8px;">支持 .xlsx / .xls / .csv，可一次拖入多个文件</div>
+      </div>`;
+    dragMask.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:9999', 'display:none',
+      'align-items:center', 'justify-content:center',
+      'background:rgba(64,158,255,.82)', 'backdrop-filter:blur(2px)',
+      'border:3px dashed rgba(255,255,255,.85)', 'box-sizing:border-box',
+      'pointer-events:none', 'user-select:none'
+    ].join(';');
+    document.body.appendChild(dragMask);
 
-      const cd = e.clipboardData;
-      if (!cd) return;
-
-      // ① 优先识别「复制的文件」
-      let file = null;
-      if (cd.files && cd.files.length) file = cd.files[0];
-      if (!file && cd.items) {
-        for (let i = 0; i < cd.items.length; i++) {
-          if (cd.items[i].kind === 'file') { file = cd.items[i].getAsFile(); break; }
-        }
-      }
-      if (file) { e.preventDefault(); onFile(file); return; }
-
-      // ② 其次识别「Excel 表格 / TSV 文本」
-      try {
-        let html = cd.getData('text/html');
-        let text = cd.getData('text/plain');
-        let csv = null, label = '';
-        if (html && /<table/i.test(html)) { csv = htmlTableToCSV(html); label = '粘贴的 Excel 表格'; }
-        else if (text && looksLikeTSV(text)) { csv = tsvToCSV(text); label = '粘贴的表格数据'; }
-        if (csv) {
-          e.preventDefault();
-          const ts = new Date(); const pad = (n) => String(n).padStart(2, '0');
-          const fname = `粘贴导入_${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.csv`;
-          const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-          onFile(new File([blob], fname, { type: 'text/csv' }));
-          flashDropZone(dropZone, '已粘贴 ' + label + '，自动转为 CSV 导入');
-        }
-      } catch (_) {}
+    let _dragDepth = 0;
+    const hasFiles = (e) => {
+      const dt = e && e.dataTransfer;
+      if (!dt) return false;
+      if (dt.types) return Array.prototype.indexOf.call(dt.types, 'Files') !== -1;
+      return !!(dt.files && dt.files.length);
+    };
+    const pageVisible = () => panel.isConnected && panel.getClientRects().length > 0;
+    const showDragMask = () => {
+      dragMask.style.display = 'flex';
+      dropZone.style.borderColor = '#409eff';
+      dropZone.style.background = '#ecf5ff';
+    };
+    const hideDragMask = () => {
+      dragMask.style.display = 'none';
+      dropZone.style.borderColor = '#c0ccda';
+      dropZone.style.background = '#fafafa';
+    };
+    function onDocDragEnter(e) {
+      if (!pageVisible() || !hasFiles(e)) return;
+      e.preventDefault();
+      _dragDepth++;
+      showDragMask();
+    }
+    function onDocDragOver(e) {
+      if (!pageVisible() || !hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      if (dragMask.style.display !== 'flex') showDragMask();
+    }
+    function onDocDragLeave(e) {
+      if (!pageVisible()) return;
+      // relatedTarget 为 null 表示真正离开浏览器窗口
+      if (e.relatedTarget === null) { _dragDepth = 0; hideDragMask(); return; }
+      _dragDepth = Math.max(0, _dragDepth - 1);
+      if (_dragDepth === 0) hideDragMask();
+    }
+    function onDocDrop(e) {
+      if (!pageVisible() || !hasFiles(e)) return;
+      e.preventDefault();
+      _dragDepth = 0;
+      hideDragMask();
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) Array.from(files).forEach((f) => onFile(f));
     }
     // 先解绑上一次 mountImport 挂的监听，避免页面重复打开后监听器叠加
-    if (_pasteCleanup) _pasteCleanup();
-    document.addEventListener('paste', onPaste);
-    _pasteCleanup = () => document.removeEventListener('paste', onPaste);
+    if (_dragCleanup) _dragCleanup();
+    document.addEventListener('dragenter', onDocDragEnter, true);
+    document.addEventListener('dragover', onDocDragOver, true);
+    document.addEventListener('dragleave', onDocDragLeave, true);
+    document.addEventListener('drop', onDocDrop, true);
+    _dragCleanup = () => {
+      document.removeEventListener('dragenter', onDocDragEnter, true);
+      document.removeEventListener('dragover', onDocDragOver, true);
+      document.removeEventListener('dragleave', onDocDragLeave, true);
+      document.removeEventListener('drop', onDocDrop, true);
+      if (dragMask.parentNode) dragMask.parentNode.removeChild(dragMask);
+      hideDragMask();
+    };
 
     function flashDropZone(zone, msg, color) {
       zone.style.borderColor = color || '#67c23a';
@@ -383,35 +405,6 @@
       panel.querySelector('#odResult').style.display = 'none';
       updateSubmitEnabled();
     };
-  }
-
-  // ---------- 粘贴解析工具 ----------
-  function htmlTableToCSV(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const rows = []; doc.querySelectorAll('tr').forEach((tr) => {
-      const cells = []; tr.querySelectorAll('td,th').forEach((c) => {
-        let t = (c.textContent || '').replace(/\s+/g, ' ').trim();
-        if (/[,"\n]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
-        cells.push(t);
-      });
-      if (cells.length) rows.push(cells.join(','));
-    });
-    return rows.join('\n');
-  }
-  function looksLikeTSV(text) {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    if (lines.length < 2) return false;
-    const first = lines[0];
-    return (first.match(/\t/g) || []).length >= 1 || (first.match(/,/g) || []).length >= 1;
-  }
-  function tsvToCSV(text) {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    return lines.map((l) => {
-      if (l.includes('\t')) {
-        return l.split('\t').map((c) => c.replace(/\s+/g,' ').trim()).join(',');
-      }
-      return l.split(',').map((c) => c.replace(/\s+/g,' ').trim()).join(',');
-    }).join('\n');
   }
 
   // ---------- 导入记录 ----------
