@@ -799,10 +799,11 @@ function createWorkhoursPage(warehouse) {
     async function load() {
       await refreshRole();
       // ★ Bug#4 保护：查询/日期筛选刷新前，先把当前 pending 列表里所有未入库的虚拟行
-      // （tempId 非空 + work_id=0）捕获出来；load 完成后重新 unshift 到新列表顶部。
-      // 这样不管用户怎么切筛选条件，草稿都不会被覆盖。
+      // （tempId 非空 + work_id=0 + work_type 匹配当前 tab）捕获出来；
+      // 【关键】必须按 work_type 过滤，否则从"库内"切到"后勤" tab 时会把库内虚拟行错误地带到后勤列表顶部，
+      // 造成"跨分类联动"的假相（用户以为新增库内工时同步增加了后勤工时）。
       const drafts = (state.status === 'pending')
-        ? state.lastRows.filter((r) => r.tempId && Number(r.work_id) === 0)
+        ? state.lastRows.filter((r) => r.tempId && Number(r.work_id) === 0 && r.work_type === state.workType)
         : [];
       const params = new URLSearchParams({ warehouse: state.warehouse, work_type: state.workType, status: state.status, page: state.page, pageSize: state.pageSize });
       if (state.q) params.set('q', state.q);
