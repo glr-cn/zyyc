@@ -223,20 +223,22 @@ ERP.tabs = {
       if (this.views[page].parentElement !== host) host.appendChild(this.views[page]);
       return this.views[page];  // 直接返回，不重建
     }
+    // 首次渲染该页：检查对应脚本是否已加载（懒加载时序：init 可能先于 ensurePageScript 触发）
+    const fn = window.ERP_PAGES && window.ERP_PAGES[page];
+    if (typeof fn !== 'function') {
+      // ★ 脚本还没加载 → 不创建空 div，让后续 open() 走完 ensurePageScript 后再重建
+      return null;
+    }
     const el = document.createElement('div');
     el.className = 'page-view';
     el.dataset.page = page;
     el.style.display = 'none';
     host.appendChild(el);
     this.views[page] = el;
-    // 首次渲染该页（传入容器，页面模块在容器内作用域查找元素）
-    const fn = window.ERP_PAGES && window.ERP_PAGES[page];
-    if (typeof fn === 'function') {
-      try {
-        fn(el);
-      } catch (e) {
-        console.error('[tabs] 页面渲染失败：' + page, e);
-      }
+    try {
+      fn(el);
+    } catch (e) {
+      console.error('[tabs] 页面渲染失败：' + page, e);
     }
     return el;
   },
