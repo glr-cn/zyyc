@@ -621,8 +621,13 @@ router.put('/:id', (req, res) => {
     } else if (row.sort_order !== old.sort_order
         && row.sort_order !== 9999
         && Number.isInteger(row.sort_order) && row.sort_order > 0) {
-      // 向后兼容：非分仓页面仍使用全局 sort_order 顺延
+      // ★ 用户只改了全局 sort_order → 说明他想统一，清掉所有仓的分仓排序配置
+      // 否则 COALESCE(wsc, c, 9999) 优先选 wsc → 列表显示看起来没变化（用户反馈的 bug）
+      db.prepare('DELETE FROM warehouse_sort_config WHERE customer_id=?').run(old.customer_id);
       adjustSortOrder(type, row.sort_order, old.customer_id);
+    } else if (row.sort_order !== old.sort_order && row.sort_order === 9999) {
+      // 用户把排序号清空（= 排最后）→ 同样清掉 wsc 让 COALESCE 回退到 9999
+      db.prepare('DELETE FROM warehouse_sort_config WHERE customer_id=?').run(old.customer_id);
     }
 
     updated = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(old.customer_id);
