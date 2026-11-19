@@ -102,20 +102,21 @@ router.get('/', (req, res) => {
 
   const where = ['c.is_deleted=0']; // 软删除客户从常规列表隐藏（仍在库、仍可被工时下拉/历史引用）
   const params = [];
+  // ★ 重要：SQL 参数顺序必须严格匹配占位符出现顺序。
+  // LEFT JOIN ON 的 ? 出现在 WHERE 之前，所以 wh 必须先 push！
+  let joinWsc = '';
+  if (wh) {
+    if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
+    joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
+    params.push(wh);                       // ← JOIN ON 的第 1 个占位符最先 push
+    where.push('c.warehouse LIKE ?');
+    params.push('%' + wh + '%');           // WHERE 的第 1 个占位符（整体 WHERE 里）
+  }
   const scope = ownerScope(req);
   if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
   if (type) {
     if (!CUSTOMER_TYPES.includes(type)) return res.status(400).json({ error: '客户类型非法' });
     where.push('c.customer_type = ?'); params.push(type);
-  }
-  let joinWsc = '';
-  if (wh) {
-    // 白名单防 LIKE 注入；'龙湖仓,佳新仓' 在两个仓 Tab 下都能命中
-    if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
-    where.push('c.warehouse LIKE ?'); params.push('%' + wh + '%');
-    // ★ 分仓独立排序 LEFT JOIN：wsc.sort_order > c.sort_order > 9999 默认
-    joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
-    params.push(wh);
   }
   if (coop) { where.push('c.coop_status = ?'); params.push(coop); }
   if (q) {
