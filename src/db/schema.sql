@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS customers (
   updated_at         TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
+-- 分仓独立排序配置（每个仓库对同一份客户列表有独立的 sort_order 映射）
+-- 查询时 warehouse_sort_config 优先，缺失行回退 customers.sort_order，再缺失回退 9999
+CREATE TABLE IF NOT EXISTS warehouse_sort_config (
+  warehouse    TEXT NOT NULL,
+  customer_id  INTEGER NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+  sort_order   INTEGER NOT NULL DEFAULT 9999,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY (warehouse, customer_id)
+);
+
 -- 导入订单
 CREATE TABLE IF NOT EXISTS orders (
   order_id       INTEGER PRIMARY KEY AUTOINCREMENT,

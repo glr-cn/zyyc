@@ -91,7 +91,7 @@ function validate(row, { type, excludeId = 0 } = {}) {
   return errs.length ? errs.join('；') : null;
 }
 
-// ---------- 列表：搜索 + 分类 + 多仓 LIKE + 分页 ----------
+// ---------- 列表：搜索 + 分类 + 多仓 LIKE + 分页 + 分仓独立排序 ----------
 router.get('/', (req, res) => {
   const q = (req.query.q || '').trim();
   const type = req.query.customer_type || '';
@@ -100,31 +100,93 @@ router.get('/', (req, res) => {
   const page = Math.max(1, parseInt(req.query.page || '1', 10));
   const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
 
-  const where = ['is_deleted=0']; // 软删除客户从常规列表隐藏（仍在库、仍可被工时下拉/历史引用）
+  const where = ['c.is_deleted=0']; // 软删除客户从常规列表隐藏（仍在库、仍可被工时下拉/历史引用）
   const params = [];
   const scope = ownerScope(req);
-  if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
+  if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
   if (type) {
     if (!CUSTOMER_TYPES.includes(type)) return res.status(400).json({ error: '客户类型非法' });
-    where.push('customer_type = ?'); params.push(type);
+    where.push('c.customer_type = ?'); params.push(type);
   }
+  let joinWsc = '';
   if (wh) {
     // 白名单防 LIKE 注入；'龙湖仓,佳新仓' 在两个仓 Tab 下都能命中
     if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
-    where.push('warehouse LIKE ?'); params.push('%' + wh + '%');
+    where.push('c.warehouse LIKE ?'); params.push('%' + wh + '%');
+    // ★ 分仓独立排序 LEFT JOIN：wsc.sort_order > c.sort_order > 9999 默认
+    joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
+    params.push(wh);
   }
-  if (coop) { where.push('coop_status = ?'); params.push(coop); }
+  if (coop) { where.push('c.coop_status = ?'); params.push(coop); }
   if (q) {
-    where.push('(company_name LIKE ? OR short_name LIKE ? OR customer_code LIKE ? OR contact_person LIKE ? OR phone LIKE ? OR erp_version LIKE ?)');
+    where.push('(c.company_name LIKE ? OR c.short_name LIKE ? OR c.customer_code LIKE ? OR c.contact_person LIKE ? OR c.phone LIKE ? OR c.erp_version LIKE ?)');
     const like = '%' + q + '%';
     for (let i = 0; i < 6; i++) params.push(like);
   }
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = db.prepare(`SELECT COUNT(*) c FROM customers ${whereSql}`).get(...params).c;
-  // 按 sort_order ASC 排序；同序则按 customer_id 降序稳定排序，保证新记录自然沉底
-  const rows = db.prepare(`SELECT * FROM customers ${whereSql} ORDER BY sort_order ASC, customer_id DESC LIMIT ? OFFSET ?`)
-    .all(...params, pageSize, (page - 1) * pageSize);
+  const total = db.prepare(`SELECT COUNT(*) c FROM customers c ${joinWsc} ${whereSql}`).get(...params).c;
+  // 分仓排序优先：wsc.sort_order → c.sort_order → 9999
+  const orderSql = wh
+    ? 'ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id DESC'
+    : 'ORDER BY c.sort_order ASC, c.customer_id DESC';
+  const rows = db.prepare(
+    `SELECT c.* ${wh ? ', COALESCE(wsc.sort_order, c.sort_order, 9999) AS warehouse_sort_order' : ''}
+     FROM customers c ${joinWsc} ${whereSql} ${orderSql} LIMIT ? OFFSET ?`
+  ).all(...params, pageSize, (page - 1) * pageSize);
   res.json({ data: rows, total, page, pageSize });
+});
+
+// ---------- 分仓独立排序配置 API ----------
+// GET  /customers/warehouse-sort/:warehouse  → 读取该仓所有客户的排序配置
+// PUT  /customers/warehouse-sort/:warehouse  → 批量 upsert 排序配置
+router.get('/warehouse-sort/:warehouse', (req, res) => {
+  const wh = req.params.warehouse;
+  if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
+  const scope = ownerScope(req);
+  const scopeSql = scope.sql ? 'WHERE ' + scope.sql : '';
+  const rows = db.prepare(`
+    SELECT c.customer_id, c.company_name,
+           COALESCE(wsc.sort_order, c.sort_order, 9999) AS sort_order
+    FROM customers c
+    LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
+    ${scopeSql}
+    ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id DESC
+  `).all(wh, ...scope.params);
+  res.json({ warehouse: wh, data: rows });
+});
+
+router.put('/warehouse-sort/:warehouse', roleGate(['管理员', '超级管理员']), (req, res) => {
+  const wh = req.params.warehouse;
+  if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
+  const items = Array.isArray(req.body) ? req.body : (req.body.items || []);
+  if (!items.length) return res.status(400).json({ error: '请提供排序配置' });
+
+  const upsert = db.prepare(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order, updated_at)
+    VALUES (?,?,?,datetime('now','localtime'))
+    ON CONFLICT(warehouse, customer_id) DO UPDATE SET
+      sort_order = excluded.sort_order,
+      updated_at = datetime('now','localtime')`);
+  const del = db.prepare('DELETE FROM warehouse_sort_config WHERE warehouse = ?');
+
+  db.exec('BEGIN');
+  let saved = 0;
+  let cleared = false;
+  try {
+    // 先清空该仓旧配置（避免删除客户后残留的 sort 记录）
+    del.run(wh);
+    for (const it of items) {
+      const id = Number(it.customer_id);
+      const so = Number(it.sort_order);
+      if (!Number.isInteger(id) || !Number.isInteger(so) || so <= 0) continue;
+      upsert.run(wh, id, so);
+      saved++;
+    }
+    db.exec('COMMIT');
+    res.json({ warehouse: wh, saved, total: items.length });
+  } catch (e) {
+    db.exec('ROLLBACK');
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // 客户状态统一口径（下拉/列表/标签共用，避免各处 CASE 漂移）
