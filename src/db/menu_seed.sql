@@ -10,7 +10,7 @@
 -- 出库/入库/库存 已在 2026-11-19 移除：菜单 2(outbound)、3(inbound)、4(inventory)
 -- 及其全部子菜单均由 migrateRemoveStockMenus.js 在启动时清理线上存量。
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
- (1,'dashboard',NULL,'看板',NULL,'📉',NULL,10,1),
+ (1,'dashboard',NULL,'看板','dashboard','📉',NULL,10,1),
 -- 2026-11-19 已移除: (2,'outbound', NULL,'出库',NULL,'📦',NULL,20,1),
 -- 2026-11-19 已移除: (3,'inbound',  NULL,'入库',NULL,'📥',NULL,30,1),
 -- 2026-11-19 已移除: (4,'inventory',NULL,'库存',NULL,'📊',NULL,40,1),

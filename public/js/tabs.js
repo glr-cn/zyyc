@@ -19,6 +19,9 @@ window.ERP = window.ERP || {};
 // ---------- 页面元信息（标题 / 图标）：标签栏与标题栏共用 ----------
 ERP.PAGE_META = {
   dashboard: { title: '经营看板', icon: '📉' },
+  // 看板子菜单：工时汇总复用 dashboard 渲染函数 + 快递分析占位
+  dash_wh_summary: { title: '工时汇总', icon: '📈' },
+  dash_express:    { title: '快递分析', icon: '📦' },
   customers: { title: '客户资料', icon: '🏢' },   // 兼容旧持久化 Tab（映射到仓储客户页）
   cust_wh: { title: '仓储客户', icon: '🏢' },
   cust_shared: { title: '共享单号', icon: '🔗' },

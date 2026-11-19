@@ -11,6 +11,9 @@
   const MAP = {
     // 看板 + 图表
     dashboard:      'js/dashboard.js',
+    // 看板子菜单（工时汇总复用 dashboard.js，快递分析独立文件）
+    dash_wh_summary:'js/dashboard.js',
+    dash_express:   'js/express-analysis.js',
     // 出库（2026-11-19 已移除：orders/inventory 菜单已删）
     // orders:         'js/orders.js',
     // inventory:      'js/inventory.js',
@@ -62,7 +65,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=5';
+  const BUILD_VERSION = 'v=6';
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {
