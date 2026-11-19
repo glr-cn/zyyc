@@ -11,6 +11,7 @@ const {
   WAREHOUSES, COOP, CUTOFF_RE,
   readSheet, parseRow, normalizeWarehouse, buildTemplate,
 } = require('../services/customerImport');
+const { setWarehouseSortPosition } = require('../services/warehouseSort');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const CUSTOMER_TYPES = ['仓储客户', '共享单号', '快运物流'];
@@ -162,28 +163,36 @@ router.put('/warehouse-sort/:warehouse', roleGate(['管理员', '超级管理员
   const items = Array.isArray(req.body) ? req.body : (req.body.items || []);
   if (!items.length) return res.status(400).json({ error: '请提供排序配置' });
 
+  // 按提交的 sort_order 升序确定顺序，重编号为 1..n；
+  // 未提交的该仓其余客户按原排序追加在后，保证序号连续无空缺。
+  const given = items
+    .map((it, i) => ({ id: Number(it.customer_id), so: Number(it.sort_order), i }))
+    .filter((x) => Number.isInteger(x.id) && x.id > 0)
+    .sort((a, b) => (Number.isFinite(a.so) ? a.so : 1e9) - (Number.isFinite(b.so) ? b.so : 1e9) || a.i - b.i)
+    .map((x) => x.id);
+  const givenIds = new Set(given);
+
+  const rest = db.prepare(`
+    SELECT c.customer_id
+      FROM customers c
+      LEFT JOIN warehouse_sort_config wsc
+             ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
+     WHERE c.warehouse LIKE ? AND c.is_deleted = 0
+     ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
+  `).all(wh, '%' + wh + '%').map((r) => r.customer_id).filter((id) => !givenIds.has(id));
+
+  const ordered = [...given, ...rest];
   const upsert = db.prepare(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order, updated_at)
     VALUES (?,?,?,datetime('now','localtime'))
     ON CONFLICT(warehouse, customer_id) DO UPDATE SET
       sort_order = excluded.sort_order,
       updated_at = datetime('now','localtime')`);
-  const del = db.prepare('DELETE FROM warehouse_sort_config WHERE warehouse = ?');
 
   db.exec('BEGIN');
-  let saved = 0;
-  let cleared = false;
   try {
-    // 先清空该仓旧配置（避免删除客户后残留的 sort 记录）
-    del.run(wh);
-    for (const it of items) {
-      const id = Number(it.customer_id);
-      const so = Number(it.sort_order);
-      if (!Number.isInteger(id) || !Number.isInteger(so) || so <= 0) continue;
-      upsert.run(wh, id, so);
-      saved++;
-    }
+    ordered.forEach((id, idx) => upsert.run(wh, id, idx + 1));
     db.exec('COMMIT');
-    res.json({ warehouse: wh, saved, total: items.length });
+    res.json({ warehouse: wh, saved: ordered.length, total: items.length });
   } catch (e) {
     db.exec('ROLLBACK');
     res.status(500).json({ error: e.message });
@@ -223,25 +232,37 @@ router.get('/active', (req, res) => {
 // ---------- 工时下拉专用：返回全部客户（含已删除/停用），带 status ----------
 // 铁律：已删除客户的行永久保留，因此这里能返回它们；前端负责加 (已删除)/(已停用) 后缀并置灰。
 // ownerScope 行级隔离仍生效（业务员只见自己负责的客户）。
+// ★ 分仓独立排序：传 warehouse 参数时 LEFT JOIN warehouse_sort_config，
+//   ORDER BY 按 COALESCE(wsc.sort_order, c.sort_order, 9999) 保证工时下拉框与当前仓排序一致。
 router.get('/options', (req, res) => {
+  const wh = req.query.warehouse || '';
   const where = [];
   const params = [];
-  const scope = ownerScope(req);
-  if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
-  if (req.query.customer_type) { where.push('customer_type = ?'); params.push(req.query.customer_type); }
-  if (req.query.warehouse && WAREHOUSES.includes(req.query.warehouse)) {
-    where.push('warehouse LIKE ?'); params.push('%' + req.query.warehouse + '%');
+
+  // ★ SQL 参数顺序：JOIN ON 的 ? 必须先 push（和 GET / 列表同理）
+  let joinWsc = '';
+  if (wh && WAREHOUSES.includes(wh)) {
+    joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
+    params.push(wh);  // JOIN ON 的 ? 先于 WHERE 条件参数
   }
+
+  const scope = ownerScope(req);
+  if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
+  if (req.query.customer_type) { where.push('c.customer_type = ?'); params.push(req.query.customer_type); }
+  if (wh && WAREHOUSES.includes(wh)) { where.push('c.warehouse LIKE ?'); params.push('%' + wh + '%'); }
+
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const orderSql = wh
+    ? `ORDER BY ${CUST_STATUS_SQL} DESC, COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.company_name`
+    : `ORDER BY ${CUST_STATUS_SQL} DESC, c.sort_order ASC, c.company_name`;
   const rows = db.prepare(
-    `SELECT customer_id,
-            company_name,
-            COALESCE(NULLIF(short_name,''), company_name) AS owner_name,
-            warehouse, customer_type, coop_status, is_deleted,
+    `SELECT c.customer_id,
+            c.company_name,
+            COALESCE(NULLIF(c.short_name,''), c.company_name) AS owner_name,
+            c.warehouse, c.customer_type, c.coop_status, c.is_deleted,
             ${CUST_STATUS_SQL} AS status,
-            COALESCE(default_unit, '单') AS default_unit
-       FROM customers ${whereSql}
-      ORDER BY ${CUST_STATUS_SQL} DESC, sort_order ASC, company_name`
+            COALESCE(c.default_unit, '单') AS default_unit
+       FROM customers c ${joinWsc} ${whereSql} ${orderSql}`
   ).all(...params);
   res.json({ data: rows });
 });
@@ -316,7 +337,7 @@ router.post('/import', upload.single('file'), (req, res) => {
   res.json({ success: created + updated, created, updated, failed: failures.length, failures });
 });
 
-// ---------- sort_order 冲突处理 ----------
+// ---------- sort_order 冲突处理（全局 customer_type 级，向后兼容） ----------
 // 作用域：同一 customer_type 下全局排序（跨仓库），保证序号唯一且连续。
 // 逻辑：把 sort_order >= target（且非当前记录）的记录统一 +1，腾出空位给当前记录。
 // 注意：历史数据可能存在重复 sort_order，顺延会让所有 >= target 的都后移，天然消除重复。
@@ -328,11 +349,42 @@ function adjustSortOrder(customerType, target, excludeId = 0) {
   ).run(customerType, target, excludeId);
 }
 
+// 分仓独立排序见 services/warehouseSort.js：位置式重排，保证单仓序号连续 1..n
+
+// ---------- 详情/CRUD 通用：注入所有仓的独立排序到客户对象 ----------
+function enrichWithWarehouseSorts(row) {
+  if (!row) return row;
+  const wscRows = db.prepare('SELECT warehouse, sort_order FROM warehouse_sort_config WHERE customer_id=? AND sort_order < 9999')
+    .all(row.customer_id);
+  const warehouse_sorts = {};
+  for (const wh of WAREHOUSES) {
+    const hit = wscRows.find(x => x.warehouse === wh);
+    warehouse_sorts[wh] = hit ? hit.sort_order : null;  // null 表示未设置，回退全局 sort_order
+  }
+  row.warehouse_sorts = warehouse_sorts;
+  return row;
+}
+
+// ---------- 分仓排序入参校验（返回错误文案或 null） ----------
+function validateWarehouseSorts(warehouseSorts, warehouseList) {
+  if (!warehouseSorts || typeof warehouseSorts !== 'object' || Array.isArray(warehouseSorts)) return null;
+  for (const [wh, soVal] of Object.entries(warehouseSorts)) {
+    if (!WAREHOUSES.includes(wh)) return '排序仓库参数非法：' + wh;
+    if (soVal === '' || soVal == null) continue;           // 留空 = 该仓不设置
+    if (!warehouseList.includes(wh)) continue;             // 客户不属于该仓 → 忽略
+    const so = Number(soVal);
+    if (!Number.isInteger(so) || so <= 0) return `${wh}排序号必须为正整数`;
+  }
+  return null;
+}
+
 // ---------- 单条 CRUD ----------
 router.get('/:id', (req, res) => {
   const r = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(req.params.id);
   if (!r) return res.status(404).json({ error: '客户不存在' });
   if (!ensureOwn(req, r)) return res.status(403).json({ error: '无权访问他人负责的客户' });
+  // 注入所有仓的独立排序配置，供详情页多仓 sort_order 回填
+  enrichWithWarehouseSorts(r);
   res.json({ data: r });
 });
 
@@ -343,21 +395,45 @@ router.post('/', (req, res) => {
   const err = validate(row, { type });
   if (err) return res.status(400).json({ error: err });
 
-  // sort_order 冲突处理：新记录插入时先为目标序号腾出空间
-  // 9999 为默认"排最后"，无需顺延；只有用户显式指定正整数时才触发
-  if (row.sort_order !== 9999 && Number.isInteger(row.sort_order) && row.sort_order > 0) {
-    adjustSortOrder(type, row.sort_order, 0);
-  }
+  // ★ 分仓独立 sort_order：校验（客户所属仓之外的值忽略）
+  const warehouseSorts = b.warehouse_sorts;
+  const hasWhSorts = !!(warehouseSorts && typeof warehouseSorts === 'object' && !Array.isArray(warehouseSorts));
+  const whList = String(row.warehouse || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const wsErr = validateWarehouseSorts(warehouseSorts, whList);
+  if (wsErr) return res.status(400).json({ error: wsErr });
 
   const owner_user_id = req.user.data_scope === 'self'
     ? req.user.user_id
     : (b.owner_user_id != null ? b.owner_user_id : req.user.user_id);
   const cols = [...Object.keys(row), 'customer_type', 'owner_user_id'];
-  const info = db.prepare(
-    `INSERT INTO customers (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`
-  ).run(...Object.keys(row).map((k) => row[k]), type, owner_user_id);
-  const created = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(info.lastInsertRowid);
-  writeAudit(req, 'create', info.lastInsertRowid, null, created);
+
+  let created;
+  db.exec('BEGIN');
+  try {
+    // 无分仓排序时，走旧的全局 sort_order 顺延
+    if (!hasWhSorts && row.sort_order !== 9999 && Number.isInteger(row.sort_order) && row.sort_order > 0) {
+      adjustSortOrder(type, row.sort_order, 0);
+    }
+    const info = db.prepare(
+      `INSERT INTO customers (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`
+    ).run(...Object.keys(row).map((k) => row[k]), type, owner_user_id);
+
+    if (hasWhSorts) {
+      for (const [wh, soVal] of Object.entries(warehouseSorts)) {
+        if (!WAREHOUSES.includes(wh) || !whList.includes(wh)) continue;
+        if (soVal === '' || soVal == null) continue;
+        setWarehouseSortPosition(db, wh, info.lastInsertRowid, soVal);
+      }
+    }
+    created = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(info.lastInsertRowid);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: '新增失败：' + e.message });
+  }
+
+  enrichWithWarehouseSorts(created);
+  writeAudit(req, 'create', created.customer_id, null, created);
   res.status(201).json({ data: created });
 });
 
@@ -372,18 +448,42 @@ router.put('/:id', (req, res) => {
   const err = validate(row, { type, excludeId: old.customer_id });
   if (err) return res.status(400).json({ error: err });
 
-  // sort_order 冲突处理：目标序号与旧序号不同时才触发，避免无意义的顺延
-  if (row.sort_order !== old.sort_order
-      && row.sort_order !== 9999
-      && Number.isInteger(row.sort_order) && row.sort_order > 0) {
-    adjustSortOrder(type, row.sort_order, old.customer_id);
-  }
+  // ★ 分仓独立 sort_order：位置式重排（先改客户基本资料，再按仓重排）
+  const warehouseSorts = b.warehouse_sorts;
+  const hasWhSorts = !!(warehouseSorts && typeof warehouseSorts === 'object' && !Array.isArray(warehouseSorts));
+  const whList = String(row.warehouse || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const wsErr = validateWarehouseSorts(warehouseSorts, whList);
+  if (wsErr) return res.status(400).json({ error: wsErr });
 
   const keys = Object.keys(row);
-  db.prepare(
-    `UPDATE customers SET ${keys.map((k) => k + '=?').join(',')}, customer_type=?, updated_at=datetime('now','localtime') WHERE customer_id=?`
-  ).run(...keys.map((k) => row[k]), type, old.customer_id);
-  const updated = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(old.customer_id);
+  let updated;
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      `UPDATE customers SET ${keys.map((k) => k + '=?').join(',')}, customer_type=?, updated_at=datetime('now','localtime') WHERE customer_id=?`
+    ).run(...keys.map((k) => row[k]), type, old.customer_id);
+
+    if (hasWhSorts) {
+      for (const [wh, soVal] of Object.entries(warehouseSorts)) {
+        if (!WAREHOUSES.includes(wh) || !whList.includes(wh)) continue;
+        if (soVal === '' || soVal == null) continue;
+        setWarehouseSortPosition(db, wh, old.customer_id, soVal);
+      }
+    } else if (row.sort_order !== old.sort_order
+        && row.sort_order !== 9999
+        && Number.isInteger(row.sort_order) && row.sort_order > 0) {
+      // 向后兼容：非分仓页面仍使用全局 sort_order 顺延
+      adjustSortOrder(type, row.sort_order, old.customer_id);
+    }
+
+    updated = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(old.customer_id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: '保存失败：' + e.message });
+  }
+
+  enrichWithWarehouseSorts(updated);
   writeAudit(req, 'update', old.customer_id, old, updated);
   res.json({ data: updated });
 });

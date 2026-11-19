@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 //  warehouse_sort_config 分仓独立排序功能单元测试
 //  覆盖：
 //    1) 表存在 + 主键(warehouse, customer_id)
@@ -169,4 +169,128 @@ test('7. 删除客户时 warehouse_sort_config 对应行级联删除', () => {
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].warehouse, '龙湖仓');
   assert.equal(remaining[0].customer_id, 2);
+});
+// ============================================================================
+// ★ 分仓独立排序：服务层真实调用（services/warehouseSort.js）
+//   规则：位置式重排 —— 单个仓库内序号连续 1..n，跨仓完全隔离
+// ============================================================================
+const { setWarehouseSortPosition } = require('../src/services/warehouseSort');
+
+// 读取某仓当前顺序（按实际排序号升序）
+function orderOf(db, wh) {
+  return db.prepare(`
+    SELECT c.customer_id, COALESCE(wsc.sort_order, c.sort_order, 9999) AS so
+      FROM customers c
+      LEFT JOIN warehouse_sort_config wsc
+             ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
+     WHERE c.warehouse LIKE ? AND c.is_deleted = 0
+     ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
+  `).all(wh, '%' + wh + '%').map((r) => ({ id: r.customer_id, so: r.so }));
+}
+
+// ---------- 8) 改到已占用位置 → 原占用及之后依次顺延 1 位 ----------
+test('8. 位置式重排：改到已占用位置 → 原占用及之后顺延', () => {
+  const db = freshDb();
+  seedCustomers(db);  // A(1), B(2) 在龙湖仓；C(3) 仅在佳新仓
+  db.exec(`INSERT INTO customers (customer_code, company_name, warehouse, coop_status, sort_order, owner_user_id)
+    VALUES ('C004','客户D','龙湖仓','合作中',400,1)`);
+  db.exec(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order) VALUES
+    ('龙湖仓', 1, 1), ('龙湖仓', 2, 2), ('龙湖仓', 4, 3)`);
+  // 把 D(4) 放到第 1 位 → D,A,B
+  const r = setWarehouseSortPosition(db, '龙湖仓', 4, 1);
+  assert.equal(r.ok, true);
+  assert.equal(r.position, 1);
+  assert.deepEqual(orderOf(db, '龙湖仓'), [
+    { id: 4, so: 1 }, { id: 1, so: 2 }, { id: 2, so: 3 },
+  ]);
+});
+
+// ---------- 9) 跨仓隔离：一个仓重排不影响另一个仓 ----------
+test('9. 跨仓隔离：龙湖仓重排不影响佳新仓', () => {
+  const db = freshDb();
+  seedCustomers(db);  // A 在龙湖仓+佳新仓；C 在佳新仓
+  db.exec(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order) VALUES
+    ('佳新仓', 1, 7), ('佳新仓', 3, 8)`);
+  const before = db.prepare("SELECT customer_id, sort_order FROM warehouse_sort_config WHERE warehouse='佳新仓' ORDER BY sort_order").all();
+  // 龙湖仓重排（把 B 放到第 1 位）
+  const r = setWarehouseSortPosition(db, '龙湖仓', 2, 1);
+  assert.equal(r.ok, true);
+  const after = db.prepare("SELECT customer_id, sort_order FROM warehouse_sort_config WHERE warehouse='佳新仓' ORDER BY sort_order").all();
+  assert.deepEqual(after, before, '佳新仓排序必须原样保持不变');
+  // 龙湖仓顺序：B,A
+  assert.deepEqual(orderOf(db, '龙湖仓').map(x => x.id), [2, 1]);
+});
+
+// ---------- 10) 空缺序号 → 自动填充，序号连续无中断 ----------
+test('10. 空缺序号：重排后该仓序号连续 1..n，无空缺', () => {
+  const db = freshDb();
+  seedCustomers(db);
+  db.exec(`INSERT INTO customers (customer_code, company_name, warehouse, coop_status, sort_order, owner_user_id)
+    VALUES ('C004','客户D','龙湖仓','合作中',400,1)`);
+  // 历史数据有空洞：1, 5, 9
+  db.exec(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order) VALUES
+    ('龙湖仓', 1, 1), ('龙湖仓', 2, 5), ('龙湖仓', 4, 9)`);
+  // 把 B 放到第 2 位（空缺语义 → 应落位 2，且整体连续）
+  const r = setWarehouseSortPosition(db, '龙湖仓', 2, 2);
+  assert.equal(r.ok, true);
+  const ord = orderOf(db, '龙湖仓');
+  assert.deepEqual(ord.map(x => x.id), [1, 2, 4]);
+  assert.deepEqual(ord.map(x => x.so), [1, 2, 3], '序号必须连续无空缺');
+});
+
+// ---------- 11) 序号超出范围 → 自动落到末尾 ----------
+test('11. 序号超出合理范围：自动落到末尾并保持连续', () => {
+  const db = freshDb();
+  seedCustomers(db);
+  db.exec(`INSERT INTO customers (customer_code, company_name, warehouse, coop_status, sort_order, owner_user_id)
+    VALUES ('C004','客户D','龙湖仓','合作中',400,1)`);
+  db.exec(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order) VALUES
+    ('龙湖仓', 1, 1), ('龙湖仓', 2, 2), ('龙湖仓', 4, 3)`);
+  // A 设为 99（远大于 3）
+  const r = setWarehouseSortPosition(db, '龙湖仓', 1, 99);
+  assert.equal(r.ok, true);
+  assert.equal(r.position, 3, '超出范围应夹到末位');
+  const ord = orderOf(db, '龙湖仓');
+  assert.deepEqual(ord.map(x => x.id), [2, 4, 1]);
+  assert.deepEqual(ord.map(x => x.so), [1, 2, 3]);
+});
+
+// ---------- 12) 客户不属于该仓 → 拒绝且不改数据 ----------
+test('12. 客户不属于该仓 → 拒绝，不产生任何排序变更', () => {
+  const db = freshDb();
+  seedCustomers(db);  // C(3) 只在佳新仓
+  const before = db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c;
+  const r = setWarehouseSortPosition(db, '龙湖仓', 3, 1);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /不属于/);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c, before);
+});
+
+// ---------- 13) 非法输入 → 拒绝（非整数 / 0 / 负数） ----------
+test('13. 非法排序号：0、负数、非整数一律拒绝', () => {
+  const db = freshDb();
+  seedCustomers(db);
+  for (const bad of [0, -1, 1.5, 'abc', '', null]) {
+    const r = setWarehouseSortPosition(db, '龙湖仓', 1, bad);
+    assert.equal(r.ok, false, `非法值 ${String(bad)} 应被拒绝`);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c, 0, '非法输入不得写入任何排序行');
+});
+
+// ---------- 14) 工时下拉 options 排序：wsc 优先于全局 sort_order ----------
+test('14. 工时 options 按 COALESCE(wsc.sort_order, c.sort_order, 9999) 排序', () => {
+  const db = freshDb();
+  seedCustomers(db);
+  // 全局：A=100, B=200；龙湖仓覆盖：B=1, A=2 → B 先出
+  db.exec(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order) VALUES
+    ('龙湖仓', 2, 1), ('龙湖仓', 1, 2)`);
+  const rows = db.prepare(`
+    SELECT c.customer_id
+      FROM customers c
+      LEFT JOIN warehouse_sort_config wsc
+             ON wsc.customer_id = c.customer_id AND wsc.warehouse='龙湖仓'
+     WHERE c.is_deleted = 0
+     ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id DESC
+  `).all();
+  assert.deepEqual(rows.map(r => r.customer_id), [2, 1, 3]);
 });

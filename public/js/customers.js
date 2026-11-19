@@ -27,65 +27,6 @@
     let host = null;
     const $ = (id) => host && host.querySelector('#' + id);
 
-    // ★ 分仓独立排序：每个仓库有独立的 localStorage 缓存 + debounce 定时器
-    const LS_PREFIX = 'erp_wh_sort_';
-    const debounceMap = new Map();   // warehouse → debounce timer
-    const configMap = new Map();     // warehouse → [{customer_id, sort_order}]
-    let lastSavedSnapshot = null;    // 保存成功后的快照，避免 save 完再触发
-
-    function lsKey(wh) { return LS_PREFIX + wh; }
-    function loadWhSortFromLS(wh) {
-      try { return JSON.parse(localStorage.getItem(lsKey(wh)) || 'null'); } catch (e) { return null; }
-    }
-    function saveWhSortToLS(wh, arr) { try { localStorage.setItem(lsKey(wh), JSON.stringify(arr)); } catch (e) {} }
-
-    async function loadWhSort(wh) {
-      if (!cfg.withWarehouse) return;
-      const ls = loadWhSortFromLS(wh);
-      if (ls) configMap.set(wh, ls);
-      // 静默拉后端（覆盖 LS，保证多端同步）
-      try {
-        const r = await API.get('/customers/warehouse-sort/' + encodeURIComponent(wh));
-        if (r && r.data) {
-          const arr = r.data.map(x => ({ customer_id: x.customer_id, sort_order: x.sort_order }));
-          configMap.set(wh, arr);
-          saveWhSortToLS(wh, arr);
-        }
-      } catch (e) { /* LS 作为降级，静默 */ }
-    }
-
-    async function saveWhSort(wh) {
-      const arr = configMap.get(wh);
-      if (!arr || !arr.length) return;
-      saveWhSortToLS(wh, arr);
-      try {
-        await API.put('/customers/warehouse-sort/' + encodeURIComponent(wh), arr);
-      } catch (e) {
-        if (window.ERP && ERP.toast) ERP.toast('保存排序失败：' + e.message, 'err');
-      }
-    }
-
-    function queueDebouncedSave(wh) {
-      if (debounceMap.has(wh)) clearTimeout(debounceMap.get(wh));
-      debounceMap.set(wh, setTimeout(() => { saveWhSort(wh); }, 1200));
-    }
-
-    function getSortForCustomer(wh, cid) {
-      const arr = configMap.get(wh);
-      if (!arr) return null;
-      const hit = arr.find(x => x.customer_id === cid);
-      return hit ? hit.sort_order : null;
-    }
-
-    function setSortForCustomer(wh, cid, sortOrder) {
-      let arr = configMap.get(wh);
-      if (!arr) { arr = []; configMap.set(wh, arr); }
-      const idx = arr.findIndex(x => x.customer_id === cid);
-      if (idx >= 0) arr[idx].sort_order = sortOrder;
-      else arr.push({ customer_id: cid, sort_order: sortOrder });
-      queueDebouncedSave(wh);
-    }
-
     function query() {
       const p = new URLSearchParams({
         customer_type: cfg.type, q: state.q, page: state.page, pageSize: state.pageSize,
@@ -143,29 +84,16 @@
       const delBtn = canDelete()
         ? `<button id="del_${r.customer_id}" class="danger">删除</button>`
         : '';
-      // ★ 分仓独立排序：withWarehouse 时显示可编辑数字输入；否则展示全局 sort_order
-      // 后端已按 COALESCE(wsc.sort_order, c.sort_order, 9999) 排序，
-      // 前端行内输入修改 → debounced save 到 warehouse_sort_config
-      let sortCell;
-      if (cfg.withWarehouse) {
-        const curSort = r.warehouse_sort_order != null ? r.warehouse_sort_order : (r.sort_order || 9999);
-        const is9999 = curSort === 9999;
-        sortCell = `<td class="num wh-sort-cell">
-          <input type="number" min="1" step="1"
-            id="sort_${r.customer_id}"
-            class="wh-sort-input"
-            data-cid="${r.customer_id}"
-            title="当前仓库（${esc(state.warehouse)}）的独立排序号；不同仓库互不影响"
-            style="width:48px;text-align:center;padding:1px 3px;border:1px solid #d0d3d9;border-radius:3px;font-size:12px;color:${is9999 ? '#aaa' : '#1f2329'}"
-            value="${is9999 ? '' : curSort}" placeholder="-">
-        </td>`;
-      } else {
-        // sort_order=9999 表示"排最后"，展示为 - 以保持列表整洁；其余直接展示实际序号
-        const sortDisplay = (r.sort_order != null && r.sort_order !== '' && Number(r.sort_order) !== 9999)
-          ? esc(r.sort_order)
-          : '<span style="color:#aaa">-</span>';
-        sortCell = `<td class="num">${sortDisplay}</td>`;
-      }
+      // ★ 列表页 sort 单元格：纯文本展示，不可编辑（编辑入口已收敛至详情页）
+      // 后端已按 COALESCE(wsc.sort_order, c.sort_order, 9999) 排序
+      let sortDisplay;
+      const so = cfg.withWarehouse
+        ? (r.warehouse_sort_order != null ? r.warehouse_sort_order : (r.sort_order || 9999))
+        : (r.sort_order || 9999);
+      sortDisplay = (so !== 9999)
+        ? esc(so)
+        : '<span style="color:#aaa">-</span>';
+      const sortCell = `<td class="num">${sortDisplay}</td>`;
       return `<tr>
         ${sortCell}
         <td>${esc(r.customer_code || '')}</td>
@@ -185,14 +113,14 @@
     }
 
     function bind() {
-      // 仓库 Tabs 联动：切仓重置分页 + 加载该仓独立排序配置 + 重新渲染
+      // 仓库 Tabs 联动：切仓重置分页 + 重新查询（后端按 COALESCE 自动分仓排序）
       if (cfg.withWarehouse && $('whTabs')) {
         $('whTabs').addEventListener('click', (e) => {
           const tab = e.target.closest('[data-wh]');
           if (!tab || tab.dataset.wh === state.warehouse) return;
           state.warehouse = tab.dataset.wh;
           state.page = 1;
-          loadWhSort(state.warehouse).then(() => load());
+          load();
         });
       }
       $('searchBtn').onclick = () => { state.q = $('searchInput').value.trim(); state.page = 1; load(); };
@@ -224,17 +152,7 @@
         if (ed) ed.onclick = () => openModal('edit', row);
         if (tg) tg.onclick = () => toggle(row);
         if (del) del.onclick = () => confirmDelete(row);
-        // ★ 分仓独立排序：行内 input 变更 → debounced 保存
-        if (cfg.withWarehouse) {
-          const inp = $('sort_' + row.customer_id);
-          if (inp) {
-            inp.addEventListener('change', () => {
-              const val = parseInt(inp.value, 10);
-              if (!Number.isFinite(val) || val <= 0) inp.value = ''; // 空表示 9999 排最后
-              setSortForCustomer(state.warehouse, row.customer_id, val && val > 0 ? val : 9999);
-            });
-          }
-        }
+        // 注意：列表页 sort 单元格不再有行内编辑入口（编辑已收敛至详情页 openModal）
       });
     }
 
@@ -272,13 +190,51 @@
       };
     }
 
-    // ---------- 手工表单：18 字段，两列分区 ----------
-    function openModal(mode, row) {
+    // ---------- 手工表单：18 字段 + 分仓独立 sort_order（withWarehouse） ----------
+    async function openModal(mode, row) {
       const isView = mode === 'view';
       const isEdit = mode === 'edit';
-      const v = row || {};
+      let v = row || {};
+
+      // ★ edit 时先拉详情 —— 列表返回的 row 没有 warehouse_sorts（所有仓的独立排序映射），
+      // 只有 GET /customers/:id 详情接口才注入该字段
+      if (isEdit && v.customer_id) {
+        try {
+          const detail = await API.get('/customers/' + v.customer_id);
+          if (detail && detail.data) v = detail.data;
+        } catch (e) { /* 拉不到就用列表数据降级 */ }
+      }
+
       const d = isView ? 'disabled' : '';
       const curWh = String(v.warehouse || '').split(/[,，、]/).map((s) => s.trim());
+      const wsMap = v.warehouse_sorts || {};  // 详情接口返回的 { '龙湖仓': 5, ... }
+
+      // ★ withWarehouse 客户：每个仓独立 sort_order 输入；非 withWarehouse 或未勾选时保留全局 sort_order
+      let sortSectionHtml;
+      if (cfg.withWarehouse) {
+        sortSectionHtml = `
+          <div class="form-section">分仓独立排序（每个仓库可设不同序号，互不影响）</div>
+          ${WAREHOUSES.map((wh) => {
+            const checked = curWh.includes(wh);
+            const curSo = wsMap[wh];  // null/undefined 表示未设置
+            const soVal = (curSo != null && curSo !== '' && Number(curSo) !== 9999) ? curSo : '';
+            const disabled = (!checked || isView) ? 'disabled' : '';
+            return `<label class="field wh-sort-field" data-wh="${wh}">
+              <span class="wh-sort-label">${esc(wh)}排序号</span>
+              <input id="f_sort_${wh}" type="number" min="1" step="1"
+                placeholder="留空则排最后"
+                value="${soVal}" ${disabled}>
+            </label>`;
+          }).join('')}
+        `;
+      } else {
+        const soVal = (v.sort_order != null && v.sort_order !== '' && Number(v.sort_order) !== 9999) ? v.sort_order : '';
+        sortSectionHtml = `
+          <div class="form-section">排序设置</div>
+          <label class="field">排序号<input id="f_sort_order" type="number" min="1" step="1" placeholder="留空默认排最后" value="${soVal}" ${d}></label>
+        `;
+      }
+
       const modal = document.createElement('div');
       modal.className = 'modal-overlay';
       modal.innerHTML = `
@@ -310,7 +266,9 @@
             <label class="field">物流公司控制<input id="f_logistics" value="${esc(v.logistics_control || '')}" ${d}></label>
             <label class="field">效期管理<select id="f_expiry" ${d}>${opts(['是', '否'], v.expiry_mgmt || '否')}</select></label>
             <label class="field">合作状态<select id="f_coop" ${d}>${opts(COOP, v.coop_status || '合作中')}</select></label>
-            <label class="field">排序号<input id="f_sort_order" type="number" min="0" step="1" placeholder="留空默认 9999（排最后）" value="${v.sort_order != null && v.sort_order !== '' ? v.sort_order : ''}" ${d}></label>
+
+            ${sortSectionHtml}
+
             <label class="field full">备注<textarea id="f_remark" ${d}>${esc(v.remark || '')}</textarea></label>
             <div id="f_err" class="err full"></div>
           </div>
@@ -321,7 +279,21 @@
           </div>
         </div>`;
       document.body.appendChild(modal);
+      // 记录原全局排序号：withWarehouse 客户未显式设置某仓排序时，仍以它作为回退值
+      modal.dataset.globalSort = String(v.sort_order != null && v.sort_order !== '' ? v.sort_order : 9999);
       modal.querySelectorAll('.close').forEach((b) => (b.onclick = () => modal.remove()));
+
+      // ★ 仓库 checkbox 联动 sort_order 输入框启用/禁用
+      if (cfg.withWarehouse && !isView) {
+        const whBoxes = modal.querySelectorAll('#f_wh input[type="checkbox"]');
+        whBoxes.forEach((cb) => {
+          cb.addEventListener('change', () => {
+            const soInput = modal.querySelector(`[id="f_sort_${cb.value}"]`);
+            if (soInput) soInput.disabled = !cb.checked;
+          });
+        });
+      }
+
       if (!isView) modal.querySelector('#saveBtn').onclick = () => save(mode, v.customer_id, modal);
     }
 
@@ -333,7 +305,7 @@
       const wh = cfg.withWarehouse
         ? Array.from(modal.querySelectorAll('#f_wh input[type="checkbox"]:checked')).map((x) => x.value)
         : [];
-      return {
+      const p = {
         customer_type: cfg.type,
         customer_code: val('f_code') || null,
         company_name: val('f_company'),
@@ -352,9 +324,29 @@
         logistics_control: val('f_logistics'),
         expiry_mgmt: val('f_expiry'),
         coop_status: val('f_coop'),
-        sort_order: val('f_sort_order') === '' ? '' : Number(val('f_sort_order')),
         remark: val('f_remark'),
       };
+
+      // ★ 分仓独立 sort_order 收集（withWarehouse 客户）
+      if (cfg.withWarehouse && wh.length) {
+        const ws = {};
+        for (const checkedWh of wh) {
+          const soVal = val('f_sort_' + checkedWh);
+          if (soVal !== '' && soVal !== null && soVal !== undefined) {
+            const so = Number(soVal);
+            if (Number.isInteger(so) && so > 0) ws[checkedWh] = so;
+          }
+        }
+        if (Object.keys(ws).length) p.warehouse_sorts = ws;
+        // 保留客户原有全局排序号（未单独设置排序的仓库仍以它为回退值），不要清成 9999
+        const keep = Number(modal.dataset.globalSort);
+        p.sort_order = Number.isFinite(keep) && keep > 0 ? keep : 9999;
+      } else {
+        // 非 withWarehouse 或未选任何仓：走全局 sort_order
+        const soVal = val('f_sort_order');
+        p.sort_order = soVal === '' ? 9999 : Number(soVal);
+      }
+      return p;
     }
 
     async function save(mode, id, modal) {
@@ -362,14 +354,24 @@
       const errEl = modal.querySelector('#f_err');
       if (!p.company_name) { errEl.textContent = '公司全称必填'; return; }
       if (cfg.withWarehouse && !p.warehouse.length) { errEl.textContent = '所在仓库至少选择一项'; return; }
-      // 排序号前端校验：非空时必须为正整数
-      if (p.sort_order !== '' && p.sort_order !== null && p.sort_order !== undefined) {
-        const so = Number(p.sort_order);
-        if (!Number.isInteger(so) || so <= 0) {
+
+      // ★ 分仓独立排序号校验
+      if (p.warehouse_sorts) {
+        for (const [wh, soVal] of Object.entries(p.warehouse_sorts)) {
+          if (!Number.isInteger(soVal) || soVal <= 0) {
+            errEl.textContent = `${wh}排序号必须为正整数`;
+            return;
+          }
+        }
+      }
+      // 全局 sort_order 校验（非 withWarehouse 路径）
+      if (!cfg.withWarehouse && p.sort_order !== 9999) {
+        if (!Number.isInteger(p.sort_order) || p.sort_order <= 0) {
           errEl.textContent = '排序号必须为正整数（留空则排最后）';
           return;
         }
       }
+
       const saveBtn = modal.querySelector('#saveBtn');
       if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
       try {
@@ -429,12 +431,7 @@
 
     return function mount(pageHost) {
       host = pageHost;
-      if (cfg.withWarehouse) {
-        // 首次 mount 先加载该仓独立排序（LS 即时可用 + 后端覆盖同步）
-        loadWhSort(state.warehouse).then(() => load());
-      } else {
-        load();
-      }
+      load();
     };
   }
 
