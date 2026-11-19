@@ -193,6 +193,27 @@ if (roleCount === 0) {
 // 对已有数据的库完全无害（全部 INSERT OR IGNORE / 条件 UPDATE），业务数据一行不动。
 require('./seed').runSeed(_conn);
 
+// ============================================================================
+//  customers 表异常预警（数据完整性兜底）
+//  ----------------------------------------------------------------------------
+//  2026-11-19 事故复盘：线上 customers 表突然全空，但 work_hours/orders/audit_logs
+//  等仍有数据——说明不是「整库被空文件覆盖」，而是某个环节单独 DELETE 了 customers。
+//  可能触发源：migrate 脚本意外 DROP、部署包带了旧版 schema、手工执行了测试脚本等。
+//  此处只做启动时探测 + 强 warning，不阻断启动（数据可从备份恢复，不应因预警直接崩）。
+// ============================================================================
+try {
+  const custCount = _conn.prepare('SELECT COUNT(*) c FROM customers').get().c;
+  const whCount = _conn.prepare('SELECT COUNT(*) c FROM work_hours').get().c;
+  const ordCount = _conn.prepare('SELECT COUNT(*) c FROM orders').get().c;
+  if (custCount === 0 && (whCount > 0 || ordCount > 0)) {
+    console.warn(`[db-warn] ⚠️⚠️⚠️  customers 表为空，但 work_hours(${whCount})/orders(${ordCount}) 有数据！`);
+    console.warn(`[db-warn]          极可能是 customers 数据被误删。请立即检查备份目录是否有含 customers 的快照，`);
+    console.warn(`[db-warn]          或设置 ERP_RESTORE_FROM=<有效备份路径> 后重启触发恢复。`);
+    const backupDir = path.join(path.dirname(DB_PATH), 'backups');
+    console.warn(`[db-warn]          备份目录：${backupDir}`);
+  }
+} catch (e) { /* ignore */ }
+
 // ★ 角色清理迁移（2026-11-18）：前端已 filter 隐藏 admin/operator/viewer 三个旧内置角色。
 // 数据库里它们会导致新建同名角色（如"仓库管理"）时被后端 UNIQUE 查重拒绝。
 // 必须放在所有种子脚本之后（否则种子又把它们加回来）。
