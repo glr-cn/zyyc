@@ -1,14 +1,35 @@
 // 应用外壳：登录态校验 → 权限加载 → 动态菜单 → hash 路由守卫 → 标签页初始化
-// RBAC：/auth/me 返回 menus（两级权限菜单树）+ permissions（可访问 path 白名单），
-// 前端菜单只渲染后端返回的数据；地址栏直访未授权路由由 hashchange 守卫拦截到 403。
+// ★ 启动守卫（启动期间 _booting=true）：
+//   FaaS 部署切换/冷启动期间，/auth/me 可能临时 502/超时/401。
+//   以前：任何异常 → API.clear() → location.href='login.html' → 用户被强制踢下线
+//   现在：启动期间不清 token、不跳登录 → 显示"服务启动中，点击重试"UI → 重试 3 次 → 再失败才兜底
 (function () {
   const token = localStorage.getItem('erp_token');
   if (!token) {
     location.href = 'login.html';
     return;
   }
-  API.captureSharecode(); // 从 URL 捕获分享码固化到 localStorage（防网关 cookie 失效）
+  API.captureSharecode();
   API.token = token;
+  API._booting = true;  // ★ 标记启动阶段，_handle401 不清 token
+
+  // 启动期间的"服务暂不可用"UI（可重试）
+  function showBootErrorUI(msg) {
+    document.body.innerHTML =
+      '<div style="display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:-apple-system,sans-serif;background:#f5f7fa;">' +
+      '<div style="max-width:420px;padding:32px;background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;">' +
+      '<div style="font-size:48px;margin-bottom:16px;">🔄</div>' +
+      '<div style="font-size:18px;font-weight:600;margin-bottom:8px;">服务启动中</div>' +
+      '<div style="font-size:14px;color:#666;line-height:1.6;margin-bottom:24px;">' +
+      (msg || '服务器正在切换新版本，请稍等几秒后重试。') +
+      '</div>' +
+      '<div style="display:flex;gap:10px;justify-content:center;">' +
+      '<button id="__retryBoot" style="background:#409eff;color:#fff;border:none;padding:10px 24px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">重试</button>' +
+      '<button id="__forceLogin" style="background:#f5f7fa;color:#666;border:1px solid #dcdfe6;padding:10px 24px;border-radius:6px;cursor:pointer;font-size:14px;">重新登录</button>' +
+      '</div></div></div>';
+    document.getElementById('__retryBoot').onclick = () => location.reload();
+    document.getElementById('__forceLogin').onclick = () => { API.clear(); location.href = 'login.html'; };
+  }
 
   // 403 拦截页：渲染到主内容区（不生成标签页），提供返回首个授权页入口
   ERP.render403 = function (page) {
@@ -86,10 +107,23 @@
       // 初始化标签页（刷新恢复 / 新登录重置），随后按当前 hash 进入守卫
       ERP.tabs.init(user);
       onHash();
+      API._booting = false;  // ★ 启动成功，解除启动守卫
     })
-    .catch(() => {
-      API.clear();
-      location.href = 'login.html';
+    .catch((e) => {
+      API._booting = false;
+      // ★ 启动失败：不清 token！区分"真过期"和"临时故障"
+      const msg = (e && e.message) || '未知错误';
+      // 只有明确的 JWT 过期错误才跳登录
+      if (/登录已过期|未登录/.test(msg)) {
+        // 真过期：清 token + 跳登录
+        API.clear();
+        location.href = 'login.html';
+      } else {
+        // 临时故障（网络/502/冷启动）：显示重试 UI，token 保留在 localStorage
+        // 用户点"重试"→ location.reload() → 重新走启动链路
+        // 如果这次还失败，说明真的挂了，用户可以点"重新登录"
+        showBootErrorUI(msg);
+      }
     });
 
   document.getElementById('logout').addEventListener('click', () => {

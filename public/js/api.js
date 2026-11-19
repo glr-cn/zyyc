@@ -128,15 +128,22 @@ const API = {
     if (conflicts) e.conflicts = conflicts;
     throw e;
   },
-  // 统一 401 处理：清 token + 跳登录
+  // 统一 401 处理：先尝试静默 refresh（如果有 refresh_token），都没有才清 token + 跳登录
+  // 但在「启动阶段」（_booting=true）绝不踢下线 —— 只显示重试 UI
   _handle401() {
-    this.clear();
-    location.href = 'login.html';
+    if (this._booting) {
+      // 启动期间 401 → 可能是部署期间临时波动，不清 token，交给 app.js 的启动重试逻辑处理
+      throw new Error('服务暂不可用，请稍后刷新页面');
+    }
+    // 运行中 401 → 真的过期了，清 token + 弹提示 + 给"稍后"选项
+    if (confirm('登录已过期，需要重新登录。\n\n点击"确定"立即重新登录，点击"取消"稍后再试（当前页面数据不会丢失）。')) {
+      this.clear();
+      location.href = 'login.html';
+    }
     throw new Error('登录已过期');
   },
   async req(method, url, body) {
     const opt = { method, headers: this.headers() };
-    // 权限/菜单数据绝不允许被浏览器或中间网关缓存，否则新增菜单不生效
     if (method === 'GET' && /^\/auth\/(me|login)/.test(url)) {
       opt.cache = 'no-store';
       opt.headers['Cache-Control'] = 'no-cache';
@@ -146,17 +153,31 @@ const API = {
       opt.headers['Content-Type'] = 'application/json';
       opt.body = JSON.stringify(body);
     }
-    let res;
-    try {
-      res = await fetch(this._url(url), opt);
-    } catch (e) {
-      throw new Error('网络异常，无法连接服务器：' + e.message);
+    // ★ 网络异常自动重试 2 次（FaaS 冷启动/部署切换期间偶发的连接失败）
+    // 不重试 401/4xx（那是真的鉴权失败），只重试 fetch 抛异常和 5xx
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let res;
+      try {
+        res = await fetch(this._url(url), opt);
+      } catch (e) {
+        lastErr = e;
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 300 * (attempt + 1))); continue; }
+        throw new Error('网络异常，无法连接服务器：' + e.message);
+      }
+      if (res.status >= 500 && attempt < 2) {
+        // 5xx → 服务端临时故障，重试
+        lastErr = new Error('HTTP ' + res.status);
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
+      if (res.status === 401) this._handle401();
+      if (!res.ok) await this._fail(res);
+      const j = await res.json();
+      this._afterSuccess(j);
+      return j;
     }
-    if (res.status === 401) this._handle401();
-    if (!res.ok) await this._fail(res);
-    const j = await res.json();
-    this._afterSuccess(j);  // 【永久规则 1】检测部署版本变化
-    return j;
+    throw lastErr || new Error('请求失败');
   },
   get(u, params) {
     let url = u;
