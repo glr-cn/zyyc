@@ -63,7 +63,13 @@ function createWorkhoursPage(warehouse) {
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
+    // ★ 初始默认查询范围：本月第一天到今天 —— 保证 resolveBackfillDate 能看到昨天并正确标注 [待补]
+    const _today = new Date();
+    const _y = _today.getFullYear();
+    const _m = String(_today.getMonth() + 1).padStart(2, '0');
+    const _monthStart = `${_y}-${_m}-01`;
+    const _todayStr = `${_y}-${_m}-${String(_today.getDate()).padStart(2, '0')}`;
+    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: _monthStart, dateTo: _todayStr, checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
 
     // ---------- 草稿持久化（localStorage） ----------
     // 需求：用户新增工时草稿后，关闭 banner tab / 切换页面再回来，草稿不应丢失。
@@ -328,7 +334,7 @@ function createWorkhoursPage(warehouse) {
       if (drp && drp.destroy) drp.destroy();
       drp = new DateRangePicker({
         mount: slot,
-        mode: 'day',
+        mode: 'month',
         startDate: state.dateFrom,
         endDate: state.dateTo,
         onChange: (v) => { state.dateFrom = v.startDate; state.dateTo = v.endDate; } // 查询仍由「查询」按钮/回车触发，保持原交互
@@ -432,7 +438,7 @@ function createWorkhoursPage(warehouse) {
       $('qryBtn').onclick = () => { syncDates(); readFilters(); state.page = 1; load(); };
       $('resetBtn').onclick = () => {
         const today = todayStr();
-        state.q = ''; state.dateFrom = today; state.dateTo = today;
+        state.q = ''; state.dateFrom = _monthStart; state.dateTo = _todayStr;
         state.status = 'pending';   // 修复：状态必须回到「未归档」
         state.checked.clear();      // 清空勾选，避免已归档勾选残留
         state.page = 1;
