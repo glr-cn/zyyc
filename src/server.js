@@ -447,6 +447,14 @@ if (require.main === module) {
       console.log(`[env] production`);
       console.log(`[perf] compression=on staticCache=24h+immutable apiCache=no-store reqTimeout=30s sqliteQueryTimeout=15s`);
     }
+    // ★ 异步跑 migration：TraeSite 启动超时 30 秒，同步 migration 在 WASM 驱动下 20+ 秒会超时。
+    // 端口先 listen → 健康检查通过 → migration 在后台继续跑（幂等，用户首次请求时表结构已就绪）。
+    setImmediate(() => {
+      const t0 = Date.now();
+      db.runMigrations();
+      console.log(`[db-migrate] ✅ 后台迁移完成（耗时 ${Date.now() - t0}ms）`);
+    });
+
     require('./services/backupScheduler').startBackupScheduler(db._path);
   });
 }
