@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS users (
 -- 客户资料（重构：18 个业务字段 + customer_type 分类 + 4 个系统列）
 --   * company_name / customer_code 列级 UNIQUE 已移除（见 migrateCustomersRemoveUnique.js），
 --     由后端 validate 的 is_deleted=0 过滤管理软删除客户的唯一性
---   * warehouse 为多仓字符串，英文逗号拼接（如 '龙湖仓,佳新仓'），按 LIKE '%仓名%' 过滤
+--   * warehouse 为多仓字符串，英文逗号拼接（如 '龙湖仓,佳新仓'），全系统按精确边界匹配:
+--     ',' || warehouse || ',' LIKE '%,仓名,%'（替代原 LIKE '%仓名%'，避免子串误命中/空仓漏出）
 --   * 索引不写在本文件：旧库未迁移时 CREATE INDEX 会报 no such column，统一由 scripts/rebuild_customers.js 建
 CREATE TABLE IF NOT EXISTS customers (
   customer_id        INTEGER PRIMARY KEY AUTOINCREMENT,   -- 系统列：orders.customer_id 外键依赖
