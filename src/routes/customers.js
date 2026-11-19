@@ -85,9 +85,10 @@ function validate(row, { type, excludeId = 0 } = {}) {
   if (row.cutoff_time && !CUTOFF_RE.test(row.cutoff_time)) errs.push('截单时间格式应为 HH:mm');
   if (!Number.isInteger(row.product_count) || row.product_count < 0) errs.push('商品种类数必须为非负整数');
   if (isNaN(row.prepaid_price) || row.prepaid_price < 0) errs.push('预充单价必须为非负数字');
-  if (row.company_name && db.prepare('SELECT 1 FROM customers WHERE company_name=? AND customer_id!=?').get(row.company_name, excludeId))
+  // 唯一性校验只查未删除客户（软删除客户的 customer_code/company_name 可重新使用）
+  if (row.company_name && db.prepare('SELECT 1 FROM customers WHERE company_name=? AND is_deleted=0 AND customer_id!=?').get(row.company_name, excludeId))
     errs.push('公司全称已存在');
-  if (row.customer_code && db.prepare('SELECT 1 FROM customers WHERE customer_code=? AND customer_id!=?').get(row.customer_code, excludeId))
+  if (row.customer_code && db.prepare('SELECT 1 FROM customers WHERE customer_code=? AND is_deleted=0 AND customer_id!=?').get(row.customer_code, excludeId))
     errs.push('货主代码已存在');
   return errs.length ? errs.join('；') : null;
 }
