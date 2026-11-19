@@ -63,13 +63,21 @@ function createWorkhoursPage(warehouse) {
     // 仓库由路由（页面配置）锁定，页内不可切换
     // status：pending 未归档（默认）/ archived 已归档；checked：勾选归档用
     // lastRows：当前页数据（供行内直编与局部重绘）
-    // ★ 初始默认查询范围：本月第一天到今天 —— 保证 resolveBackfillDate 能看到昨天并正确标注 [待补]
-    const _today = new Date();
-    const _y = _today.getFullYear();
-    const _m = String(_today.getMonth() + 1).padStart(2, '0');
-    const _monthStart = `${_y}-${_m}-01`;
-    const _todayStr = `${_y}-${_m}-${String(_today.getDate()).padStart(2, '0')}`;
-    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: _monthStart, dateTo: _todayStr, checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
+    // ★ 日期范围工具函数：按 mode 计算今天所在的区间
+    //   day  → {start,end} 同是今天
+    //   week → {start,end} 本周一 ~ 本周日
+    //   month→ {start,end} 本月1号 ~ 本月最后一天
+    const _fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const _todayDate = new Date();
+    const _weekStart = new Date(_todayDate); _weekStart.setDate(_weekStart.getDate() - ((_weekStart.getDay() + 6) % 7));
+    const _weekEnd = new Date(_weekStart); _weekEnd.setDate(_weekEnd.getDate() + 6);
+    const _monthEnd = new Date(_todayDate.getFullYear(), _todayDate.getMonth() + 1, 0);
+    const RANGE_BY_MODE = {
+      day:   { start: _fmt(_todayDate),          end: _fmt(_todayDate) },
+      week:  { start: _fmt(_weekStart),           end: _fmt(_weekEnd) },
+      month: { start: _fmt(new Date(_todayDate.getFullYear(), _todayDate.getMonth(), 1)), end: _fmt(_monthEnd) },
+    };
+    const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: RANGE_BY_MODE.day.start, dateTo: RANGE_BY_MODE.day.end, dateMode: 'day', checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [], unreportedCustomers: [] };
 
     // ---------- 草稿持久化（localStorage） ----------
     // 需求：用户新增工时草稿后，关闭 banner tab / 切换页面再回来，草稿不应丢失。
@@ -334,10 +342,14 @@ function createWorkhoursPage(warehouse) {
       if (drp && drp.destroy) drp.destroy();
       drp = new DateRangePicker({
         mount: slot,
-        mode: 'month',
+        mode: state.dateMode,
         startDate: state.dateFrom,
         endDate: state.dateTo,
-        onChange: (v) => { state.dateFrom = v.startDate; state.dateTo = v.endDate; } // 查询仍由「查询」按钮/回车触发，保持原交互
+        onChange: (v) => {
+          state.dateFrom = v.startDate;
+          state.dateTo = v.endDate;
+          state.dateMode = v.mode || state.dateMode;
+        }
       });
     }
 
@@ -376,6 +388,8 @@ function createWorkhoursPage(warehouse) {
       </table>
       </div>
       <div class="pager" id="pager"></div>
+      <!-- ★ 发货 + pending 专属：本期未报客户完整资料区块（默认隐藏，load 后按需渲染） -->
+      <div id="unreportedArea" style="display:none;margin-top:18px;border:1px solid #f0d0d0;border-radius:6px;background:#fff8f8;"></div>
       </div>`;
       renderTabs();
       bindToolbar();
@@ -437,15 +451,18 @@ function createWorkhoursPage(warehouse) {
       const syncDates = () => { if (drp) { const v = drp.getValue(); state.dateFrom = v.startDate; state.dateTo = v.endDate; } };
       $('qryBtn').onclick = () => { syncDates(); readFilters(); state.page = 1; load(); };
       $('resetBtn').onclick = () => {
-        const today = todayStr();
-        state.q = ''; state.dateFrom = _monthStart; state.dateTo = _todayStr;
-        state.status = 'pending';   // 修复：状态必须回到「未归档」
-        state.checked.clear();      // 清空勾选，避免已归档勾选残留
+        state.q = '';
+        // ★ 重置回到「当前 mode 对应的默认范围」—— 用户切到按周后再重置，不应把他打回按日
+        const defRange = RANGE_BY_MODE[state.dateMode] || RANGE_BY_MODE.day;
+        state.dateFrom = defRange.start;
+        state.dateTo = defRange.end;
+        state.status = 'pending';
+        state.checked.clear();
         state.page = 1;
         $('q').value = '';
         $('statusFilter').value = 'pending';
-        if (drp) drp.setValue({ startDate: today, endDate: today }, true);
-        syncTabUI();                // 归档按钮 / 提示条随状态一起复位
+        if (drp) drp.setValue({ mode: state.dateMode, startDate: state.dateFrom, endDate: state.dateTo }, true);
+        syncTabUI();
         load();
       };
       $('statusFilter').onchange = (e) => {
@@ -865,12 +882,15 @@ function createWorkhoursPage(warehouse) {
       ]);
       state.lastRows = r.data || [];
       state.lastTotal = r.total || 0;
+      // ★ 未报客户完整资料（仅发货+pending API 才返回）
+      state.unreportedCustomers = r.unreported_customers || [];
       // 合并草稿到顶部
       if (drafts.length && state.status === 'pending') {
         state.lastRows = drafts.concat(state.lastRows);
       }
       renderRows();
       renderPager(state.lastTotal, r.page || 1, r.pageSize || state.pageSize);
+      renderUnreportedArea();
 
       // ★ 非核心接口：下拉框数据 idle 时加载（不阻塞核心表格渲染）
       const _loadCustomers = async () => {
@@ -983,6 +1003,35 @@ function createWorkhoursPage(warehouse) {
           });
         };
       }
+    }
+
+    // ★ 未报客户清单（发货 + pending 专属）：在表格下方显示所有"合作中但本期没报"的客户完整资料
+    function renderUnreportedArea() {
+      const area = $('unreportedArea');
+      if (!area) return;
+      const show = state.workType === '发货' && state.status === 'pending' && state.unreportedCustomers && state.unreportedCustomers.length > 0;
+      if (!show) { area.style.display = 'none'; area.innerHTML = ''; return; }
+      const list = state.unreportedCustomers;
+      const rows = list.map((c) => {
+        const short = c.short_name && c.short_name !== c.company_name ? `<span class="u-short">（${escapeHtml(c.short_name)}）</span>` : '';
+        const contact = c.contact_person ? escapeHtml(c.contact_person) : '<span class="u-dim">—</span>';
+        const phone = c.phone ? escapeHtml(c.phone) : '<span class="u-dim">—</span>';
+        return `<div class="u-card" data-cid="${c.customer_id}">
+          <div class="u-name" title="${escapeHtml(c.company_name)}">${escapeHtml(c.company_name)}${short}</div>
+          <div class="u-meta"><span class="u-label">联系人</span>${contact}</div>
+          <div class="u-meta"><span class="u-label">电话</span>${phone}</div>
+          <div class="u-tag">未报${state.period ? ' · ' + state.period.from + ' ~ ' + state.period.to : ''}</div>
+        </div>`;
+      }).join('');
+      area.innerHTML = `
+        <div class="u-head">
+          <span class="u-title">⚠ 本期未报客户</span>
+          <span class="u-count">共 ${list.length} 家</span>
+          <span class="u-tip" style="margin-left:auto;color:#999;font-size:12px">点击上方表格中对应行直接录入</span>
+        </div>
+        <div class="u-grid">${rows}</div>
+      `;
+      area.style.display = '';
     }
 
     function renderPager(total, cur, size) {

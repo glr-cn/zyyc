@@ -126,17 +126,13 @@ function checkUnique(workType, { warehouse, date, customer_id, customer_name, pr
 }
 
 
-// 补报日期识别：缺口行默认显示"今天"；若本期含"昨天"且昨天早于今天，
-// 则说明该货主昨天应报未报 → 显示昨天并标记 need_backfill（前端渲染红色 [待补]）。
-// 仅在 today 落在 [from,to] 内时启用待补判断，避免查看历史区间时误标。
-function resolveBackfillDate(period) {
+// 补报日期识别：缺口行显示"昨天"并标注 need_backfill（前端渲染红色 [待补]）。
+// ★ 独立于用户查询的日期范围 —— 只要今天 ≤ 今天（永远成立），就返回昨天作为 suggest_date。
+// 这样即使用户按日查询（范围仅今天），缺口行依然正确显示昨天 + 红色 [待补]。
+function resolveBackfillDate() {
   const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const today = fmt(new Date());
-  if (today < period.from || today > period.to) return { suggest_date: today, need_backfill: false };
   const yst = new Date(); yst.setDate(yst.getDate() - 1);
-  const yesterday = fmt(yst);
-  if (yesterday >= period.from && yesterday <= period.to) return { suggest_date: yesterday, need_backfill: true };
-  return { suggest_date: today, need_backfill: false };
+  return { suggest_date: fmt(yst), need_backfill: true };
 }
 
 // 列表：强制 warehouse + work_type 过滤（防串仓）+ 搜索 + 日期范围 + 分页(20) + 日期倒序
@@ -188,7 +184,7 @@ router.get('/', (req, res) => {
     // 本仓货主：warehouse LIKE 匹配多仓串；排除已删除（软删 is_deleted=1）与停用货主（仅合作中展示缺口）
     const ownerWhere = ['c.warehouse LIKE ?', 'c.is_deleted=0', "c.coop_status='合作中'"];
     const ownerParams = ['%' + warehouse + '%'];
-    const backfill = resolveBackfillDate(period); // 待补日期识别：默认今天，本期含昨天则显示昨天并标待补
+    const backfill = resolveBackfillDate(); // ★ 独立于 period：永远返回昨天 + need_backfill=true
     if (custScope.sql) { ownerWhere.push(custScope.sql); ownerParams.push(...custScope.params); }
     if (q) { ownerWhere.push('(COALESCE(NULLIF(c.short_name,\'\'),c.company_name) LIKE ? OR c.company_name LIKE ?)'); const like = `%${q}%`; ownerParams.push(like, like); }
     const ownerWhereSql = ownerWhere.join(' AND ');
@@ -268,7 +264,19 @@ router.get('/', (req, res) => {
       const enrichedFilled = enriched.filter((r) => r.filled === 1);
       svc.attachTrend(enrichedFilled, trend, db);
     }
-    return res.json({ data: enriched, total, page, pageSize, period });
+    // ★ 未报客户完整资料（发货 pending 专属，供前端渲染下方"未报客户清单"区块）
+    const unreportedCustomers = db.prepare(`
+      SELECT c.customer_id, c.company_name, c.short_name, c.contact_person, c.phone, c.coop_status, c.warehouse
+        FROM customers c
+       WHERE ${ownerWhereSql}
+         AND NOT EXISTS (
+           SELECT 1 FROM work_hours w
+            WHERE w.warehouse=? AND w.work_type='发货'
+              AND w.customer_id=c.customer_id AND ${periodWhere}
+         )
+       ORDER BY c.sort_order ASC, c.company_name
+    `).all(...ownerParams, warehouse, period.from, period.to);
+    return res.json({ data: enriched, total, page, pageSize, period, unreported_customers: unreportedCustomers });
   }
 
   // ---- 原查询：其余类型 / 归档视图 ----

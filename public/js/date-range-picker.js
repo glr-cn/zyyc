@@ -118,10 +118,15 @@
       if (m === this.mode) return;
       this.mode = m;
       this.sel.value = m;
-      if (this.value.startDate) {
-        const s = parse(this.value.startDate);
-        if (m === 'week') this.value = rangeOfWeek(s);
-        else if (m === 'month') this.value = rangeOfMonth(s);
+      // ★ 切换粒度时用「今天」做基准 —— 永远跳到"本周/本月"而不是旧范围所在的那一周/那一月
+      const today = new Date();
+      if (m === 'day') {
+        const t = iso(today);
+        this.value = { startDate: t, endDate: t };
+      } else if (m === 'week') {
+        this.value = rangeOfWeek(today);
+      } else if (m === 'month') {
+        this.value = rangeOfMonth(today);
       }
       this.draft = { start: '', end: '' };
       this._sync();
