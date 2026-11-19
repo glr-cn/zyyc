@@ -175,6 +175,11 @@ require('./migrateCustomersDefaultUnit').run(_conn);
 // 走重建表三步法（customer_id 原样保留，外键不受影响）；幂等；首次执行后 fingerprint 记录。
 require('./migrateCustomersRemoveUnique').run(_conn, { verbose: true });
 
+// warehouse_sort_config 去掉 FK：上游 customers 表 ALTER TABLE RENAME 会把 wsc 的
+// FOREIGN KEY 同步指向 customers_bak，导致后续 INSERT 报 FOREIGN KEY constraint failed。
+// 重建表去掉 FK（软删除客户的排序配置由后端手动处理，CASCADE 无必要）。幂等。
+require('./migrateWscRemoveFk').run(_conn, { verbose: true });
+
 // work_hours 归档冲突检测覆盖索引：
 // 精确匹配四元组(warehouse, work_type, customer_id, date, status) → 命中覆盖索引零回表。
 // 解决热点日（同日 10 万行）从 8 秒 → < 10ms。幂等，CREATE INDEX IF NOT EXISTS 天然安全。
