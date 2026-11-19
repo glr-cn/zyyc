@@ -591,5 +591,7 @@ function dashboardPage(host) {
 }
 
 window.ERP_PAGES.dashboard = dashboardPage;
-// 看板下「工时汇总」子菜单 → 复用同一渲染函数，确保两个入口数据完全一致
+// 看板下「工时汇总」子菜单 → 复用同一渲染函数
 window.ERP_PAGES.dash_wh_summary = dashboardPage;
+// 工时模块下「工时汇总」(analytics) → 也复用同一渲染函数，三处入口数据100%一致
+window.ERP_PAGES.analytics = dashboardPage;
