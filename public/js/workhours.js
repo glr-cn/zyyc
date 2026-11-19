@@ -65,6 +65,46 @@ function createWorkhoursPage(warehouse) {
     // lastRows：当前页数据（供行内直编与局部重绘）
     const state = { warehouse: warehouse, workType: '发货', status: 'pending', page: 1, pageSize: 20, q: '', dateFrom: todayStr(), dateTo: todayStr(), checked: new Set(), lastRows: [], lastTotal: 0, isSuper: false, isAdmin: false, meName: '', customers: [] };
 
+    // ---------- 草稿持久化（localStorage） ----------
+    // 需求：用户新增工时草稿后，关闭 banner tab / 切换页面再回来，草稿不应丢失。
+    // 机制：按仓库 + 工时类型（wh + wt）分 namespace 存 localStorage；
+    //   读：ERP_PAGES 初始化时 + load() 时，从 localStorage 取出对应 wt 的草稿，合并到 state.lastRows 顶部；
+    //   写：addVirtualRow() / renderRows()（debounce 500ms）时，过滤出 tempId≠null + work_id=0 的虚拟行写入；
+    //   清：提交成功 / 删除成功 / _cleared 标记时清除对应 draft；
+    // 跨 tab 隔离：每个 (wh, wt) 独立存，互不污染（已修复上一轮跨 tab 污染 bug）。
+    const DRAFT_STORAGE_KEY = 'erp_wh_drafts_v1';
+    function _draftNs(wh, wt) { return wh + '::' + wt; }
+    function _readDrafts(wh, wt) {
+      try {
+        const all = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || '{}');
+        const arr = Array.isArray(all[_draftNs(wh, wt)]) ? all[_draftNs(wh, wt)] : [];
+        return arr.filter((r) => r && r.tempId && Number(r.work_id) === 0 && !r._cleared);
+      } catch (e) { return []; }
+    }
+    let _draftSaveTimer = null;
+    function _saveDrafts(wh, wt, rows) {
+      clearTimeout(_draftSaveTimer);
+      _draftSaveTimer = setTimeout(() => {
+        try {
+          const all = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || '{}');
+          const valid = rows.filter((r) => r && r.tempId && Number(r.work_id) === 0 && !r._cleared);
+          if (valid.length) all[_draftNs(wh, wt)] = valid;
+          else delete all[_draftNs(wh, wt)];
+          localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(all));
+        } catch (e) { /* quota exceeded 静默降级，不能阻塞主流程 */ }
+      }, 500);
+    }
+    function _clearDraftNs(wh, wt) {
+      try {
+        const all = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || '{}');
+        delete all[_draftNs(wh, wt)];
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(all));
+      } catch (e) { /* ignore */ }
+    }
+    // ★ 初始化恢复：新页面实例化时，把 localStorage 里保存的草稿拉进 lastRows
+    const _bootDrafts = _readDrafts(state.warehouse, state.workType);
+    if (_bootDrafts.length) state.lastRows = _bootDrafts;
+
     function todayStr() {
       const d = new Date();
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -465,6 +505,7 @@ function createWorkhoursPage(warehouse) {
       // ★ Bug#3 修复：每次展开全新独立对象，绝不用共用引用
       state.lastRows.unshift({ ...base });
       renderRows();
+      _saveDrafts(state.warehouse, state.workType, state.lastRows);
       // 聚焦首个可输入控件（日期），让用户直接开填
       const first = $('whBody').querySelector('tr[data-row-idx] input[data-if="date"]');
       if (first) first.focus();
@@ -798,13 +839,17 @@ function createWorkhoursPage(warehouse) {
 
     async function load() {
       await refreshRole();
-      // ★ Bug#4 保护：查询/日期筛选刷新前，先把当前 pending 列表里所有未入库的虚拟行
-      // （tempId 非空 + work_id=0 + work_type 匹配当前 tab）捕获出来；
-      // 【关键】必须按 work_type 过滤，否则从"库内"切到"后勤" tab 时会把库内虚拟行错误地带到后勤列表顶部，
-      // 造成"跨分类联动"的假相（用户以为新增库内工时同步增加了后勤工时）。
-      const drafts = (state.status === 'pending')
+      // ★ Bug#4 保护 + 草稿持久化：
+      // （A）内存里的虚拟行：查询/日期筛选刷新前，先捕获当前 pending 列表里未入库的虚拟行；
+      //   【关键】必须按 work_type 过滤，否则"跨分类联动"假象复发；
+      // （B）localStorage 持久化草稿：页面被 close() 销毁再重新 open() 时，内存 drafts 已丢失，
+      //   但 localStorage 里还存着上次的草稿。这里读出来和内存 drafts 做并集（按 tempId 去重）。
+      const draftsMem = (state.status === 'pending')
         ? state.lastRows.filter((r) => r.tempId && Number(r.work_id) === 0 && r.work_type === state.workType)
         : [];
+      const saved = _readDrafts(state.warehouse, state.workType);
+      const seen = new Set(draftsMem.map((r) => r.tempId));
+      const drafts = draftsMem.concat(saved.filter((r) => !seen.has(r.tempId)));
       const params = new URLSearchParams({ warehouse: state.warehouse, work_type: state.workType, status: state.status, page: state.page, pageSize: state.pageSize });
       if (state.q) params.set('q', state.q);
       if (state.dateFrom) params.set('dateFrom', state.dateFrom);
@@ -816,9 +861,8 @@ function createWorkhoursPage(warehouse) {
       state.lastRows = r.data || [];
       state.lastTotal = r.total || 0;
       state.customers = cResp.data || [];
-      // ★ Bug#4 保护：把之前捕获的草稿重新合并到顶部
+      // 合并草稿到顶部（内存 + localStorage 持久化草稿都在 drafts 里了）
       if (drafts.length && state.status === 'pending') {
-        // 先过滤掉后端返回里可能已经存在的草稿（极端情况：用户在另一标签页保存了草稿）
         state.lastRows = drafts.concat(state.lastRows);
       }
       renderRows();
@@ -844,6 +888,11 @@ function createWorkhoursPage(warehouse) {
         // 所有 pending 行都行内直编（含收货/库内/后勤）；已归档行只读
         if (state.status === 'pending') {
           $('whBody').querySelectorAll('tr[data-row-idx]').forEach(bindInlineRow);
+        }
+        // ★ 草稿持久化：每次渲染后 debounce 保存当前虚拟行到 localStorage；
+        //   行内编辑 blur → updateRow → renderRows → debounce 保存，闭环。
+        if (state.status === 'pending') {
+          _saveDrafts(state.warehouse, state.workType, state.lastRows);
         }
       }
 
