@@ -155,3 +155,6 @@ const API = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 };
+// 暴露到 window，供 _page_loader 动态注入的异步脚本访问
+// （defer 脚本共享顶层作用域，动态注入脚本有独立上下文，必须挂 window）
+window.API = API;

@@ -207,25 +207,11 @@
       fd.append('file', _selectedFile);
       fd.append('platform', platform);
 
-      fetch('/api/orders/import', {
-        method: 'POST',
-        body: fd,
-        headers: { Authorization: 'Bearer ' + (localStorage.getItem('erp_token') || '') },
-      }).then(async (resp) => {
-        const data = await resp.json().catch(() => ({}));
+      API.upload('/orders/import', fd).then((data) => {
         prog.style.display = 'none';
 
         const res = card.querySelector('#odResult');
         res.style.display = 'block';
-
-        if (!resp.ok) {
-          res.innerHTML = `
-            <div style="padding:14px;background:#fef0f0;border-radius:4px;border-left:3px solid #f56c6c;color:#f56c6c;">
-              ❌ 导入失败：${data.error || ('HTTP ' + resp.status)}
-            </div>
-          `;
-          return;
-        }
 
         const { success = 0, failed = 0, failures = [] } = data;
         const html = [
