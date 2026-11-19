@@ -170,6 +170,11 @@ require('./migrateCustomersSortOrder').run(_conn);
 // 已归档历史数据的 unit 列独立存储，不受此默认值影响。幂等、全事务、失败即回滚。
 require('./migrateCustomersDefaultUnit').run(_conn);
 
+// customers 表 UNIQUE 约束移除：company_name / customer_code 的列级 UNIQUE 不考虑 is_deleted，
+// 软删除客户的同值无法被重新使用。改由后端 validate 的 is_deleted=0 过滤管理唯一性。
+// 走重建表三步法（customer_id 原样保留，外键不受影响）；幂等；首次执行后 fingerprint 记录。
+require('./migrateCustomersRemoveUnique').run(_conn, { verbose: true });
+
 // work_hours 归档冲突检测覆盖索引：
 // 精确匹配四元组(warehouse, work_type, customer_id, date, status) → 命中覆盖索引零回表。
 // 解决热点日（同日 10 万行）从 8 秒 → < 10ms。幂等，CREATE INDEX IF NOT EXISTS 天然安全。

@@ -62,13 +62,14 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- 客户资料（重构：18 个业务字段 + customer_type 分类 + 4 个系统列）
---   * company_name 为 Excel 导入 Upsert 业务主键（UNIQUE）；customer_code 选填但非空时唯一
+--   * company_name / customer_code 列级 UNIQUE 已移除（见 migrateCustomersRemoveUnique.js），
+--     由后端 validate 的 is_deleted=0 过滤管理软删除客户的唯一性
 --   * warehouse 为多仓字符串，英文逗号拼接（如 '龙湖仓,佳新仓'），按 LIKE '%仓名%' 过滤
 --   * 索引不写在本文件：旧库未迁移时 CREATE INDEX 会报 no such column，统一由 scripts/rebuild_customers.js 建
 CREATE TABLE IF NOT EXISTS customers (
   customer_id        INTEGER PRIMARY KEY AUTOINCREMENT,   -- 系统列：orders.customer_id 外键依赖
-  customer_code      TEXT UNIQUE,                        -- ① 货主代码（选填；NULL 可多条）
-  company_name       TEXT NOT NULL UNIQUE,               -- ② 公司全称（必填，Upsert 键）
+  customer_code      TEXT,                                -- ① 货主代码（选填；已去掉 UNIQUE）
+  company_name       TEXT NOT NULL,                        -- ② 公司全称（必填；已去掉 UNIQUE）
   short_name         TEXT,                              -- ③ 客户简称
   warehouse          TEXT NOT NULL DEFAULT '',           -- ④ 所在仓库（必填，多仓逗号拼接）
   contact_person     TEXT,                              -- ⑤ 客户联系人
