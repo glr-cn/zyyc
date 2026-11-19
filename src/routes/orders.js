@@ -35,6 +35,181 @@ router.use(auth);
 router.use(readonlyGate);
 router.use(menuGate('orders'));
 
+// ============================================================================
+// 偏远地区方案管理（region_plans + region_plan_overrides）
+// ----------------------------------------------------------------------------
+// 设计：
+//   - shentong_region_class 是静态种子（申通默认规则，不可改）
+//   - region_plans 是用户可编辑方案，每个方案有若干 province→class 覆盖
+//   - 有效 region_class = 方案覆盖 → shentong_region_class 精确 → 省级 → 正常
+//   - 默认方案（id=1）无覆盖，完全等于 shentong_region_class
+// ============================================================================
+
+// --- 幂等建表（首次启动自动执行）---
+(function initRegionPlanTables() {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS region_plans (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL UNIQUE,
+        is_default  INTEGER NOT NULL DEFAULT 0,
+        description TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+      );
+      CREATE TABLE IF NOT EXISTS region_plan_overrides (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        plan_id       INTEGER NOT NULL REFERENCES region_plans(id) ON DELETE CASCADE,
+        province      TEXT NOT NULL,
+        city          TEXT,
+        region_class  TEXT NOT NULL CHECK(region_class IN ('大偏远','小偏远','正常')),
+        UNIQUE (plan_id, province, city)
+      );
+    `);
+    // 默认方案：首次启动时自动创建
+    const cnt = db.prepare('SELECT COUNT(*) c FROM region_plans').get().c;
+    if (!cnt) {
+      db.prepare('INSERT INTO region_plans (name, is_default, description) VALUES (?,?,?)')
+        .run('申通默认规则', 1, '使用系统内置 shentong_region_class 静态种子作为偏远地区判定规则');
+    }
+  } catch (e) {
+    console.error('[region-plans] 建表失败:', e.message);
+  }
+})();
+
+// 辅助：按方案 + 省 + 市 → 返回有效 region_class
+function effectiveClass(planId, province, city) {
+  if (!province) return '正常';
+  // 1. 方案精确覆盖（省 + 市）
+  if (planId) {
+    const ex = db.prepare(
+      'SELECT region_class FROM region_plan_overrides WHERE plan_id=? AND province=? AND city=?'
+    ).get(planId, province, city);
+    if (ex) return ex.region_class;
+    const prov = db.prepare(
+      'SELECT region_class FROM region_plan_overrides WHERE plan_id=? AND province=? AND city IS NULL'
+    ).get(planId, province);
+    if (prov) return prov.region_class;
+  }
+  // 2. shentong_region_class 精确
+  if (city) {
+    const ex = db.prepare('SELECT region_class FROM shentong_region_class WHERE province=? AND city=?').get(province, city);
+    if (ex) return ex.region_class;
+  }
+  const prov = db.prepare('SELECT region_class FROM shentong_region_class WHERE province=? AND city IS NULL').get(province);
+  if (prov) return prov.region_class;
+  return '正常';
+}
+
+// --- GET /api/orders/region-plans — 列出所有方案及其覆盖条数 ---
+router.get('/region-plans', (req, res) => {
+  const plans = db.prepare(`
+    SELECT rp.*,
+           (SELECT COUNT(*) FROM region_plan_overrides rpo WHERE rpo.plan_id = rp.id) AS override_count
+    FROM region_plans rp
+    ORDER BY rp.is_default DESC, rp.id ASC
+  `).all();
+  res.json({ plans });
+});
+
+// --- POST /api/orders/region-plans — 新建方案 ---
+router.post('/region-plans', (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const description = String(req.body.description || '').trim();
+  if (!name) return res.status(400).json({ error: '方案名称不能为空' });
+  try {
+    const info = db.prepare(
+      'INSERT INTO region_plans (name, description) VALUES (?,?)'
+    ).run(name, description || null);
+    res.json({ id: info.lastInsertRowid, name });
+  } catch (e) {
+    res.status(400).json({ error: '创建失败：' + e.message });
+  }
+});
+
+// --- PUT /api/orders/region-plans/:id — 更新方案（含覆盖规则）---
+router.put('/region-plans/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '无效方案 ID' });
+  const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
+  if (!plan) return res.status(404).json({ error: '方案不存在' });
+
+  const tx = db.transaction(() => {
+    // 方案基本信息
+    const name = String(req.body.name || plan.name).trim();
+    const description = req.body.description != null
+      ? String(req.body.description).trim()
+      : plan.description;
+    db.prepare('UPDATE region_plans SET name=?, description=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?')
+      .run(name, description || null, id);
+
+    // 覆盖规则（整体替换 — 若传 overrides 字段）
+    if (Array.isArray(req.body.overrides)) {
+      db.prepare('DELETE FROM region_plan_overrides WHERE plan_id=?').run(id);
+      const ins = db.prepare(
+        'INSERT OR REPLACE INTO region_plan_overrides (plan_id, province, city, region_class) VALUES (?,?,?,?)'
+      );
+      for (const o of req.body.overrides) {
+        const cls = String(o.region_class || '').trim();
+        if (!['大偏远', '小偏远', '正常'].includes(cls)) continue;
+        const prov = String(o.province || '').trim();
+        if (!prov) continue;
+        ins.run(id, prov, o.city ? String(o.city).trim() : null, cls);
+      }
+    }
+  });
+  try {
+    tx();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: '更新失败：' + e.message });
+  }
+});
+
+// --- POST /api/orders/region-plans/:id/default — 设为默认方案 ---
+router.post('/region-plans/:id/default', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '无效方案 ID' });
+  const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
+  if (!plan) return res.status(404).json({ error: '方案不存在' });
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE region_plans SET is_default=0').run();
+    db.prepare('UPDATE region_plans SET is_default=1 WHERE id=?').run(id);
+  });
+  tx();
+  res.json({ ok: true });
+});
+
+// --- DELETE /api/orders/region-plans/:id — 删除方案（默认方案不可删）---
+router.delete('/region-plans/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '无效方案 ID' });
+  const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
+  if (!plan) return res.status(404).json({ error: '方案不存在' });
+  if (plan.is_default) return res.status(400).json({ error: '默认方案不可删除' });
+  db.prepare('DELETE FROM region_plans WHERE id=?').run(id);
+  db.prepare('DELETE FROM region_plan_overrides WHERE plan_id=?').run(id);
+  res.json({ ok: true });
+});
+
+// --- GET /api/orders/region-plans/:id/overrides — 取某个方案的覆盖列表 ---
+router.get('/region-plans/:id/overrides', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
+  if (!plan) return res.status(404).json({ error: '方案不存在' });
+  const overrides = db.prepare(`
+    SELECT province, city, region_class FROM region_plan_overrides
+    WHERE plan_id=? ORDER BY province, city
+  `).all(id);
+  res.json({ plan, overrides });
+});
+
+// --- GET /api/orders/region-plans/default — 取当前默认方案 ---
+router.get('/region-plans/default', (req, res) => {
+  const plan = db.prepare('SELECT * FROM region_plans WHERE is_default=1').get();
+  res.json({ plan });
+});
+
 // 导入记录接口：基于 audit_logs 中 table_name='orders' AND action='import' 的条目
 // 固定返回最新 20 条，每条解析出 filename/platform/timestamp/success/failed
 const IMPORT_HISTORY_LIMIT = 20;
@@ -207,62 +382,142 @@ router.post('/import', auth, menuGate('orders_import'), upload.single('file'), (
   }
 });
 
-// GET /api/orders/dashboard — 地区分类看板聚合
-// query: start, end, platform, class(大偏远/小偏远/正常)
+// GET /api/orders/dashboard — 地区分类看板聚合（支持 plan 参数）
+// query: start, end, platform, class(大偏远/小偏远/正常), plan(方案 id)
 router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
   const start = String(req.query.start || '').trim();
   const end = String(req.query.end || '').trim();
   const platform = String(req.query.platform || '').trim();
   const cls = String(req.query.class || '').trim();
+  const planId = req.query.plan ? parseInt(req.query.plan, 10) : null;
 
   const where = [];
   const params = [];
   if (start) { where.push('o.order_date >= ?'); params.push(start); }
   if (end)   { where.push('o.order_date <= ?'); params.push(end); }
   if (platform && platform !== '全部') { where.push('o.wms_platform = ?'); params.push(platform); }
-  if (cls && ['大偏远', '小偏远', '正常'].includes(cls)) {
-    where.push('o.region_class = ?'); params.push(cls);
-  }
+  // 注意：class 过滤不写死 o.region_class，改由 effective_class CTE 处理
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
-  // 聚合（地区分类 × 平台）
-  const agg = db.prepare(`
-    SELECT
-      COALESCE(o.region_class, '正常') AS region_class,
-      o.wms_platform,
-      COUNT(*) AS cnt,
-      SUM(o.ship_quantity) AS qty
-    FROM orders o ${w}
-    GROUP BY COALESCE(o.region_class, '正常'), o.wms_platform
-  `).all(...params);
+  // 构建 plan JOIN（planId 为空时跳过，等价于只用 shentong_region_class）
+  const planExactJoin = planId
+    ? 'LEFT JOIN region_plan_overrides plan_exact ON plan_exact.plan_id=? AND plan_exact.province=o.to_province AND plan_exact.city=o.to_city'
+    : 'LEFT JOIN (SELECT NULL plan_id, NULL province, NULL city, NULL region_class) plan_exact ON 1=0';
+  const planProvJoin  = planId
+    ? 'LEFT JOIN region_plan_overrides plan_prov  ON plan_prov.plan_id=? AND plan_prov.province=o.to_province AND plan_prov.city IS NULL'
+    : 'LEFT JOIN (SELECT NULL plan_id, NULL province, NULL city, NULL region_class) plan_prov ON 1=0';
+  const planParams = planId ? [planId, planId] : [];
 
-  // 汇总（3 类）
-  const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0 };
-  for (const r of agg) {
-    if (byClass[r.region_class] != null) byClass[r.region_class] += r.cnt;
+  // CTE：计算每单的 effective_class
+  const effectiveSQL = `
+    WITH effective AS (
+      SELECT
+        o.*,
+        o.to_province AS province,
+        COALESCE(
+          plan_exact.region_class,
+          plan_prov.region_class,
+          st_exact.region_class,
+          st_prov.region_class,
+          '正常'
+        ) AS effective_class
+      FROM orders o
+      ${planExactJoin}
+      ${planProvJoin}
+      LEFT JOIN shentong_region_class st_exact ON st_exact.province = o.to_province AND st_exact.city = o.to_city
+      LEFT JOIN shentong_region_class st_prov  ON st_prov.province  = o.to_province AND st_prov.city IS NULL
+      ${w}
+    )
+    SELECT * FROM effective
+    ${cls && ['大偏远', '小偏远', '正常'].includes(cls) ? 'WHERE effective_class = ?' : ''}
+  `;
+  const sqlParams = [...planParams, ...params];
+  if (cls && ['大偏远', '小偏远', '正常'].includes(cls)) sqlParams.push(cls);
+
+  try {
+    // 地区分类 × 平台聚合
+    const agg = db.prepare(`
+      ${effectiveSQL.includes('WHERE') ? effectiveSQL : effectiveSQL + ' WHERE 1=1'}
+      GROUP BY effective_class, wms_platform
+    `).all(...sqlParams);
+
+    // 省份 × 地区分类聚合（用于 3 个省占比区块）
+    const provinceAgg = db.prepare(`
+      SELECT effective_class, province, COUNT(*) AS cnt
+      FROM (
+        WITH effective AS (
+          SELECT o.*, o.to_province AS province,
+            COALESCE(plan_exact.region_class, plan_prov.region_class, st_exact.region_class, st_prov.region_class, '正常') AS effective_class
+          FROM orders o
+          ${planExactJoin}
+          ${planProvJoin}
+          LEFT JOIN shentong_region_class st_exact ON st_exact.province = o.to_province AND st_exact.city = o.to_city
+          LEFT JOIN shentong_region_class st_prov  ON st_prov.province  = o.to_province AND st_prov.city IS NULL
+          ${w}
+        )
+        SELECT * FROM effective
+        ${cls && ['大偏远', '小偏远', '正常'].includes(cls) ? 'WHERE effective_class = ?' : ''}
+      )
+      GROUP BY effective_class, province
+    `).all(...sqlParams);
+
+    // 明细（limit 500，后端带 effective_class）
+    const details = db.prepare(`
+      WITH effective AS (
+        SELECT o.order_id, o.order_no, o.owner_name, o.ship_quantity, o.unit,
+               o.order_date, o.payment_status, o.wms_platform,
+               o.to_province, o.to_city, c.company_name AS customer_name,
+               COALESCE(plan_exact.region_class, plan_prov.region_class, st_exact.region_class, st_prov.region_class, '正常') AS effective_class
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+        ${planExactJoin}
+        ${planProvJoin}
+        LEFT JOIN shentong_region_class st_exact ON st_exact.province = o.to_province AND st_exact.city = o.to_city
+        LEFT JOIN shentong_region_class st_prov  ON st_prov.province  = o.to_province AND st_prov.city IS NULL
+        ${w}
+      )
+      SELECT * FROM effective
+      ${cls && ['大偏远', '小偏远', '正常'].includes(cls) ? 'WHERE effective_class = ?' : ''}
+      ORDER BY order_date DESC, order_id DESC
+      LIMIT 500
+    `).all(...sqlParams);
+
+    // 汇总（3 类）
+    const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0 };
+    for (const r of agg) {
+      if (byClass[r.effective_class] != null) byClass[r.effective_class] += r.cnt;
+    }
+    const total = byClass['大偏远'] + byClass['小偏远'] + byClass['正常'];
+    const remoteTotal = byClass['大偏远'] + byClass['小偏远'];
+
+    // 省份按地区分类聚合整理
+    const byClassProvince = { '大偏远': [], '小偏远': [], '正常': [] };
+    for (const r of provinceAgg) {
+      if (byClassProvince[r.effective_class] && r.province) {
+        byClassProvince[r.effective_class].push({
+          province: r.province,
+          count: r.cnt,
+          pct: total ? +((r.cnt * 100) / total).toFixed(2) : 0,
+        });
+      }
+    }
+    // 每类内部按 count desc 排序
+    for (const k of Object.keys(byClassProvince)) {
+      byClassProvince[k].sort((a, b) => b.count - a.count);
+    }
+
+    res.json({
+      total,
+      remote_total: remoteTotal,
+      by_class: byClass,
+      platform_list: WMS_PLATFORMS,
+      platform_breakdown: agg,
+      by_class_province: byClassProvince,
+      details,
+    });
+  } catch (e) {
+    console.error('[orders/dashboard] 异常:', e);
+    res.status(500).json({ error: '看板查询失败：' + e.message });
   }
-  const total = byClass['大偏远'] + byClass['小偏远'] + byClass['正常'];
-  const remoteTotal = byClass['大偏远'] + byClass['小偏远']; // 偏远合计
-
-  // 明细（limit 500，前端导出再调明细接口）
-  const details = db.prepare(`
-    SELECT o.order_id, o.order_no, o.owner_name, o.ship_quantity, o.unit,
-           o.order_date, o.payment_status, o.wms_platform,
-           o.to_province, o.to_city, o.region_class, c.company_name
-    FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
-    ${w}
-    ORDER BY o.order_date DESC, o.order_id DESC
-    LIMIT 500
-  `).all(...params);
-
-  res.json({
-    total,
-    remote_total: remoteTotal,
-    by_class: byClass,
-    platform_list: WMS_PLATFORMS,
-    platform_breakdown: agg,
-    details,
-  });
 });
 
 module.exports = router;
