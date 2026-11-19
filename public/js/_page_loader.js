@@ -60,6 +60,10 @@
   window.ERP = window.ERP || {};
   ERP._PAGE_SCRIPT_MAP = MAP;
 
+  // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
+  // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
+  const BUILD_VERSION = 'v=4';
+
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {
     const src = MAP[pageId];
@@ -69,7 +73,7 @@
 
     _promises[src] = new Promise((resolve, reject) => {
       const el = document.createElement('script');
-      el.src = src;
+      el.src = src + '?' + BUILD_VERSION;       // ★ 固定版本号 → 浏览器缓存 24h
       el.dataset.pageSrc = src;
       el.async = true;  // 异步注入
       el.onload = () => { _loaded.add(src); resolve(); };

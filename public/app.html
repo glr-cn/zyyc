@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>佐雍云仓数据中心</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231b2a4a'/%3E%3Ctext x='32' y='45' font-size='36' font-family='Microsoft YaHei,sans-serif' font-weight='700' fill='%23ffffff' text-anchor='middle'%3E%E4%BD%90%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css?v=20">
+  <!-- 统一版本号：?v=4 配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable -->
+  <!-- 版本升级时改 ?v=5 → URL 变化 → 浏览器自动下载新版本（完美 cache-busting） -->
+  <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
   <div id="app" class="layout" style="display:none">
@@ -32,30 +34,32 @@
   <!-- ============================================================ -->
   <!-- 【核心脚本】首屏必须的——加 defer 让浏览器并行下载 + 不阻塞 HTML 解析 -->
   <!-- defer 脚本保证按 DOM 出现顺序执行，async 不保证，故核心脚本用 defer -->
+  <!-- 统一 ?v=4：版本不变 → 浏览器 24h disk cache → 首屏 ~100ms；版本变 → 强制下载 -->
   <!-- ============================================================ -->
-  <script defer src="js/api.js?v=3"></script>
-  <script defer src="js/date-range-picker.js?v=2"></script>
-  <script defer src="js/auth.js?v=1"></script>           <!-- 认证逻辑（tabs/app 都依赖） -->
+  <script defer src="js/api.js?v=4"></script>
+  <script defer src="js/date-range-picker.js?v=4"></script>
+  <script defer src="js/auth.js?v=4"></script>           <!-- 认证逻辑（tabs/app 都依赖） -->
   <script defer src="js/menu.js?v=4"></script>           <!-- 菜单渲染（sidebar/nav） -->
-  <script defer src="js/_lib-lazy.js?v=1"></script>      <!-- 第三方库懒加载（xlsx/html-to-image） -->
-  <script defer src="js/_page_loader.js?v=1"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
+  <script defer src="js/_lib-lazy.js?v=4"></script>      <!-- 第三方库懒加载（xlsx/html-to-image） -->
+  <script defer src="js/_page_loader.js?v=4"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
   <script defer src="js/tabs.js?v=4"></script>           <!-- PAGE_META 定义 + tabs 实例 -->
-  <script defer src="js/app.js?v=3"></script>            <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
+  <script defer src="js/app.js?v=4"></script>            <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
 
   <!-- ============================================================ -->
   <!-- 【重页面脚本】首次点开对应页面时才由 _page_loader.js 动态注入 -->
-  <!-- 以下 17 个脚本已移至 _page_loader.js 的 MAP 中，由 tabs.open() 按需加载 -->
-  <!-- cloud.js / signoff.js / customers.js / orders.js / inventory.js / -->
-  <!-- workhours.js(4仓) / analytics.js / dashboard.js / users.js / roles.js / -->
-  <!-- logistics-quotes.js / smart-quote.js / smart-quote-history.js / -->
-  <!-- tools-split-no.js / tools-barcode-embed.js / permission-tree.js / -->
-  <!-- log-center.js(6页) / data-migration.js / menu-sort.js -->
+  <!-- 以下脚本已移至 _page_loader.js 的 MAP 中，由 tabs.open() 按需加载 -->
+  <!-- cloud.js / signoff.js / customers.js / orders.js / inventory.js / workhours.js / -->
+  <!-- analytics.js / dashboard.js / users.js / roles.js / logistics-quotes.js / smart-quote.js / -->
+  <!-- tools-split-no.js / tools-barcode-embed.js / permission-tree.js / log-center.js / -->
+  <!-- data-migration.js / menu-sort.js -->
+  <!-- 动态注入时也带 ?v=4，浏览器对它也用 24h disk cache（首次加载后下次瞬开） -->
   <!-- ============================================================ -->
 
   <!-- ============================================================ -->
   <!-- 【第三方库】由 _lib-lazy.js 按需注入 -->
-  <!-- xlsx.full.min.js (430KB) / html-to-image.js (60KB) -->
+  <!-- SheetJS xlsx.full.min.js (430KB) / html-to-image.js (60KB) -->
   <!-- 用户点"下载模板/导入 Excel/导出看板图片"时才加载 -->
+  <!-- CDN 库也带固定版本号：xlsx@0.18.5 / html-to-image@1.11.11 -->
   <!-- ============================================================ -->
 </body>
 </html>
