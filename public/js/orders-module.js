@@ -130,7 +130,7 @@
 
     // --- 加载平台列表 ---
     API.get('/orders/platforms').then((r) => {
-      _platforms = r?.platforms || ['手动通用'];
+      _platforms = r?.platforms || ['百世WMS'];
       const sel = card.querySelector('#odPlatform');
       sel.innerHTML = '';
       _platforms.forEach((p) => {
@@ -141,7 +141,7 @@
       sel.onchange = () => updateSubmitEnabled();
     }).catch(() => {
       const sel = card.querySelector('#odPlatform');
-      sel.innerHTML = '<option value="手动通用">手动通用</option>';
+      sel.innerHTML = '<option value="百世WMS">百世WMS</option>';
     });
 
     // --- 拖拽 + 点击上传 ---

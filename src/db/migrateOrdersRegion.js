@@ -104,7 +104,7 @@ function run(db, { verbose = false } = {}) {
   // --- 3. orders 表扩 4 列（幂等：逐列检查后 ALTER）---
   const ordersCols = db.prepare("PRAGMA table_info(orders)").all().map(r => r.name);
   const ALTERS = [
-    ['wms_platform',  'TEXT',       '来源平台（旺店通/聚水潭/万里牛/商派/网商云/宝通/发网/手动）'],
+    ['wms_platform',  'TEXT',       '来源平台（百世WMS/旺店通WMS/吉客云ERP/快麦ERP/聚水潭ERP/店管家ERP/多多打单/风速打单）'],
     ['to_province',   'TEXT',       '收件省/直辖市'],
     ['to_city',       'TEXT',       '收件市'],
     ['region_class',  'TEXT',       '地区分类：大偏远 / 小偏远 / 正常'],

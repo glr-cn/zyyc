@@ -36,10 +36,23 @@ const UNIFIED_COLUMNS = {
 };
 
 // 8 平台列名映射：统一 schema key → 该平台对应的表头列名（支持多候选，首命中）
-// 设计说明：不同 WMS 给的"省"列名差异大，这里把所有见过的别名都列出来，
+// 设计说明：不同 WMS/打单系统 给的"省"列名差异大，这里把所有见过的别名都列出来，
 // 运行时按顺序 pick() 取第一个有值的。
 const PLATFORM_COL_MAP = {
-  '旺店通 WDT': {
+  '百世WMS': {
+    order_no:       ['订单编号', '订单号', '单号', '出库单号'],
+    customer_name:  ['客户', '客户名称', '店铺', '货主', '货主名称'],
+    owner_name:     ['货主名称', '货主', '客户'],
+    ship_quantity:  ['发货件数', '发货量', '数量', '出库数量', '包裹数'],
+    unit:           ['单位'],
+    order_date:     ['出库日期', '订单日期', '发货日期', '创建时间'],
+    to_province:    ['收货省份', '省', '收货省', '收件省份'],
+    to_city:        ['收货城市', '市', '收货市', '收件城市'],
+    to_address:     ['收货地址', '详细地址', '收货详细地址', '收件地址'],
+    receiver_name:  ['收货人', '收件人', '收货客户'],
+    receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
+  },
+  '旺店通WMS': {
     order_no:       ['订单编号', '订单号', '单号'],
     customer_name:  ['客户', '使用方公司名称', '客户店铺名称', '货主', '货主名称'],
     owner_name:     ['货主名称', '货主', '客户'],
@@ -52,11 +65,38 @@ const PLATFORM_COL_MAP = {
     receiver_name:  ['收货人', '收件人', '收货客户'],
     receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
   },
-  '聚水潭 JST': {
+  '吉客云ERP': {
+    order_no:       ['订单编号', '订单号', '单号', '销售单号'],
+    customer_name:  ['客户', '客户名称', '店铺名称', '货主', '店铺'],
+    owner_name:     ['货主', '客户'],
+    ship_quantity:  ['发货数量', '出库数量', '数量', '发货件数'],
+    unit:           ['单位'],
+    order_date:     ['发货日期', '出库日期', '订单日期', '下单日期'],
+    to_province:    ['收件省份', '省', '收货省份'],
+    to_city:        ['收件城市', '市', '收货城市'],
+    to_address:     ['收件地址', '详细地址', '收货地址'],
+    receiver_name:  ['收件人', '收货人'],
+    receiver_phone: ['收件电话', '收货电话', '联系电话'],
+  },
+  '快麦ERP': {
+    order_no:       ['订单号', '订单编号', '单号', '销售单号'],
+    customer_name:  ['店铺', '店铺名称', '客户', '客户店铺'],
+    owner_name:     ['货主', '客户'],
+    ship_quantity:  ['出库数量', '发货数量', '数量', '发货件数'],
+    unit:           ['单位'],
+    order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
+    to_province:    ['收件省份', '省', '省份', '收货省份'],
+    to_city:        ['收件城市', '市', '城市', '收货城市'],
+    to_address:     ['收件地址', '详细地址', '收货地址', '地址'],
+    receiver_name:  ['收件人', '收货人'],
+    receiver_phone: ['收件电话', '收货电话', '联系电话', '电话'],
+  },
+  '聚水潭ERP': {
     order_no:       ['销售单号', '订单号', '单号'],
     customer_name:  ['店铺名称', '客户店铺', '客户', '店铺'],
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['出库数量', '发货数量', '数量', '发货件数'],
+    unit:           ['单位'],
     order_date:     ['发货日期', '出库日期', '订单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
@@ -64,62 +104,49 @@ const PLATFORM_COL_MAP = {
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
   },
-  '万里牛 WLN': {
+  '店管家ERP': {
     order_no:       ['订单号', '订单编号', '单号'],
-    customer_name:  ['店铺名称', '客户', '客户店铺', '店铺'],
-    owner_name:     ['货主名称', '货主', '客户'],
+    customer_name:  ['店铺名称', '店铺', '客户', '客户店铺'],
+    owner_name:     ['货主', '客户'],
     ship_quantity:  ['发货数量', '出库数量', '数量', '发货件数'],
-    order_date:     ['发货日期', '订单日期', '出库日期'],
+    unit:           ['单位'],
+    order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
+    to_province:    ['省', '省份', '收件省', '收货省份'],
+    to_city:        ['市', '城市', '收件市', '收货城市'],
+    to_address:     ['详细地址', '地址', '收件地址', '收货地址'],
+    receiver_name:  ['收件人', '收货人'],
+    receiver_phone: ['收件电话', '收货电话', '联系电话'],
+  },
+  '多多打单': {
+    order_no:       ['订单号', '订单编号', '单号', '电子面单号'],
+    customer_name:  ['店铺名称', '店铺', '客户', '取号店铺名称', '使用单号店铺'],
+    owner_name:     ['货主', '客户'],
+    ship_quantity:  ['数量', '发货件数', '包裹数', '商品数量'],
+    unit:           ['单位'],
+    order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
     to_address:     ['详细地址', '地址', '收件地址'],
+    receiver_name:  ['收件人', '收货人'],
+    receiver_phone: ['收件电话', '收货电话', '联系电话'],
   },
-  '商派 ERP': {
-    order_no:       ['订单编号', '订单号'],
-    customer_name:  ['店铺', '客户名称', '客户', '店铺名称'],
+  '风速打单': {
+    order_no:       ['订单号', '订单编号', '单号', '电子面单号'],
+    customer_name:  ['店铺名称', '店铺', '客户', '取号店铺名称'],
     owner_name:     ['货主', '客户'],
-    ship_quantity:  ['发货数量', '发货件数', '出库数量'],
-    order_date:     ['下单日期', '发货日期', '订单日期'],
-    to_province:    ['省份', '省', '收件省份'],
-    to_city:        ['城市', '市', '收件城市'],
-    to_address:     ['地址', '详细地址', '收件地址'],
+    ship_quantity:  ['数量', '发货件数', '包裹数', '商品数量'],
+    unit:           ['单位'],
+    order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
+    to_province:    ['省', '省份', '收件省'],
+    to_city:        ['市', '城市', '收件市'],
+    to_address:     ['详细地址', '地址', '收件地址'],
+    receiver_name:  ['收件人', '收货人'],
+    receiver_phone: ['收件电话', '收货电话', '联系电话'],
   },
-  '网商云 ERP': {
-    order_no:       ['订单号', '订单编号'],
-    customer_name:  ['客户店铺', '客户', '店铺名称', '店铺'],
-    owner_name:     ['货主', '客户'],
-    ship_quantity:  ['货品数量', '发货数量', '出库数量'],
-    order_date:     ['订单日期', '发货日期', '出库日期'],
-    to_province:    ['省', '收件省', '省份'],
-    to_city:        ['市', '收件市', '城市'],
-    to_address:     ['收件地址', '详细地址', '收货地址'],
-  },
-  '宝通 ERP': {
-    order_no:       ['单号', '订单号', '订单编号'],
-    customer_name:  ['客户', '店铺', '货主', '店铺名称'],
-    owner_name:     ['货主', '客户'],
-    ship_quantity:  ['发货件数', '数量', '发货数量', '出库数量'],
-    order_date:     ['发货日期', '订单日期', '出库日期'],
-    to_province:    ['省', '省份'],
-    to_city:        ['市', '城市'],
-    to_address:     ['详细地址', '地址'],
-  },
-  '发网 ERP': {
-    order_no:       ['订单号', '出库单号', '订单编号'],
-    customer_name:  ['客户', '货主', '客户店铺', '店铺名称'],
-    owner_name:     ['货主', '客户'],
-    ship_quantity:  ['出库数量', '发货件数', '发货数量', '数量'],
-    order_date:     ['出库日期', '发货日期', '订单日期'],
-    to_province:    ['省', '收件省份', '省份'],
-    to_city:        ['市', '收件城市', '城市'],
-    to_address:     ['收件地址', '详细地址', '收货地址'],
-  },
-  '手动通用': null, // null 表示用户自己选列名映射（跳过自动归一）
 };
 
-// 对外暴露：平台列表 + 统一列名 + 是否通用模式
+// 对外暴露：平台列表 + 统一列名
 const WMS_PLATFORMS = Object.keys(PLATFORM_COL_MAP);
-function isManualPlatform(p) { return p === '手动通用'; }
 
 // ----------------------------------------------------------------------------
 // 2. 地区分类查询（import 时就算好写入 orders.region_class）
@@ -144,7 +171,7 @@ function classifyRegion(db, province, city) {
 function normalizeRow(platform, rawRow) {
   const map = PLATFORM_COL_MAP[platform];
   if (!map) {
-    // 手动通用：直接用列名（假设用户已按统一 schema 上传）
+    // 未知平台：直接用原列名兜底
     return rawRow;
   }
   const normalized = {};
@@ -174,7 +201,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
 
   rows.forEach((rawRow, i) => {
     const excelRow = i + 2;
-    const row = platform && !isManualPlatform(platform)
+    const row = platform
       ? normalizeRow(platform, rawRow)
       : rawRow;
 
@@ -249,7 +276,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
         it.orderNo || 'ORD' + Date.now() + Math.floor(Math.random() * 1000),
         it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date,
         it.paymentStatus, it.customer.owner_user_id,
-        platform || '手动通用', it.toProvince, it.toCity, it.regionClass,
+        platform || '未知', it.toProvince, it.toCity, it.regionClass,
       );
       invStmt.run(info.lastInsertRowid, it.ownerName, it.qty, it.date, '订单导入自动出库');
       success++;
@@ -274,5 +301,5 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
 
 module.exports = {
   WMS_PLATFORMS, PLATFORM_COL_MAP, UNIFIED_COLUMNS,
-  classifyRegion, normalizeRow, processImport, isManualPlatform,
+  classifyRegion, normalizeRow, processImport,
 };
