@@ -190,11 +190,6 @@ require('./migrateRemoveStockMenus').run(_conn, { verbose: true });
 // 用于后续 8 平台 WMS 订单导入 + 地区分类看板。幂等。
 require('./migrateOrdersRegion').run(_conn, { verbose: true });
 
-// 新增订单导入 + 数据看板菜单（2026-11-19）：docs(单据) 子菜单 702 order_import / 703
-// order_dashboard；同时给超级管理员自动授权 role_menus。新库 menu_seed.sql 已包含，
-// 此处幂等处理存量线上库。
-require('./migrateAddOrderMenus').run(_conn, { verbose: true });
-
 // 去掉 orders 表 FK 约束（2026-11-19）：migrateCustomersRemoveUnique 的 ALTER TABLE RENAME
 // 会把 orders.customer_id 的 FK 同步改成 REFERENCES customers_bak——和 warehouse_sort_config
 // 踩的坑完全一样。重建表去掉 customer_id + owner_user_id 两个 FK，防止自动创建客户后
@@ -229,6 +224,12 @@ if (roleCount === 0) {
 // 启动自举种子（幂等）：补齐菜单 + 角色 + 超管/管理员授权 + 首个管理员账号。
 // 对已有数据的库完全无害（全部 INSERT OR IGNORE / 条件 UPDATE），业务数据一行不动。
 require('./seed').runSeed(_conn);
+
+// 新增订单导入 + 数据看板菜单（2026-11-19）：docs(单据) 子菜单 702 order_import / 703
+// order_dashboard；同时给超级管理员自动授权 role_menus。
+// ★ 必须放在 seed.runSeed 之后——空库 menus 表由 menu_seed.sql 先插入 menu_id=7 的单据父菜单，
+// 此处 INSERT parent_id=7 才能通过外键约束。
+require('./migrateAddOrderMenus').run(_conn, { verbose: true });
 
 // ============================================================================
 //  customers 表异常预警（数据完整性兜底）
