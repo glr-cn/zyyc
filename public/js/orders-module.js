@@ -456,11 +456,7 @@
   // =========================================================================
   function refreshImportHistory(container) {
     container.innerHTML = '<div style="color:#909399;padding:20px;text-align:center;">⏳ 加载中...</div>';
-    fetch('/api/orders/import-history', {
-      headers: { Authorization: 'Bearer ' + (localStorage.getItem('erp_token') || '') },
-    }).then(async (resp) => {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const data = await resp.json();
+    API.get('/orders/import-history').then((data) => {
       renderImportHistory(container, data);
     }).catch((e) => {
       container.innerHTML = `<div style="color:#f56c6c;padding:20px;text-align:center;">❌ 加载失败: ${e.message}</div>`;
@@ -601,15 +597,11 @@
     const platform = qs('#dashPlatform')?.value || '全部';
     const cls = qs('#dashClass')?.value || '';
 
-    const url = `/api/orders/dashboard?start=${start}&end=${end}&platform=${encodeURIComponent(platform)}${cls ? '&class=' + encodeURIComponent(cls) : ''}`;
+    const url = `/orders/dashboard?start=${start}&end=${end}&platform=${encodeURIComponent(platform)}${cls ? '&class=' + encodeURIComponent(cls) : ''}`;
 
     qs('#dashCards').innerHTML = '<div style="color:#909399;padding:20px;text-align:center;">⏳ 加载中...</div>';
 
-    fetch(url, {
-      headers: { Authorization: 'Bearer ' + (localStorage.getItem('erp_token') || '') },
-    }).then(async (resp) => {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const data = await resp.json();
+    API.get(url).then((data) => {
       _dashCache = data;
       renderDashboard(data);
     }).catch((e) => {
