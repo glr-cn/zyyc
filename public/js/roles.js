@@ -7,6 +7,22 @@
 // ============================================================
 window.ERP_PAGES = window.ERP_PAGES || {};
 window.ERP_PAGES.roles = function (host) {
+  // ★ 自包含依赖：permission-tree.js 提供 ERP.createPermissionTree
+  // _page_loader.js 只加载 roles.js，不加载 permission-tree.js，这里同步兜底
+  if (typeof ERP.createPermissionTree !== 'function') {
+    // 同步加载 permission-tree.js（XHR sync 虽然 deprecated 但可靠）
+    const _xhr = new XMLHttpRequest();
+    _xhr.open('GET', 'js/permission-tree.js?v=9', false);
+    _xhr.send(null);
+    if (_xhr.status === 200) {
+      try { eval(_xhr.responseText); } catch (e) { console.error('[roles] permission-tree.js 执行失败:', e); }
+    } else {
+      console.error('[roles] 加载 permission-tree.js 失败:', _xhr.status);
+    }
+  }
+  if (typeof ERP.createPermissionTree !== 'function') {
+    console.error('[roles] ERP.createPermissionTree 仍然不存在！');
+  }
   const $ = (id) => host.querySelector('#' + id);
   host.innerHTML = `
     <div class="roles-layout">
