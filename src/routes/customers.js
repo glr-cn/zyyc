@@ -69,6 +69,7 @@ function normalizeForm(b) {
     logistics_control: s('logistics_control'),
     expiry_mgmt: s('expiry_mgmt') || '否',
     coop_status: s('coop_status') || '合作中',
+    default_unit: s('default_unit') || '单',            // ★ 默认单位：空值兜底 '单'
     sort_order: b.sort_order === '' || b.sort_order == null ? 9999 : Number(b.sort_order),
     remark: s('remark'),
   };
