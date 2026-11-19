@@ -10,10 +10,15 @@ const db = require('../db');
 
 // 角色白名单：参数可传 role_name（管理员/业务员/查看者/超级管理员/自定义名）
 // 或 role_code（admin/operator/viewer/super_admin）
+// ★ 超级管理员（role_code='super_admin'）短路放行：绕过所有 roleGate 白名单判断
+// 根因：roleGate 参数是硬编码字符串（如 ['管理员','超级管理员']），
+// migrateRolesCleanup 清理旧 admin/operator/viewer 角色后，
+// 实际 role_name/role_code 对不上 → 超管被自己的 gate 拦截。
 function roleGate(...roles) {
   return (req, res, next) => {
     const u = req.user;
     if (!u) return res.status(401).json({ error: '未登录' });
+    if (u.role_code === 'super_admin') return next();  // ★ 超管短路
     const ok = roles.some((r) => r === u.role || r === u.role_code);
     if (!ok) return res.status(403).json({ error: '当前角色无权限' });
     next();
