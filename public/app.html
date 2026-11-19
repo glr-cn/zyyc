@@ -26,37 +26,36 @@
       <section class="content" id="content"></section>
     </div>
   </div>
-  <!-- 云服务 SDK（CDN 全局 WorkBuddyCloud；npm 安装失败时按技能规范回退 CDN 形态） -->
+  <!-- 云服务 SDK（CDN 全局 WorkBuddyCloud；必须先加载） -->
   <script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
-  <!-- 静态资源版本串：菜单结构 v3（日志中心）。每次改菜单/渲染逻辑 +1，强制浏览器拉新脚本 -->
-  <script src="js/api.js?v=3"></script>
-  <!-- 全局日期范围选择组件：需在 consume 它的页面脚本之前加载 -->
-  <script src="js/date-range-picker.js?v=2"></script>
-  <script src="js/cloud.js?v=3"></script>
-  <script src="js/signoff.js?v=3"></script>
-  <script src="js/customers.js?v=3"></script>
-  <script src="js/orders.js?v=3"></script>
-  <script src="js/inventory.js?v=3"></script>
-  <script src="js/workhours.js?v=16"></script>
-  <script src="js/charts.js?v=3"></script>
-  <!-- 看板导出依赖 -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js"></script>
-  <script src="js/analytics.js?v=3"></script>
-  <script src="js/dashboard.js?v=10"></script>
-  <script src="js/users.js?v=3"></script>
-  <script src="js/roles.js?v=7"></script>
-  <script src="js/logistics-quotes.js?v=3"></script>
-  <script src="js/smart-quote.js?v=3"></script>
-  <script src="js/smart-quote-history.js?v=3"></script>
-  <script src="js/tools-split-no.js?v=2"></script>
-  <script src="js/tools-barcode-embed.js?v=1"></script>
-  <script src="js/permission-tree.js?v=4"></script>
-  <script src="js/log-center.js?v=3"></script>
-  <script src="js/data-migration.js?v=1"></script>
-  <script src="js/menu-sort.js?v=1"></script>
-  <script src="js/menu.js?v=4"></script>
-  <script src="js/tabs.js?v=3"></script>
-  <script src="js/app.js?v=3"></script>
+
+  <!-- ============================================================ -->
+  <!-- 【核心脚本】首屏必须的——加 defer 让浏览器并行下载 + 不阻塞 HTML 解析 -->
+  <!-- defer 脚本保证按 DOM 出现顺序执行，async 不保证，故核心脚本用 defer -->
+  <!-- ============================================================ -->
+  <script defer src="js/api.js?v=3"></script>
+  <script defer src="js/date-range-picker.js?v=2"></script>
+  <script defer src="js/auth.js?v=1"></script>           <!-- 认证逻辑（tabs/app 都依赖） -->
+  <script defer src="js/menu.js?v=4"></script>           <!-- 菜单渲染（sidebar/nav） -->
+  <script defer src="js/_lib-lazy.js?v=1"></script>      <!-- 第三方库懒加载（xlsx/html-to-image） -->
+  <script defer src="js/_page_loader.js?v=1"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
+  <script defer src="js/tabs.js?v=4"></script>           <!-- PAGE_META 定义 + tabs 实例 -->
+  <script defer src="js/app.js?v=3"></script>            <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
+
+  <!-- ============================================================ -->
+  <!-- 【重页面脚本】首次点开对应页面时才由 _page_loader.js 动态注入 -->
+  <!-- 以下 17 个脚本已移至 _page_loader.js 的 MAP 中，由 tabs.open() 按需加载 -->
+  <!-- cloud.js / signoff.js / customers.js / orders.js / inventory.js / -->
+  <!-- workhours.js(4仓) / analytics.js / dashboard.js / users.js / roles.js / -->
+  <!-- logistics-quotes.js / smart-quote.js / smart-quote-history.js / -->
+  <!-- tools-split-no.js / tools-barcode-embed.js / permission-tree.js / -->
+  <!-- log-center.js(6页) / data-migration.js / menu-sort.js -->
+  <!-- ============================================================ -->
+
+  <!-- ============================================================ -->
+  <!-- 【第三方库】由 _lib-lazy.js 按需注入 -->
+  <!-- xlsx.full.min.js (430KB) / html-to-image.js (60KB) -->
+  <!-- 用户点"下载模板/导入 Excel/导出看板图片"时才加载 -->
+  <!-- ============================================================ -->
 </body>
 </html>

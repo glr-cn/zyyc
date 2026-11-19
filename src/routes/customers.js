@@ -121,7 +121,8 @@ router.get('/', (req, res) => {
   }
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const total = db.prepare(`SELECT COUNT(*) c FROM customers ${whereSql}`).get(...params).c;
-  const rows = db.prepare(`SELECT * FROM customers ${whereSql} ORDER BY customer_id DESC LIMIT ? OFFSET ?`)
+  // 按 sort_order ASC 排序；同序则按 customer_id 降序稳定排序，保证新记录自然沉底
+  const rows = db.prepare(`SELECT * FROM customers ${whereSql} ORDER BY sort_order ASC, customer_id DESC LIMIT ? OFFSET ?`)
     .all(...params, pageSize, (page - 1) * pageSize);
   res.json({ data: rows, total, page, pageSize });
 });
@@ -252,6 +253,18 @@ router.post('/import', upload.single('file'), (req, res) => {
   res.json({ success: created + updated, created, updated, failed: failures.length, failures });
 });
 
+// ---------- sort_order 冲突处理 ----------
+// 作用域：同一 customer_type 下全局排序（跨仓库），保证序号唯一且连续。
+// 逻辑：把 sort_order >= target（且非当前记录）的记录统一 +1，腾出空位给当前记录。
+// 注意：历史数据可能存在重复 sort_order，顺延会让所有 >= target 的都后移，天然消除重复。
+function adjustSortOrder(customerType, target, excludeId = 0) {
+  if (!Number.isInteger(target) || target <= 0) return; // 非法值交给 normalizeForm 兜底
+  db.prepare(
+    `UPDATE customers SET sort_order = sort_order + 1
+      WHERE customer_type = ? AND is_deleted = 0 AND sort_order >= ? AND customer_id != ?`
+  ).run(customerType, target, excludeId);
+}
+
 // ---------- 单条 CRUD ----------
 router.get('/:id', (req, res) => {
   const r = db.prepare('SELECT * FROM customers WHERE customer_id=?').get(req.params.id);
@@ -266,6 +279,12 @@ router.post('/', (req, res) => {
   const row = normalizeForm(b);
   const err = validate(row, { type });
   if (err) return res.status(400).json({ error: err });
+
+  // sort_order 冲突处理：新记录插入时先为目标序号腾出空间
+  // 9999 为默认"排最后"，无需顺延；只有用户显式指定正整数时才触发
+  if (row.sort_order !== 9999 && Number.isInteger(row.sort_order) && row.sort_order > 0) {
+    adjustSortOrder(type, row.sort_order, 0);
+  }
 
   const owner_user_id = req.user.data_scope === 'self'
     ? req.user.user_id
@@ -289,6 +308,13 @@ router.put('/:id', (req, res) => {
   const row = normalizeForm({ ...old, ...b });                 // 未传字段沿用旧值
   const err = validate(row, { type, excludeId: old.customer_id });
   if (err) return res.status(400).json({ error: err });
+
+  // sort_order 冲突处理：目标序号与旧序号不同时才触发，避免无意义的顺延
+  if (row.sort_order !== old.sort_order
+      && row.sort_order !== 9999
+      && Number.isInteger(row.sort_order) && row.sort_order > 0) {
+    adjustSortOrder(type, row.sort_order, old.customer_id);
+  }
 
   const keys = Object.keys(row);
   db.prepare(

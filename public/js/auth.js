@@ -11,7 +11,13 @@ function loginUrl() {
   return '/api/auth/login' + (sc ? '?sharecode=' + encodeURIComponent(sc) : '');
 }
 
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
+// ★ 仅在 login.html 里绑定登录表单事件（app.html 里没有 loginForm 节点）
+// auth.js 同时被 login.html（body 底部同步加载，loginForm 一定存在）和 app.html（head defer 加载，没有 loginForm）引用；
+// 加 guard 避免 app.html 里 addEventListener(null, ...) 抛 TypeError 污染控制台。
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('loginForm');
+  if (!form) return;  // app.html 里没有登录表单 → 跳过
+  form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   const err = document.getElementById('err');
@@ -40,3 +46,4 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     err.textContent = ex.message;
   }
 });
+});  // 闭合 DOMContentLoaded

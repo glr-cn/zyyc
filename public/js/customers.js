@@ -43,7 +43,7 @@
       const rows = r.data || [];
       const total = r.total || 0;
       state.pages = Math.ceil(total / state.pageSize) || 1;
-      const colCount = cfg.withWarehouse ? 8 : 7;
+      const colCount = cfg.withWarehouse ? 9 : 8;
       host.innerHTML = `
         ${cfg.withWarehouse ? `
         <div class="tabs wh-tabs" id="whTabs">
@@ -60,7 +60,7 @@
         </div>
         <table class="grid">
           <thead><tr>
-            <th>货主代码</th><th>公司全称</th>
+            <th>排序号</th><th>货主代码</th><th>公司全称</th>
             ${cfg.withWarehouse ? '<th>所在仓库</th>' : ''}
             <th>客户简称</th><th>截单时间</th><th>预充单价</th><th>合作状态</th><th>操作</th>
           </tr></thead>
@@ -84,7 +84,12 @@
       const delBtn = canDelete()
         ? `<button id="del_${r.customer_id}" class="danger">删除</button>`
         : '';
+      // sort_order=9999 表示"排最后"，展示为 - 以保持列表整洁；其余直接展示实际序号
+      const sortDisplay = (r.sort_order != null && r.sort_order !== '' && Number(r.sort_order) !== 9999)
+        ? esc(r.sort_order)
+        : '<span style="color:#aaa">-</span>';
       return `<tr>
+        <td class="num">${sortDisplay}</td>
         <td>${esc(r.customer_code || '')}</td>
         <td>${esc(r.company_name || '')}</td>
         ${cfg.withWarehouse ? `<td>${esc(r.warehouse || '')}</td>` : ''}
@@ -268,6 +273,16 @@
       const errEl = modal.querySelector('#f_err');
       if (!p.company_name) { errEl.textContent = '公司全称必填'; return; }
       if (cfg.withWarehouse && !p.warehouse.length) { errEl.textContent = '所在仓库至少选择一项'; return; }
+      // 排序号前端校验：非空时必须为正整数
+      if (p.sort_order !== '' && p.sort_order !== null && p.sort_order !== undefined) {
+        const so = Number(p.sort_order);
+        if (!Number.isInteger(so) || so <= 0) {
+          errEl.textContent = '排序号必须为正整数（留空则排最后）';
+          return;
+        }
+      }
+      const saveBtn = modal.querySelector('#saveBtn');
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
       try {
         if (mode === 'create') await API.post('/customers', p);
         else await API.put('/customers/' + id, p);
@@ -275,6 +290,7 @@
         load();
       } catch (ex) {
         errEl.textContent = ex.message;
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '保存'; }
       }
     }
 

@@ -117,7 +117,7 @@ ERP.tabs = {
   },
 
   // ---------- 打开 / 激活 ----------
-  open: function (page) {
+  open: async function (page) {
     // RBAC 路由守卫：越权页面直接 403（地址栏直访与程序调用共用此入口）
     if (ERP.PERMS && ERP.PERMS.size && !ERP.PERMS.has(page)) {
       if (ERP.render403) ERP.render403(page);
@@ -131,12 +131,19 @@ ERP.tabs = {
     }
     if (this.list.indexOf(page) < 0) this.list.push(page);
     this.active = page;
+    // ★ 懒加载：首次点某页面时，动态注入它的 JS 文件（_page_loader.js 里的 MAP）
+    try { await ERP.ensurePageScript(page); } catch (e) {
+      console.warn('[tabs] 页面脚本加载失败：' + page, e.message);
+    }
     this._activate(page);
     this.render();
     this.save();
   },
 
   // ---------- 关闭 ----------
+  // ★ keep-alive soft-close：保留 views[page] 的 DOM + 闭包状态
+  //   用户关 tab 再重新打开 → 直接重新挂回 DOM，0 API + 0 渲染（草稿、筛选状态都还在）
+  //   只有 closeOthers / closeRight 才真正硬清理（语义是"永久关闭其他"）
   close: function (page) {
     if (this.isPinned(page)) {
       if (ERP.toast) ERP.toast('已固定的标签不可关闭');
@@ -144,10 +151,12 @@ ERP.tabs = {
     }
     const i = this.list.indexOf(page);
     if (i >= 0) this.list.splice(i, 1);
-    // 释放 keep-alive 缓存（下次打开重新渲染）
     if (this.views[page]) {
-      if (typeof this.views[page].remove === 'function') this.views[page].remove();
-      delete this.views[page];
+      const host = this.views[page];
+      host.style.display = 'none';
+      // 从 #content DOM detach，但 views[page] 引用保留 → 下次 open() 重新挂回
+      if (host.parentElement) host.parentElement.removeChild(host);
+      // ★ 不 delete this.views[page]，保留 soft-close 缓存
     }
     if (this.active === page) {
       const next = this.list.length ? this.list[this.list.length - 1] : ERP._defaultPage();
@@ -162,6 +171,13 @@ ERP.tabs = {
 
   closeOthers: function (page) {
     this.list.slice().forEach((p) => { if (p !== page && !this.isPinned(p)) this.close(p); });
+    // ★ closeOthers 语义是"永久关闭其他" → 真正硬清理所有 soft-close 缓存
+    Object.keys(this.views).forEach((p) => {
+      if (p !== page && !this.isPinned(p)) {
+        try { this.views[p].remove(); } catch (e) {}
+        delete this.views[p];
+      }
+    });
     this.render();
     this.save();
   },
@@ -170,6 +186,13 @@ ERP.tabs = {
     const i = this.list.indexOf(page);
     if (i < 0) return;
     this.list.slice(i + 1).forEach((p) => { if (!this.isPinned(p)) this.close(p); });
+    // ★ closeRight 也硬清理右侧（"永久关闭右边"语义）
+    this.list.slice(i + 1).forEach((p) => {
+      if (!this.isPinned(p) && this.views[p]) {
+        try { this.views[p].remove(); } catch (e) {}
+        delete this.views[p];
+      }
+    });
     this.render();
     this.save();
   },
@@ -193,9 +216,13 @@ ERP.tabs = {
 
   // ---------- keep-alive：视图容器 ----------
   _view: function (page) {
-    if (this.views[page]) return this.views[page];
     const host = document.getElementById('content');
     if (!host) return null;
+    // ★ soft-close 重新挂回：views[page] 已存在但 parentElement === null
+    if (this.views[page]) {
+      if (this.views[page].parentElement !== host) host.appendChild(this.views[page]);
+      return this.views[page];  // 直接返回，不重建
+    }
     const el = document.createElement('div');
     el.className = 'page-view';
     el.dataset.page = page;
@@ -222,8 +249,10 @@ ERP.tabs = {
     if (typeof document.querySelectorAll === 'function') {
       document.querySelectorAll('.page-403').forEach((el) => { if (el.remove) el.remove(); });
     }
+    // ★ 遍历所有 views（包括 soft-close 缓存）统一隐藏 → 目标页显示
     Object.keys(this.views).forEach((p) => {
       this.views[p].style.display = p === page ? 'block' : 'none';
+      // 如果 soft-close 的 view 还没挂在 DOM 上（host === null），_view() 里已经 appendChild 了
     });
     if (view) view.style.display = 'block';
     // 与左侧菜单联动；当前页面由高亮 Tab 体现（单行 Header 已取消冗余标题行），
