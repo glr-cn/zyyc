@@ -113,8 +113,8 @@ router.get('/', (req, res) => {
     if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
     joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
     params.push(wh);                       // ← JOIN ON 的第 1 个占位符最先 push
-    where.push('c.warehouse LIKE ?');
-    params.push('%' + wh + '%');           // WHERE 的第 1 个占位符（整体 WHERE 里）
+    where.push("',' || c.warehouse || ',' LIKE ?");
+    params.push('%,' + wh + ',%');            // WHERE 的第 1 个占位符（整体 WHERE 里）精确边界匹配
   }
   const scope = ownerScope(req);
   if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
@@ -180,9 +180,9 @@ router.put('/warehouse-sort/:warehouse', roleGate(['管理员', '超级管理员
       FROM customers c
       LEFT JOIN warehouse_sort_config wsc
              ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
-     WHERE c.warehouse LIKE ? AND c.is_deleted = 0
+     WHERE ',' || c.warehouse || ',' LIKE ? AND c.is_deleted = 0
      ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
-  `).all(wh, '%' + wh + '%').map((r) => r.customer_id).filter((id) => !givenIds.has(id));
+  `).all(wh, '%,' + wh + ',%').map((r) => r.customer_id).filter((id) => !givenIds.has(id));
 
   const ordered = [...given, ...rest];
   const upsert = db.prepare(`INSERT INTO warehouse_sort_config (warehouse, customer_id, sort_order, updated_at)
@@ -218,7 +218,7 @@ router.get('/active', (req, res) => {
   if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
   if (req.query.customer_type) { where.push('customer_type = ?'); params.push(req.query.customer_type); }
   if (req.query.warehouse && WAREHOUSES.includes(req.query.warehouse)) {
-    where.push('warehouse LIKE ?'); params.push('%' + req.query.warehouse + '%');
+    where.push("',' || warehouse || ',' LIKE ?"); params.push('%,' + req.query.warehouse + ',%');
   }
   const rows = db.prepare(
     `SELECT customer_id,
@@ -252,7 +252,7 @@ router.get('/options', (req, res) => {
   const scope = ownerScope(req);
   if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
   if (req.query.customer_type) { where.push('c.customer_type = ?'); params.push(req.query.customer_type); }
-  if (wh && WAREHOUSES.includes(wh)) { where.push('c.warehouse LIKE ?'); params.push('%' + wh + '%'); }
+  if (wh && WAREHOUSES.includes(wh)) { where.push("',' || c.warehouse || ',' LIKE ?"); params.push('%,' + wh + ',%'); }
 
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const orderSql = wh
@@ -298,8 +298,8 @@ router.get('/export', (req, res) => {
     if (wh) {
       joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
       params.push(wh);
-      where.push('c.warehouse LIKE ?');
-      params.push('%' + wh + '%');
+      where.push("',' || c.warehouse || ',' LIKE ?");
+      params.push('%,' + wh + ',%');
     }
   }
   const scope = ownerScope(req);

@@ -42,9 +42,9 @@ function setWarehouseSortPosition(db, warehouse, customerId, position) {
       FROM customers c
       LEFT JOIN warehouse_sort_config wsc
              ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
-     WHERE c.warehouse LIKE ? AND c.is_deleted = 0 AND c.customer_id != ?
+     WHERE ',' || c.warehouse || ',' LIKE ? AND c.is_deleted = 0 AND c.customer_id != ?
      ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
-  `).all(warehouse, '%' + warehouse + '%', cid).map((r) => r.customer_id);
+  `).all(warehouse, '%,' + warehouse + ',%', cid).map((r) => r.customer_id);
 
   // 目标位置夹到 [1, 总数]：超出范围自动落到末尾
   const insertAt = Math.min(pos, others.length + 1) - 1;

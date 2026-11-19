@@ -181,9 +181,9 @@ router.get('/', (req, res) => {
   if (gapMode) {
     // 货主侧 ownerScope：用 customers.owner_user_id 隔离（与客户资料模块一致）
     const custScope = ownerScope(req);
-    // 本仓货主：warehouse LIKE 匹配多仓串；排除已删除（软删 is_deleted=1）与停用货主（仅合作中展示缺口）
-    const ownerWhere = ['c.warehouse LIKE ?', 'c.is_deleted=0', "c.coop_status='合作中'"];
-    const ownerParams = ['%' + warehouse + '%'];
+    // 本仓货主：warehouse 精确边界匹配多仓串；排除已删除（软删 is_deleted=1）与停用货主（仅合作中展示缺口）
+    const ownerWhere = ["',' || c.warehouse || ',' LIKE ?", 'c.is_deleted=0', "c.coop_status='合作中'"];
+    const ownerParams = ['%,' + warehouse + ',%'];
     const backfill = resolveBackfillDate(); // ★ 独立于 period：永远返回昨天 + need_backfill=true
     if (custScope.sql) { ownerWhere.push(custScope.sql); ownerParams.push(...custScope.params); }
     if (q) { ownerWhere.push('(COALESCE(NULLIF(c.short_name,\'\'),c.company_name) LIKE ? OR c.company_name LIKE ?)'); const like = `%${q}%`; ownerParams.push(like, like); }
@@ -810,8 +810,8 @@ router.delete('/:id', (req, res) => {
 // 本仓货主（未删除）。默认含停用（导入补报语义）；activeOnly=true 时仅合作中（模板预填口径，与缺口清单一致）
 function ownersOfWarehouse(req, warehouse, activeOnly) {
   const scope = ownerScope(req);
-  const where = ['warehouse LIKE ?', 'is_deleted=0'];
-  const params = ['%' + warehouse + '%'];
+  const where = ["',' || warehouse || ',' LIKE ?", 'is_deleted=0'];
+  const params = ['%,' + warehouse + ',%'];
   if (activeOnly) where.push("coop_status='合作中'");
   if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
   return db.prepare(

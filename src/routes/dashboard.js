@@ -193,9 +193,9 @@ function buildShippingList({ req, warehouse, curStart, curEnd, prevStart, prevEn
   const custRows = db.prepare(
     `SELECT customer_id, COALESCE(NULLIF(short_name,''), company_name) AS customer_name, sort_order
      FROM customers WHERE is_deleted = 0
-       AND (warehouse = '' OR warehouse LIKE ?)
+       AND (warehouse = '' OR ',' || warehouse || ',' LIKE ?)
      ORDER BY sort_order ASC, COALESCE(NULLIF(short_name,''), company_name) ASC`
-  ).all(`%${warehouse}%`);
+  ).all('%,' + warehouse + ',%');
 
   // 2. 本期、上期发货归档
   const curRows  = fetchArchivedRows({ req, warehouse, workType: '发货', startDate: curStart,  endDate: curEnd });
