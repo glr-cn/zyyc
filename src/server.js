@@ -24,8 +24,31 @@ const logisticsQuotesRouter = require('./routes/logistics-quotes');
 const smartQuoteRouter = require('./routes/smart-quote');
 const logsRouter = require('./routes/logs');
 const adminRouter = require('./routes/admin');
+const { getBuildInfo, injectToJson, getBuildVersion } = require('./version');
 
 const app = express();
+
+// ===========================================================
+// 【永久规则 1】部署版本号注入 + 前端刷新提示
+// 每个 JSON 响应自动追加 _build_version 字段，前端 api.js 检测变化后弹
+// "系统已更新，请刷新页面" 提示。**绝不踢用户下线**——JWT 有效期 12h，
+// 服务重启不影响 token 有效性，版本变化只要求刷新静态资源。
+// ===========================================================
+const _BV = getBuildVersion();
+app.use((req, res, next) => {
+  const origJson = res.json.bind(res);
+  res.json = (obj) => {
+    if (obj && typeof obj === 'object' && !('_build_version' in obj)) {
+      obj._build_version = _BV;
+    }
+    return origJson(obj);
+  };
+  next();
+});
+// 公开版本查询接口（前端可定时轮询，无需登录）
+app.get('/api/version', (req, res) => {
+  res.json(getBuildInfo());
+});
 
 // ===========================================================
 // 环境检测：NODE_ENV=development → 开发模式（nodemon 自动重启 + 前端热刷新 + 禁用强缓存）
@@ -33,6 +56,7 @@ const app = express();
 // ===========================================================
 const IS_DEV = process.env.NODE_ENV === 'development';
 const START_TIME = Date.now();
+process.env.START_TIME = String(START_TIME);
 
 // ===========================================================
 // 【性能优化 1】gzip 压缩中间件
