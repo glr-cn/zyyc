@@ -54,6 +54,7 @@
           <button id="searchBtn">搜索</button>
           <button id="addBtn" class="primary">+ 新增客户</button>
           <span class="toolbar-spacer"></span>
+          <button id="exportBtn" class="ghost">⬇ 导出当前筛选</button>
           <button id="tplBtn">下载导入模板</button>
           <button id="importBtn">导入 Excel</button>
           <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
@@ -139,6 +140,27 @@
         const f = e.target.files[0];
         if (f) doImport(f);
         e.target.value = '';
+      };
+      // ---------- 导出当前筛选 ----------
+      $('exportBtn').onclick = async () => {
+        const loading = document.createElement('div');
+        loading.className = 'page-loading';
+        loading.innerHTML = '<div class="page-loading-inner">正在生成 Excel…</div>';
+        document.body.appendChild(loading);
+        try {
+          const p = new URLSearchParams({ customer_type: cfg.type });
+          if (cfg.withWarehouse) p.set('warehouse', state.warehouse);
+          if (state.q) p.set('q', state.q);
+          await API.download('/customers/export?' + p.toString(), `${cfg.title}_${state.warehouse || '全部'}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        } catch (ex) {
+          // API.download 内部已 _fail 弹窗，这里不再重复 alert；
+          // 网络异常等非 HTTP 错误补一个兜底提示
+          if (ex && ex.message && !ex.message.includes('下载失败')) {
+            alert('导出失败：' + ex.message);
+          }
+        } finally {
+          loading.remove();
+        }
       };
     }
 

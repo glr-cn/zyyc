@@ -1241,3 +1241,30 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 
 .db-empty-row td { text-align:center; color:var(--muted); padding:28px; }
 .db-err { padding:24px; text-align:center; color:#dc2626; font-size:13px; }
+
+/* 导出加载提示遮罩 */
+.page-loading {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(255,255,255,0.75);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+.page-loading-inner {
+  background: #fff; border-radius: 8px;
+  padding: 24px 36px; box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+  color: #1f2329; font-size: 14px; font-weight: 500;
+  display: flex; align-items: center; gap: 10px;
+}
+.page-loading-inner::before {
+  content: ''; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #4c8fff; border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+button.ghost {
+  background: transparent; border: 1px solid var(--border, #d9d9d9);
+  color: #1f2329; cursor: pointer;
+}
+button.ghost:hover { background: #f5f7fa; }

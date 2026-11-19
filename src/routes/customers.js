@@ -12,6 +12,7 @@ const {
   readSheet, parseRow, normalizeWarehouse, buildTemplate,
 } = require('../services/customerImport');
 const { setWarehouseSortPosition } = require('../services/warehouseSort');
+const XLSX = require('xlsx');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const CUSTOMER_TYPES = ['仓储客户', '共享单号', '快运物流'];
@@ -266,6 +267,153 @@ router.get('/options', (req, res) => {
        FROM customers c ${joinWsc} ${whereSql} ${orderSql}`
   ).all(...params);
   res.json({ data: rows });
+});
+
+// ---------- 导出当前筛选下的全部客户（分仓独立 Sheet） ----------
+// GET  /customers/export?customer_type=&warehouse=&q=&coop_status=
+//   * 复用列表接口筛选逻辑，但不分页（pageSize=10000）
+//   * 仓储客户：每个仓库一个 Sheet，客户所属多个仓库 → 同时出现在多个 Sheet
+//   * 非仓储客户：单一 Sheet（"共享单号" 或 "快运物流"）
+//   * 仓库为空的客户 → 放入"未分配仓库" Sheet
+router.get('/export', (req, res) => {
+  if (!hasMenuPerm(req.user, 'cust_wh', 'cust_shared', 'cust_express')) {
+    return res.status(403).json({ error: '无客户菜单权限' });
+  }
+
+  const q = (req.query.q || '').trim();
+  const type = req.query.customer_type || '仓储客户';
+  const wh = req.query.warehouse || '';
+  const coop = req.query.coop_status || '';
+
+  if (!CUSTOMER_TYPES.includes(type)) return res.status(400).json({ error: '客户类型非法' });
+  if (wh && !WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
+
+  // 复用列表接口的筛选 SQL（不分页，pageSize=10000 覆盖全部活跃客户）
+  const where = ['c.is_deleted=0'];
+  const params = [];
+  let joinWsc = '';
+  if (type === '仓储客户') {
+    // 仓储客户列表页永远按仓库 LIKE 过滤；导出允许不带 warehouse → 导出全部仓
+    if (wh) {
+      joinWsc = 'LEFT JOIN warehouse_sort_config wsc ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?';
+      params.push(wh);
+      where.push('c.warehouse LIKE ?');
+      params.push('%' + wh + '%');
+    }
+  }
+  const scope = ownerScope(req);
+  if (scope.sql) { where.push(scope.sql.replace(/customers\./g, 'c.')); params.push(...scope.params); }
+  where.push('c.customer_type = ?'); params.push(type);
+  if (coop) { where.push('c.coop_status = ?'); params.push(coop); }
+  if (q) {
+    where.push('(c.company_name LIKE ? OR c.short_name LIKE ? OR c.customer_code LIKE ? OR c.contact_person LIKE ? OR c.phone LIKE ? OR c.erp_version LIKE ?)');
+    const like = '%' + q + '%';
+    for (let i = 0; i < 6; i++) params.push(like);
+  }
+  const whereSql = 'WHERE ' + where.join(' AND ');
+  const rows = db.prepare(`
+    SELECT c.* ${wh ? ', COALESCE(wsc.sort_order, c.sort_order, 9999) AS warehouse_sort_order' : ''}
+      FROM customers c ${joinWsc} ${whereSql}
+      ORDER BY c.customer_id ASC
+  `).all(...params);
+
+  if (!rows.length) {
+    return res.status(404).json({ error: '当前筛选条件下无客户数据可导出' });
+  }
+
+  // 导出表头（列顺序与列表页展示一致，再补齐完整资料）
+  const HEADERS = [
+    '排序号（分仓）', '货主代码', '公司全称', '所在仓库', '客户简称',
+    '截单时间', '预充单价', '合作状态', '联系人', '联系电话', '地址',
+    'ERP 版本', '商品类型', '电商平台', '商品种类数', '默认单位',
+    '支付账号', '物流管控', '效期管理', '备注', '客户分类', '创建时间', '更新时间',
+  ];
+
+  // 辅助：把一行客户转成导出行
+  function rowToExport(c, targetWh) {
+    // 排序号：有分仓 warehouse_sort_order 优先（列表页展示的那个），否则全局 sort_order，9999 显示为空
+    const sort = c.warehouse_sort_order != null ? c.warehouse_sort_order : (c.sort_order || 9999);
+    return [
+      sort === 9999 ? '' : sort,
+      c.customer_code || '',
+      c.company_name || '',
+      targetWh || c.warehouse || '',    // 当前 Sheet 的仓库名（仓储客户）或原始 warehouse 字段
+      c.short_name || '',
+      c.cutoff_time || '',
+      c.prepaid_price != null ? Number(c.prepaid_price).toFixed(3) : '',
+      c.coop_status || '',
+      c.contact_person || '',
+      c.phone || '',
+      c.address || '',
+      c.erp_version || '',
+      c.product_type || '',
+      c.ecommerce_platform || '',
+      c.product_count != null ? c.product_count : 0,
+      c.default_unit || '单',
+      c.payment_account || '',
+      c.logistics_control || '',
+      c.expiry_mgmt || '',
+      c.remark || '',
+      c.customer_type || '',
+      c.created_at || '',
+      c.updated_at || '',
+    ];
+  }
+
+  const wb = XLSX.utils.book_new();
+
+  if (type === '仓储客户') {
+    // 仓储客户：每个仓库一个 Sheet，客户所属多仓 → 同时出现在多 Sheet
+    // 先按仓库拆。没有 warehouse 的放"未分配仓库"
+    const groups = new Map();
+    const NO_WH = '未分配仓库';
+
+    rows.forEach((c) => {
+      const whList = String(c.warehouse || '').split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+      const targets = whList.length ? whList : [NO_WH];
+      targets.forEach((w) => {
+        if (!WAREHOUSES.includes(w) && w !== NO_WH) return; // 跳过非法仓名
+        if (!groups.has(w)) groups.set(w, []);
+        groups.get(w).push(c);
+      });
+    });
+
+    // 每个仓库组再单独拉分仓独立排序（保证排序和列表页一致）
+    groups.forEach((list, whName) => {
+      let orderedList = list;
+      if (whName !== NO_WH) {
+        // 用 COALESCE(wsc.sort_order, c.sort_order, 9999) 排序
+        const placeholders = list.map(() => '?').join(',');
+        const ids = list.map((c) => c.customer_id);
+        const orderedIds = db.prepare(`
+          SELECT c.customer_id
+            FROM customers c
+            LEFT JOIN warehouse_sort_config wsc
+                   ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
+           WHERE c.customer_id IN (${placeholders})
+           ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
+        `).all(whName, ...ids).map((r) => r.customer_id);
+        orderedList = orderedIds.map((id) => list.find((c) => c.customer_id === id)).filter(Boolean);
+      }
+      const aoa = [HEADERS, ...orderedList.map((c) => rowToExport(c, whName))];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // 设置列宽（全给个默认宽度）
+      ws['!cols'] = HEADERS.map(() => ({ wch: 14 }));
+      XLSX.utils.book_append_sheet(wb, ws, whName);
+    });
+  } else {
+    // 非仓储客户（共享单号 / 快运物流）：单一 Sheet
+    const aoa = [HEADERS, ...rows.map((c) => rowToExport(c, ''))];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = HEADERS.map(() => ({ wch: 14 }));
+    XLSX.utils.book_append_sheet(wb, ws, type);
+  }
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const fname = `${type}_客户资料_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"`);
+  res.send(buf);
 });
 
 // ---------- 下载导入模板（必须排在 /:id 之前；持任一客户分类授权即可） ----------
