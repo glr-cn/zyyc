@@ -61,8 +61,45 @@
   // Tab 1: 批量导入（保留 Ctrl+V + 导入记录）
   // =========================================================================
   let _platforms = null;
+  let _pasteCleanup = null;   // 单例：页面重复打开时先解绑旧监听，避免监听器叠加
+
+  // 文件列表 / 删除按钮样式（用 CSS 类实现 hover / active / focus / disabled，
+  // 避免内联 style 覆盖伪类状态，也便于键盘操作时给出焦点反馈）
+  function injectOdStyles() {
+    if (document.getElementById('odStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'odStyles';
+    style.textContent = `
+      .od-file-row{display:flex;align-items:center;gap:12px;padding:10px 12px;
+        background:#f4f8ff;border:1px solid #e2edff;border-left:3px solid #409eff;border-radius:8px;
+        transition:background .18s ease,border-color .18s ease,box-shadow .18s ease;}
+      .od-file-row:hover{background:#eaf3ff;border-color:#c6dcff;box-shadow:0 2px 8px rgba(64,158,255,.08);}
+      .od-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        font-size:13px;color:#303133;font-weight:600;}
+      .od-file-size{flex-shrink:0;font-size:12px;color:#909399;font-variant-numeric:tabular-nums;}
+      .od-file-del{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
+        width:26px;height:26px;padding:0;border:1px solid transparent;border-radius:50%;
+        background:linear-gradient(180deg,#f76a6a 0%,#f05656 100%);color:#fff;cursor:pointer;
+        box-shadow:0 1px 3px rgba(240,86,86,.28);user-select:none;-webkit-tap-highlight-color:transparent;
+        transition:transform .16s cubic-bezier(.4,0,.2,1),box-shadow .16s ease,
+                   background .16s ease,opacity .16s ease;}
+      .od-file-del:hover{background:linear-gradient(180deg,#ff5f5f 0%,#e84040 100%);
+        box-shadow:0 4px 12px rgba(232,64,64,.4);transform:scale(1.1);}
+      .od-file-del:active{background:#d93a3a;box-shadow:inset 0 1px 3px rgba(0,0,0,.25);transform:scale(.92);}
+      .od-file-del:focus{outline:none;}
+      .od-file-del:focus-visible{box-shadow:0 0 0 3px rgba(245,108,108,.35),0 2px 6px rgba(240,86,86,.3);}
+      .od-file-del:disabled{background:#f0f2f5;color:#c0c4cc;border-color:#e4e7ed;
+        box-shadow:none;cursor:not-allowed;transform:none;}
+      @media (prefers-reduced-motion:reduce){
+        .od-file-row,.od-file-del{transition:none;}
+        .od-file-del:hover,.od-file-del:active{transform:none;}
+      }
+    `;
+    document.head.appendChild(style);
+  }
 
   function mountImport(panel) {
+    injectOdStyles();
     panel.innerHTML = '';
     const card = document.createElement('div');
     card.style.cssText = CARD_CSS;
@@ -130,6 +167,7 @@
     const fileInput = card.querySelector('#odFile');
     const previewBox = card.querySelector('#odPreview');
     let _selectedFiles = [];   // 多文件列表
+    let _busy = false;         // 导入中：禁用删除/提交，避免中途改列表
     dropZone.onclick = () => fileInput.click();
     dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#409eff'; };
     dropZone.ondragleave = () => { dropZone.style.borderColor = '#c0ccda'; };
@@ -147,38 +185,52 @@
       fileInput.value = ''; // 清空以便再次选择同名文件
     };
 
-    // Ctrl+V 粘贴导入
+    // Ctrl+V / Cmd+V 粘贴导入
+    // ⚠️ 关键：Chrome / Edge / Safari 的 paste 事件里 ctrlKey / metaKey 恒为 false
+    //    （只有 Firefox 会带修饰键），所以不能靠 e.ctrlKey 判断，否则这些浏览器里
+    //    按 Ctrl+V 会被直接 return 掉 → 表现为「粘贴完全没反应」。
+    //    能收到 paste 事件本身就代表用户执行了粘贴（快捷键或右键菜单）。
     function onPaste(e) {
-      if (!panel.isConnected) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
+      // 只在当前页面可见时响应（切到其它 Tab / 页面不响应）
+      if (!panel.isConnected || !panel.getClientRects().length) return;
       const target = e.target;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-      const items = (e.clipboardData || {}).items;
-      if (!items || !items.length) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT' || target.isContentEditable)) return;
+
+      const cd = e.clipboardData;
+      if (!cd) return;
+
+      // ① 优先识别「复制的文件」
       let file = null;
-      for (let i = 0; i < items.length; i++) { if (items[i].kind === 'file') { file = items[i].getAsFile(); break; } }
-      if (file) {
-        e.preventDefault(); onFile(file); return;
+      if (cd.files && cd.files.length) file = cd.files[0];
+      if (!file && cd.items) {
+        for (let i = 0; i < cd.items.length; i++) {
+          if (cd.items[i].kind === 'file') { file = cd.items[i].getAsFile(); break; }
+        }
       }
+      if (file) { e.preventDefault(); onFile(file); return; }
+
+      // ② 其次识别「Excel 表格 / TSV 文本」
       try {
-        const cb = e.clipboardData;
-        let html = cb.getData('text/html');
-        let text = cb.getData('text/plain');
+        let html = cd.getData('text/html');
+        let text = cd.getData('text/plain');
         let csv = null, label = '';
         if (html && /<table/i.test(html)) { csv = htmlTableToCSV(html); label = '粘贴的 Excel 表格'; }
         else if (text && looksLikeTSV(text)) { csv = tsvToCSV(text); label = '粘贴的表格数据'; }
         if (csv) {
           e.preventDefault();
-          const ts = new Date(); const pad = (n) => String(n).padStart(2,'0');
-          const fname = `粘贴导入_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.csv`;
+          const ts = new Date(); const pad = (n) => String(n).padStart(2, '0');
+          const fname = `粘贴导入_${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.csv`;
           const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
           onFile(new File([blob], fname, { type: 'text/csv' }));
           flashDropZone(dropZone, '已粘贴 ' + label + '，自动转为 CSV 导入');
         }
       } catch (_) {}
     }
+    // 先解绑上一次 mountImport 挂的监听，避免页面重复打开后监听器叠加
+    if (_pasteCleanup) _pasteCleanup();
     document.addEventListener('paste', onPaste);
-    panel._cleanup = () => document.removeEventListener('paste', onPaste);
+    _pasteCleanup = () => document.removeEventListener('paste', onPaste);
 
     function flashDropZone(zone, msg, color) {
       zone.style.borderColor = color || '#67c23a';
@@ -217,36 +269,22 @@
       _selectedFiles.forEach((f, idx) => {
         const kb = (f.size / 1024).toFixed(1);
         const row = document.createElement('div');
+        row.className = 'od-file-row';
         row.dataset.idx = idx;
-        row.style.cssText = [
-          'display:flex;align-items:center;gap:10px;',
-          'padding:10px 12px;background:#ecf5ff;border-radius:6px;border-left:3px solid #409eff;',
-          'transition:background .15s;'
-        ].join('');
         row.innerHTML = `
-          <span style="font-size:16px;">📄</span>
-          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#303133;" title="${escapeHtml(f.name)}">
-            <b>${escapeHtml(f.name)}</b>
-          </span>
-          <span style="flex-shrink:0;font-size:12px;color:#909399;">${kb} KB</span>
-          <button class="od-file-del" data-idx="${idx}" title="移除此文件" aria-label="删除文件"
-            style="flex-shrink:0;width:22px;height:22px;border:none;border-radius:50%;background:#f56c6c;color:#fff;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s, background .15s;">
-            <span style="transform:translateY(-1px);">×</span>
+          <span style="font-size:16px;flex-shrink:0;">📄</span>
+          <span class="od-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span class="od-file-size">${kb} KB</span>
+          <button type="button" class="od-file-del" data-idx="${idx}" ${_busy ? 'disabled' : ''}
+            title="移除此文件" aria-label="移除文件 ${escapeHtml(f.name)}">
+            <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+              <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
           </button>
         `;
-        // hover 缩放反馈
-        const delBtn = row.querySelector('.od-file-del');
-        row.addEventListener('mouseenter', () => { row.style.background = '#d9ecff'; });
-        row.addEventListener('mouseleave', () => { row.style.background = '#ecf5ff'; });
-        delBtn.addEventListener('mouseenter', () => {
-          delBtn.style.background = '#f23c3c';
-          delBtn.style.transform = 'scale(1.2)';
-        });
-        delBtn.addEventListener('mouseleave', () => {
-          delBtn.style.background = '#f56c6c';
-          delBtn.style.transform = 'scale(1)';
-        });
-        delBtn.onclick = (e) => {
+        // hover / active / focus / disabled 全部由 .od-file-del 的 CSS 控制，
+        // 这里只保留点击行为
+        row.querySelector('.od-file-del').onclick = (e) => {
           e.stopPropagation();
           removeFile(idx);
         };
@@ -257,6 +295,7 @@
 
     // 移除指定文件项（同时清空关联的临时数据）
     function removeFile(idx) {
+      if (_busy) return;
       if (idx < 0 || idx >= _selectedFiles.length) return;
       const removed = _selectedFiles.splice(idx, 1)[0];
       // 如果文件有临时解析缓存，这里清理（当前暂无额外缓存，预留接口）
@@ -279,6 +318,7 @@
       const prog = card.querySelector('#odProgress'); prog.style.display = 'block';
       const result = card.querySelector('#odResult'); result.style.display = 'none';
       submitBtn.disabled = true; submitBtn.style.cssText = BTN_PRIMARY_DISABLED;
+      _busy = true; renderFileList();   // 导入期间删除按钮进入 disabled 态
 
       // 逐个提交，汇总结果
       const total = _selectedFiles.length;
@@ -308,6 +348,7 @@
       }
 
       // 清空已上传列表并刷新
+      _busy = false;
       _selectedFiles = [];
       renderFileList();
 
@@ -333,6 +374,7 @@
 
     resetBtn.onclick = () => {
       // 释放所有可能的临时 ObjectURL
+      _busy = false;
       _selectedFiles.forEach((f) => { if (f && f._tempUrl) URL.revokeObjectURL(f._tempUrl); });
       _selectedFiles = [];
       fileInput.value = '';
