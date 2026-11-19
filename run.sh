@@ -11,7 +11,10 @@ PERSIST_DIR="${HOME}/.wbapp-erp-data"
 PERSIST_DB="${PERSIST_DIR}/erp.db"
 BUNDLE_BACKUP="./data/erp.restore-from-local.db"
 
-if [ -d "$PERSIST_DIR" ] && [ -f "$BUNDLE_BACKUP" ]; then
+# 先确保持久目录存在（run.sh 比 Node 早跑，此时 fs.mkdirSync 还没机会创建）
+mkdir -p "$PERSIST_DIR"
+
+if [ -f "$BUNDLE_BACKUP" ]; then
   # 持久目录存在，但 erp.db 可能还没被创建（首次启动）
   if [ ! -f "$PERSIST_DB" ]; then
     # 还没生成过持久库：直接把备份放进去，跳过后续自愈也能用
