@@ -29,7 +29,7 @@ const MODULE_BY_TABLE = {
 
 const MODULES = ['客户资料', '工时管理', '物流报价', '智能测单', '系统/权限', '其他业务'];
 const ACTION_LABELS = {
-  create: '新增', update: '修改', delete: '删除', import: '导入',
+  create: '新增', update: '修改', delete: '删除', import: '导入', export: '导出',
   submit: '提交归档', withdraw: '撤回', archive: '归档',
 };
 
@@ -39,6 +39,7 @@ const ACTION_ENUM = {
   update: 'update', 修改: 'update', edit: 'update',
   delete: 'delete', 删除: 'delete', remove: 'delete',
   import: 'import', 导入: 'import',
+  export: 'export', 导出: 'export',
   submit: 'submit', 提交: 'submit', 提交归档: 'submit',
   withdraw: 'withdraw', 撤回: 'withdraw',
   archive: 'archive', 归档: 'archive',

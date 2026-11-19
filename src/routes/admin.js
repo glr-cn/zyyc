@@ -213,6 +213,34 @@ router.post('/migrate-sort/rollback', (req, res) => {
   }
 });
 
+// ---------- 导出整库（部署前数据快照） ----------
+// GET /api/admin/db-export
+// 用 VACUUM INTO 生成一致性快照后以附件返回，供发布前备份线上数据。
+// 平台每次发布都是全新临时存储，靠「发布前导出 + 打包进新版本」实现数据不丢。
+router.get('/db-export', (req, res) => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tmp = path.join(os.tmpdir(), `erp-export-${Date.now()}-${process.pid}.db`);
+  try {
+    db._raw.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    audit.writeLog(req, {
+      table: 'system',
+      module: '系统/权限',
+      action: 'export',
+      targetId: 'db_export',
+      content: { op: 'db_export', operator: req.user && req.user.username, file: path.basename(tmp) },
+    });
+    res.download(tmp, 'erp.db', (err) => {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      if (err && !res.headersSent) res.status(500).end();
+    });
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    res.status(500).json({ ok: false, error: '导出失败：' + e.message });
+  }
+});
+
 // ---------- DELETE /api/admin/migrate-sort/snapshot ----------
 // 清除快照（迁移确认无误后管理员手动清理）
 router.delete('/migrate-sort/snapshot', (req, res) => {
