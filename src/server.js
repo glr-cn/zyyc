@@ -167,14 +167,19 @@ if (IS_DEV) {
   }));
   console.log('[dev] 开发模式：静态资源禁用缓存，前端文件变更后刷新浏览器即可生效');
 } else {
-  // 生产环境：24h 强缓存 + immutable（版本号不变永不校验）
+  // 生产环境：24h 浏览器缓存 + 7d CDN 缓存 + immutable（版本号不变永不校验）
+  // ★ Surrogate-Control 是专门给 CDN/代理看的头，告诉 volc-dcdn 这个资源可以缓存 7 天
+  //   有些 CDN 会强制覆盖源站 Cache-Control，但会尊重 Surrogate-Control
+  // ★ s-maxage=604800 是"共享缓存（CDN）"的缓存时间，独立于浏览器 max-age
   app.use(express.static(STATIC_ROOT, {
     maxAge: '24h',
     immutable: true,
     etag: true,
     lastModified: true,
     setHeaders: function (res) {
-      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, immutable');
+      res.setHeader('Surrogate-Control', 'max-age=604800, stale-while-revalidate=86400');
+      res.setHeader('X-Accel-Expires', '604800');  // 兼容 Nginx 代理层
     },
   }));
 }
