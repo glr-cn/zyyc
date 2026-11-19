@@ -12,7 +12,7 @@ window.ERP_PAGES.roles = function (host) {
   if (typeof ERP.createPermissionTree !== 'function') {
     // 同步加载 permission-tree.js（XHR sync 虽然 deprecated 但可靠）
     const _xhr = new XMLHttpRequest();
-    _xhr.open('GET', 'js/permission-tree.js?v=9', false);
+    _xhr.open('GET', 'js/permission-tree.js?v=10', false);
     _xhr.send(null);
     if (_xhr.status === 200) {
       try { eval(_xhr.responseText); } catch (e) { console.error('[roles] permission-tree.js 执行失败:', e); }
