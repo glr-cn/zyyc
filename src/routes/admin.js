@@ -377,8 +377,29 @@ router.delete('/business-data', (req, res) => {
     customers: db.prepare('SELECT COUNT(*) c FROM customers').get().c,
     work_hours: db.prepare('SELECT COUNT(*) c FROM work_hours').get().c,
   };
-  audit.log(req.user, 'clear', 'business-data', null, { before, after });
+  audit.writeLog(req, { table: 'customers,work_hours', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ before, after }) });
   res.json({ ok: true, before, after });
+});
+
+// ---------- DELETE /api/admin/backups ----------
+// ⚠️ 清空持久目录 backups/ 下所有快照文件。仅限 super_admin，需 confirm=YES。
+router.delete('/backups', (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  if ((req.body || {}).confirm !== 'YES') {
+    return res.status(400).json({ ok: false, error: '必须传 { confirm: "YES" }' });
+  }
+  const bakDir = path.join(path.dirname(db.DB_PATH), 'backups');
+  if (!fs.existsSync(bakDir)) {
+    return res.json({ ok: true, cleared: 0, dir: bakDir, note: '目录不存在' });
+  }
+  const files = fs.readdirSync(bakDir).filter((f) => f.endsWith('.db'));
+  let cleared = 0;
+  for (const f of files) {
+    try { fs.unlinkSync(path.join(bakDir, f)); cleared++; } catch (e) {}
+  }
+  audit.writeLog(req, { table: 'backups', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ cleared, dir: bakDir }) });
+  res.json({ ok: true, cleared, dir: bakDir });
 });
 
 module.exports = router;
