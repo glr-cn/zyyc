@@ -11,9 +11,12 @@
   const MAP = {
     // 看板 + 图表
     dashboard:      'js/dashboard.js',
-    // 出库
-    orders:         'js/orders.js',
-    inventory:      'js/inventory.js',
+    // 出库（2026-11-19 已移除：orders/inventory 菜单已删）
+    // orders:         'js/orders.js',
+    // inventory:      'js/inventory.js',
+    // 订单导入 + 数据看板（2026-11-19 新增 · docs/单据 子菜单，共用 orders-module.js）
+    order_import:     'js/orders-module.js',
+    order_dashboard:  'js/orders-module.js',
     // 工时（4 个仓 pageId 共用同一 workhours.js）
     wh_lh:          'js/workhours.js',
     wh_jx:          'js/workhours.js',

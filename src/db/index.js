@@ -185,6 +185,28 @@ require('./migrateWscRemoveFk').run(_conn, { verbose: true });
 // 新库首次启动时 menu_seed.sql 本身不带这三个菜单，此处自动识别跳过。幂等。
 require('./migrateRemoveStockMenus').run(_conn, { verbose: true });
 
+// 订单导入扩字段（2026-11-19）：建 shentong_region_class 表 + 种子数据（申通快递 2025
+// 偏远地区规则），orders 表扩 wms_platform / to_province / to_city / region_class 4 列，
+// 用于后续 8 平台 WMS 订单导入 + 地区分类看板。幂等。
+require('./migrateOrdersRegion').run(_conn, { verbose: true });
+
+// 新增订单导入 + 数据看板菜单（2026-11-19）：docs(单据) 子菜单 702 order_import / 703
+// order_dashboard；同时给超级管理员自动授权 role_menus。新库 menu_seed.sql 已包含，
+// 此处幂等处理存量线上库。
+require('./migrateAddOrderMenus').run(_conn, { verbose: true });
+
+// 去掉 orders 表 FK 约束（2026-11-19）：migrateCustomersRemoveUnique 的 ALTER TABLE RENAME
+// 会把 orders.customer_id 的 FK 同步改成 REFERENCES customers_bak——和 warehouse_sort_config
+// 踩的坑完全一样。重建表去掉 customer_id + owner_user_id 两个 FK，防止自动创建客户后
+// FK 写入失败。幂等。
+require('./migrateOrdersRemoveFk').run(_conn, { verbose: true });
+
+// 去掉 inventory_transactions FK（2026-11-19 · 链式修复）：migrateOrdersRemoveFk 内部 RENAME
+// orders 时，SQLite 会把 inv.order_id → orders 的 FK 自动改成 → orders_bak，导致
+// processImport 批量事务里 INSERT inv 失败（刚插入的 orders 行在 orders 表里，orders_bak
+// 里没有）。重建 inv 表去掉 FK，和上面 orders / 之前 wsc 走同一条路。幂等。
+require('./migrateInvRemoveFk').run(_conn, { verbose: true });
+
 // work_hours 归档冲突检测覆盖索引：
 // 精确匹配四元组(warehouse, work_type, customer_id, date, status) → 命中覆盖索引零回表。
 // 解决热点日（同日 10 万行）从 8 秒 → < 10ms。幂等，CREATE INDEX IF NOT EXISTS 天然安全。

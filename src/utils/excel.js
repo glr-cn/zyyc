@@ -48,7 +48,14 @@ function readRows(buffer, opts) {
 }
 
 function pick(row, key) {
-  const aliases = ALIASES[key] || [key];
+  // 1. 先查 key 本身（支持 normalizeRow 归一化后的英文 schema key）
+  if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+  const lowerKey = String(key).toLowerCase();
+  for (const k of Object.keys(row)) {
+    if (String(k).toLowerCase() === lowerKey) return row[k];
+  }
+  // 2. 再查 ALIASES 里的中文别名
+  const aliases = ALIASES[key] || [];
   for (const a of aliases) {
     if (Object.prototype.hasOwnProperty.call(row, a)) return row[a];
     const lower = String(a).toLowerCase();

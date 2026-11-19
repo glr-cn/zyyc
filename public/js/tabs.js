@@ -23,8 +23,6 @@ ERP.PAGE_META = {
   cust_wh: { title: '仓储客户', icon: '🏢' },
   cust_shared: { title: '共享单号', icon: '🔗' },
   cust_express: { title: '快运物流', icon: '🚚' },
-  orders: { title: '订单导入', icon: '📄' },
-  inventory: { title: '库存台账', icon: '📊' },
   // 工时管理按仓库拆分为独立页面（左侧菜单「工时 → 录入」按仓路由）
   wh_lh: { title: '龙湖仓-工时', icon: '⏱️' },
   wh_jx: { title: '佳新仓-工时', icon: '⏱️' },
@@ -36,6 +34,9 @@ ERP.PAGE_META = {
   logi_quotes: { title: '物流报价', icon: '🚚' },
   smart_quote: { title: '智能测算', icon: '🧮' },
   smart_quote_history: { title: '历史测算', icon: '🕑' },
+  // 订单导入 + 数据看板（2026-11-19 新增 · docs/单据 子菜单）
+  order_import:   { title: '订单导入', icon: '📤' },
+  order_dashboard: { title: '数据看板', icon: '📊' },
   // 快捷工具（parent 为容器，不注册；子页 path 与 menus.path 一致）
   tool_split_no: { title: '分列单号', icon: '✂️' },
   tool_barcode: { title: '条码设计', icon: '🏷️' },

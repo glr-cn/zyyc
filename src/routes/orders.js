@@ -11,6 +11,10 @@ const multer = require('multer');
 const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
 const XLSX = require('xlsx');
+const {
+  WMS_PLATFORMS, UNIFIED_COLUMNS,
+  processImport,
+} = require('../services/ordersImport');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const UNITS = ['件', '箱', '托', '公斤'];
@@ -139,148 +143,92 @@ router.get('/template', (req, res) => {
   }
 });
 
-router.post('/import', upload.single('file'), (req, res) => {
+// GET /api/orders/platforms — 8 平台 WMS 选择器 + 统一列名（前端导入页面用）
+router.get('/platforms', auth, menuGate('orders_import'), (req, res) => {
+  res.json({
+    platforms: WMS_PLATFORMS,
+    unified_columns: UNIFIED_COLUMNS,
+  });
+});
+
+// POST /api/orders/import — 批量导入（8 平台统一入口 + 自动地区分类）
+// multipart fields: file(必填), platform(必填，WMS_PLATFORMS 之一)
+router.post('/import', auth, menuGate('orders_import'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请上传 Excel 文件' });
-  let rows;
+  const platform = String(req.body.platform || '').trim();
+  if (!platform) return res.status(400).json({ error: '请选择来源平台' });
+  if (!WMS_PLATFORMS.includes(platform))
+    return res.status(400).json({ error: '平台不支持：' + platform });
+
   try {
-    rows = readRows(req.file.buffer);
-  } catch (e) {
-    return res.status(400).json({ error: e.message });
-  }
-  if (!rows.length) return res.status(400).json({ error: '文件中没有数据行（请保留表头）' });
-
-  // ★ WMS 宽松模式检测：ALIASES 扩展后，"客户"/"货主"/"店铺"等 WMS 短列名能
-  // 命中 customer_name → 自动进入 WMS 模式（允许自动创建客户、允许缺失货主/单位/发货量）
-  // 逻辑：如果 pick('customer_name') 取到的值来自 WMS 短别名（"客户"/"货主"/"店铺"），
-  // 就启用宽松模式。方法是检查原始 row 里这些短键是否存在。
-  const wmsShortKeys = new Set(['客户', '货主', '店铺', '使用方公司名称', '客户店铺',
-    '使用单号店铺', '取号店铺名称', '订单店铺名称']);
-  const isWmsLoose = rows.some(r =>
-    Object.keys(r).some(k => wmsShortKeys.has(k) && String(r[k]).trim())
-  );
-
-  const failures = [];
-  const successItems = [];
-  // 自动创建的客户缓存（避免每行单独 INSERT）
-  const autoCustCache = new Map(); // customerName → customer_id
-
-  rows.forEach((row, i) => {
-    const excelRow = i + 2;
-    const customerName = String(pick(row, 'customer_name') ?? '').trim();
-    const ownerName = String(pick(row, 'owner_name') ?? '').trim();
-    const orderNo = String(pick(row, 'order_no') ?? '').trim();
-    let qtyRaw = pick(row, 'ship_quantity');
-    const unit = String(pick(row, 'unit') ?? '').trim();
-    const dateRaw = pick(row, 'order_date');
-
-    if (!customerName) return failures.push({ row: excelRow, reason: '客户名称为空', data: row });
-
-    let customer = null;
-    const findCust = db.prepare('SELECT * FROM customers WHERE company_name=? OR short_name=?');
-    customer = findCust.get(customerName, customerName);
-
-    if (!customer && !isWmsLoose)
-      return failures.push({ row: excelRow, reason: '客户名称不存在', data: row });
-
-    if (!customer && isWmsLoose) {
-      // WMS 模式：自动创建缺失客户（coop_status=合作中）
-      if (autoCustCache.has(customerName)) {
-        const cached = autoCustCache.get(customerName);
-        customer = { customer_id: cached.customer_id, owner_user_id: cached.owner_user_id };
-      } else {
-        const ins = db.prepare(
-          'INSERT INTO customers (company_name,short_name,coop_status,created_at) VALUES (?,?,?,?)'
-        );
-        try {
-          const info = ins.run(customerName, customerName, '合作中', new Date().toISOString().slice(0, 10));
-          customer = { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id };
-          autoCustCache.set(customerName, { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id });
-        } catch (e) {
-          return failures.push({ row: excelRow, reason: '自动创建客户失败：' + e.message, data: row });
-        }
-      }
-    }
-
-    // 货主校验（非 WMS 模式）；WMS 模式自动兜底
-    if (!ownerName) {
-      if (isWmsLoose) ownerName = customerName;
-      else return failures.push({ row: excelRow, reason: '货主名称为空', data: row });
-    } else if (!isWmsLoose) {
-      const byOwner = findCust.get(ownerName, ownerName);
-      if (!byOwner) return failures.push({ row: excelRow, reason: '货主名称不存在', data: row });
-      if (customer.customer_id !== byOwner.customer_id)
-        return failures.push({ row: excelRow, reason: '客户名称与货主名称不匹配', data: row });
-    }
-
-    // 非 WMS 模式：必须合作中 + 业务员权限校验
-    if (!isWmsLoose) {
-      if (customer.coop_status !== '合作中')
-        return failures.push({ row: excelRow, reason: '客户非合作中，不能导入订单', data: row });
-      if (req.user.role === '业务员' && customer.owner_user_id !== req.user.user_id)
-        return failures.push({ row: excelRow, reason: '无权导入其他业务员负责的客户订单', data: row });
-    }
-
-    // 发货量：WMS 模式 fallback 1（每包裹=1件）
-    let qty = Number(qtyRaw);
-    if (qtyRaw === '' || qtyRaw == null || isNaN(qty) || qty <= 0) {
-      if (isWmsLoose) { qty = 1; }
-      else return failures.push({ row: excelRow, reason: '发货量必须为正数', data: row });
-    }
-    // 单位：WMS 模式默认"件"
-    const finalUnit = unit || (isWmsLoose ? '件' : '');
-    if (!isWmsLoose && !UNITS.includes(finalUnit))
-      return failures.push({ row: excelRow, reason: '单位必须是 件/箱/托/公斤 之一', data: row });
-
-    // 日期：WMS 模式 fallback 今天
-    let date = parseDate(dateRaw);
-    if (!date) {
-      if (isWmsLoose) date = new Date().toISOString().slice(0, 10);
-      else return failures.push({ row: excelRow, reason: '订单日期格式不合法', data: row });
-    }
-
-    successItems.push({
-      excelRow, customerName, ownerName, orderNo, qty: round3(qty),
-      unit: finalUnit, date, customer,
+    const result = processImport({
+      db, req,
+      fileBuf: req.file.buffer,
+      platform,
     });
-  });
-
-  // 批量事务：一次 BEGIN 包所有 INSERT（10 万行级批量避免 N 次事务开销）
-  let success = 0;
-  let lastOrderId = 0;
-  const orderStmt = db.prepare(
-    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id) VALUES (?,?,?,?,?,?,?,?)'
-  );
-  const invStmt = db.prepare(
-    "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
-  );
-  db.exec('BEGIN');
-  for (const it of successItems) {
-    try {
-      const info = orderStmt.run(
-        it.orderNo || 'ORD' + Date.now() + Math.floor(Math.random() * 1000),
-        it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date,
-        '未收', it.customer.owner_user_id
-      );
-      lastOrderId = info.lastInsertRowid;
-      invStmt.run(lastOrderId, it.ownerName, it.qty, it.date, '订单导入自动出库');
-      success++;
-    } catch (e) {
-      failures.push({ row: it.excelRow, reason: '写入失败: ' + e.message, data: it });
-    }
+    res.json(result);
+  } catch (e) {
+    console.error('[orders/import] 异常:', e);
+    res.status(500).json({ error: '导入失败：' + e.message });
   }
-  if (success > 0) db.exec('COMMIT'); else db.exec('ROLLBACK');
+});
 
-  // 订单导入批次审计：逐行 create 明细日志之外，补一条「导入」批次日志
-  require('../services/auditLog').writeLog(req, {
-    table: 'orders', module: '其他业务', action: 'import',
-    targetId: 'import:' + (req.file.originalname || 'orders.xlsx'),
-    content: {
-      file: req.file.originalname || '', success,
-      failed: failures.length, failures: failures.slice(0, 50),
-    },
+// GET /api/orders/dashboard — 地区分类看板聚合
+// query: start, end, platform, class(大偏远/小偏远/正常)
+router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
+  const start = String(req.query.start || '').trim();
+  const end = String(req.query.end || '').trim();
+  const platform = String(req.query.platform || '').trim();
+  const cls = String(req.query.class || '').trim();
+
+  const where = [];
+  const params = [];
+  if (start) { where.push('o.order_date >= ?'); params.push(start); }
+  if (end)   { where.push('o.order_date <= ?'); params.push(end); }
+  if (platform && platform !== '全部') { where.push('o.wms_platform = ?'); params.push(platform); }
+  if (cls && ['大偏远', '小偏远', '正常'].includes(cls)) {
+    where.push('o.region_class = ?'); params.push(cls);
+  }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  // 聚合（地区分类 × 平台）
+  const agg = db.prepare(`
+    SELECT
+      COALESCE(o.region_class, '正常') AS region_class,
+      o.wms_platform,
+      COUNT(*) AS cnt,
+      SUM(o.ship_quantity) AS qty
+    FROM orders o ${w}
+    GROUP BY COALESCE(o.region_class, '正常'), o.wms_platform
+  `).all(...params);
+
+  // 汇总（3 类）
+  const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0 };
+  for (const r of agg) {
+    if (byClass[r.region_class] != null) byClass[r.region_class] += r.cnt;
+  }
+  const total = byClass['大偏远'] + byClass['小偏远'] + byClass['正常'];
+  const remoteTotal = byClass['大偏远'] + byClass['小偏远']; // 偏远合计
+
+  // 明细（limit 500，前端导出再调明细接口）
+  const details = db.prepare(`
+    SELECT o.order_id, o.order_no, o.owner_name, o.ship_quantity, o.unit,
+           o.order_date, o.payment_status, o.wms_platform,
+           o.to_province, o.to_city, o.region_class, c.company_name
+    FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+    ${w}
+    ORDER BY o.order_date DESC, o.order_id DESC
+    LIMIT 500
+  `).all(...params);
+
+  res.json({
+    total,
+    remote_total: remoteTotal,
+    by_class: byClass,
+    platform_list: WMS_PLATFORMS,
+    platform_breakdown: agg,
+    details,
   });
-
-  res.json({ success, failed: failures.length, failures });
 });
 
 module.exports = router;
