@@ -180,6 +180,11 @@ require('./migrateCustomersRemoveUnique').run(_conn, { verbose: true });
 // 重建表去掉 FK（软删除客户的排序配置由后端手动处理，CASCADE 无必要）。幂等。
 require('./migrateWscRemoveFk').run(_conn, { verbose: true });
 
+// 移除出库/入库/库存菜单（2026-11-19）：前端 UI、后端路由、menu_seed.sql 已全部删除，
+// 但线上数据库 menus / role_menus 存量数据仍在——这步自动清理 24 个菜单 + 关联行。
+// 新库首次启动时 menu_seed.sql 本身不带这三个菜单，此处自动识别跳过。幂等。
+require('./migrateRemoveStockMenus').run(_conn, { verbose: true });
+
 // work_hours 归档冲突检测覆盖索引：
 // 精确匹配四元组(warehouse, work_type, customer_id, date, status) → 命中覆盖索引零回表。
 // 解决热点日（同日 10 万行）从 8 秒 → < 10ms。幂等，CREATE INDEX IF NOT EXISTS 天然安全。

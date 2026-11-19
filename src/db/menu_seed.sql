@@ -7,44 +7,20 @@
 -- ============================================================
 
 -- 主菜单（sort 决定左侧顺序）
+-- 出库/入库/库存 已在 2026-11-19 移除：菜单 2(outbound)、3(inbound)、4(inventory)
+-- 及其全部子菜单均由 migrateRemoveStockMenus.js 在启动时清理线上存量。
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
  (1,'dashboard',NULL,'看板','dashboard','📉',NULL,10,1),
- (2,'outbound', NULL,'出库',NULL,'📦',NULL,20,1),
- (3,'inbound',  NULL,'入库',NULL,'📥',NULL,30,1),
- (4,'inventory',NULL,'库存',NULL,'📊',NULL,40,1),
+-- 2026-11-19 已移除: (2,'outbound', NULL,'出库',NULL,'📦',NULL,20,1),
+-- 2026-11-19 已移除: (3,'inbound',  NULL,'入库',NULL,'📥',NULL,30,1),
+-- 2026-11-19 已移除: (4,'inventory',NULL,'库存',NULL,'📊',NULL,40,1),
  (5,'master',   NULL,'基础资料',NULL,'📁',NULL,50,1),
  (6,'work',     NULL,'工时',NULL,'⏱️',NULL,60,1),
  (7,'docs',     NULL,'单据',NULL,'🧾',NULL,70,1);
 
--- 出库
-INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
- (101,'ob_orders',2,'订单导入','orders',NULL,'单据',10,1),
- (102,'ob_bill',2,'出库单',NULL,NULL,'单据',20,0),
- (103,'ob_waybill',2,'面单打印',NULL,NULL,'打单',30,0),
- (104,'ob_batch',2,'批次打单',NULL,NULL,'打单',40,0),
- (105,'ob_pick',2,'拣货任务',NULL,NULL,'拣货',50,0),
- (106,'ob_pick_confirm',2,'拣货确认',NULL,NULL,'拣货',60,0),
- (107,'ob_check',2,'验货复核',NULL,NULL,'验货',70,0),
- (108,'ob_handover',2,'发货交接',NULL,NULL,'发货',80,0),
- (109,'ob_track',2,'物流跟踪',NULL,NULL,'发货',90,0),
- (110,'ob_wrong',2,'错发漏发',NULL,NULL,'异常处理',100,0),
- (111,'ob_return',2,'退货登记',NULL,NULL,'异常处理',110,0);
-
--- 入库
-INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
- (201,'ib_forecast',3,'到货预报',NULL,NULL,'到货',10,0),
- (202,'ib_reg',3,'到货登记',NULL,NULL,'到货',20,0),
- (203,'ib_confirm',3,'收货确认',NULL,NULL,'收货',30,0),
- (204,'ib_putaway',3,'上架任务',NULL,NULL,'上架',40,0),
- (205,'ib_location',3,'库位调整',NULL,NULL,'上架',50,0),
- (206,'ib_qc',3,'入库质检',NULL,NULL,'质检',60,0),
- (207,'ib_damage',3,'破损登记',NULL,NULL,'异常处理',70,0);
-
--- 库存
-INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
- (301,'iv_ledger',4,'库存台账','inventory',NULL,'库存查询',10,1),
- (302,'iv_initial',4,'期初导入',NULL,NULL,'库存调整',20,0),
- (303,'iv_count',4,'库存盘点',NULL,NULL,'库存调整',30,0);
+-- 2026-11-19 已移除：出库子菜单（menu_id 101-111）
+-- 2026-11-19 已移除：入库子菜单（menu_id 201-207）
+-- 2026-11-19 已移除：库存子菜单（menu_id 301-303）
 
 -- 基础资料（客户 + 权限）
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES

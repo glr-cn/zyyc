@@ -6,7 +6,6 @@ const db = require('./db');
 const authRouter = require('./routes/auth');
 const customersRouter = require('./routes/customers');
 const ordersRouter = require('./routes/orders');
-const inventoryRouter = require('./routes/inventory');
 const workhoursRouter = require('./routes/workhours');
 const analyticsRouter = require('./routes/analytics');
 const dashboardRouter = require('./routes/dashboard');
@@ -33,7 +32,6 @@ app.use('/api/auth', authRouter);
 // 业务路由（内部自带鉴权中间件）
 app.use('/api/customers', customersRouter);
 app.use('/api/orders', ordersRouter);
-app.use('/api/inventory', inventoryRouter);
 app.use('/api/workhours', workhoursRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/dashboard', dashboardRouter);
