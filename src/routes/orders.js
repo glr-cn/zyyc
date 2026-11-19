@@ -148,83 +148,127 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   if (!rows.length) return res.status(400).json({ error: '文件中没有数据行（请保留表头）' });
-  // 注意：已移除 500 行上限（历史为了稳妥分批加的硬限制），后端支持任意行数
-  // 大批量导入时前端应考虑浏览器渲染性能（不影响后端写入）
+
+  // ★ WMS 宽松模式检测：ALIASES 扩展后，"客户"/"货主"/"店铺"等 WMS 短列名能
+  // 命中 customer_name → 自动进入 WMS 模式（允许自动创建客户、允许缺失货主/单位/发货量）
+  // 逻辑：如果 pick('customer_name') 取到的值来自 WMS 短别名（"客户"/"货主"/"店铺"），
+  // 就启用宽松模式。方法是检查原始 row 里这些短键是否存在。
+  const wmsShortKeys = new Set(['客户', '货主', '店铺', '使用方公司名称', '客户店铺',
+    '使用单号店铺', '取号店铺名称', '订单店铺名称']);
+  const isWmsLoose = rows.some(r =>
+    Object.keys(r).some(k => wmsShortKeys.has(k) && String(r[k]).trim())
+  );
 
   const failures = [];
   const successItems = [];
+  // 自动创建的客户缓存（避免每行单独 INSERT）
+  const autoCustCache = new Map(); // customerName → customer_id
 
   rows.forEach((row, i) => {
-    const excelRow = i + 2; // 第 1 行为表头
+    const excelRow = i + 2;
     const customerName = String(pick(row, 'customer_name') ?? '').trim();
     const ownerName = String(pick(row, 'owner_name') ?? '').trim();
     const orderNo = String(pick(row, 'order_no') ?? '').trim();
-    const qtyRaw = pick(row, 'ship_quantity');
+    let qtyRaw = pick(row, 'ship_quantity');
     const unit = String(pick(row, 'unit') ?? '').trim();
     const dateRaw = pick(row, 'order_date');
 
     if (!customerName) return failures.push({ row: excelRow, reason: '客户名称为空', data: row });
-    if (!ownerName) return failures.push({ row: excelRow, reason: '货主名称为空', data: row });
 
-    // 新客户表：company_name(公司全称) / short_name(客户简称) 替代旧 customer_name / owner_name
+    let customer = null;
     const findCust = db.prepare('SELECT * FROM customers WHERE company_name=? OR short_name=?');
-    const byName = findCust.get(customerName, customerName);
-    if (!byName) return failures.push({ row: excelRow, reason: '客户名称不存在', data: row });
-    const byOwner = findCust.get(ownerName, ownerName);
-    if (!byOwner) return failures.push({ row: excelRow, reason: '货主名称不存在', data: row });
-    if (byName.customer_id !== byOwner.customer_id)
-      return failures.push({ row: excelRow, reason: '客户名称与货主名称不匹配', data: row });
-    if (byName.coop_status !== '合作中')
-      return failures.push({ row: excelRow, reason: '客户非合作中，不能导入订单', data: row });
-    // 业务员只能导入自己负责的客户订单
-    if (req.user.role === '业务员' && byName.owner_user_id !== req.user.user_id)
-      return failures.push({ row: excelRow, reason: '无权导入其他业务员负责的客户订单', data: row });
+    customer = findCust.get(customerName, customerName);
 
-    const qty = Number(qtyRaw);
-    if (qtyRaw === '' || qtyRaw == null || isNaN(qty) || qty <= 0)
-      return failures.push({ row: excelRow, reason: '发货量必须为正数', data: row });
-    if (!UNITS.includes(unit))
+    if (!customer && !isWmsLoose)
+      return failures.push({ row: excelRow, reason: '客户名称不存在', data: row });
+
+    if (!customer && isWmsLoose) {
+      // WMS 模式：自动创建缺失客户（coop_status=合作中）
+      if (autoCustCache.has(customerName)) {
+        const cached = autoCustCache.get(customerName);
+        customer = { customer_id: cached.customer_id, owner_user_id: cached.owner_user_id };
+      } else {
+        const ins = db.prepare(
+          'INSERT INTO customers (company_name,short_name,coop_status,created_at) VALUES (?,?,?,?)'
+        );
+        try {
+          const info = ins.run(customerName, customerName, '合作中', new Date().toISOString().slice(0, 10));
+          customer = { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id };
+          autoCustCache.set(customerName, { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id });
+        } catch (e) {
+          return failures.push({ row: excelRow, reason: '自动创建客户失败：' + e.message, data: row });
+        }
+      }
+    }
+
+    // 货主校验（非 WMS 模式）；WMS 模式自动兜底
+    if (!ownerName) {
+      if (isWmsLoose) ownerName = customerName;
+      else return failures.push({ row: excelRow, reason: '货主名称为空', data: row });
+    } else if (!isWmsLoose) {
+      const byOwner = findCust.get(ownerName, ownerName);
+      if (!byOwner) return failures.push({ row: excelRow, reason: '货主名称不存在', data: row });
+      if (customer.customer_id !== byOwner.customer_id)
+        return failures.push({ row: excelRow, reason: '客户名称与货主名称不匹配', data: row });
+    }
+
+    // 非 WMS 模式：必须合作中 + 业务员权限校验
+    if (!isWmsLoose) {
+      if (customer.coop_status !== '合作中')
+        return failures.push({ row: excelRow, reason: '客户非合作中，不能导入订单', data: row });
+      if (req.user.role === '业务员' && customer.owner_user_id !== req.user.user_id)
+        return failures.push({ row: excelRow, reason: '无权导入其他业务员负责的客户订单', data: row });
+    }
+
+    // 发货量：WMS 模式 fallback 1（每包裹=1件）
+    let qty = Number(qtyRaw);
+    if (qtyRaw === '' || qtyRaw == null || isNaN(qty) || qty <= 0) {
+      if (isWmsLoose) { qty = 1; }
+      else return failures.push({ row: excelRow, reason: '发货量必须为正数', data: row });
+    }
+    // 单位：WMS 模式默认"件"
+    const finalUnit = unit || (isWmsLoose ? '件' : '');
+    if (!isWmsLoose && !UNITS.includes(finalUnit))
       return failures.push({ row: excelRow, reason: '单位必须是 件/箱/托/公斤 之一', data: row });
-    const date = parseDate(dateRaw);
-    if (!date) return failures.push({ row: excelRow, reason: '订单日期格式不合法', data: row });
+
+    // 日期：WMS 模式 fallback 今天
+    let date = parseDate(dateRaw);
+    if (!date) {
+      if (isWmsLoose) date = new Date().toISOString().slice(0, 10);
+      else return failures.push({ row: excelRow, reason: '订单日期格式不合法', data: row });
+    }
 
     successItems.push({
-      excelRow,
-      customerName,
-      ownerName,
-      orderNo,
-      qty: round3(qty),
-      unit,
-      date,
-      customer: byName,
+      excelRow, customerName, ownerName, orderNo, qty: round3(qty),
+      unit: finalUnit, date, customer,
     });
   });
 
+  // 批量事务：一次 BEGIN 包所有 INSERT（10 万行级批量避免 N 次事务开销）
   let success = 0;
-  successItems.forEach((it) => {
-    db.exec('BEGIN');
+  let lastOrderId = 0;
+  const orderStmt = db.prepare(
+    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id) VALUES (?,?,?,?,?,?,?,?)'
+  );
+  const invStmt = db.prepare(
+    "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
+  );
+  db.exec('BEGIN');
+  for (const it of successItems) {
     try {
-      const info = db
-        .prepare(
-          'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id) VALUES (?,?,?,?,?,?,?,?)'
-        )
-        .run(it.orderNo || 'ORD' + Date.now() + Math.floor(Math.random() * 1000), it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date, '未收', it.customer.owner_user_id);
-      const orderId = info.lastInsertRowid;
-      db.prepare(
-        "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
-      ).run(orderId, it.ownerName, it.qty, it.date, '订单导入自动出库');
-      // 审计：统一走全局日志服务（新旧字段双写，模块=其他业务）
-      require('../services/auditLog').writeLog(req, {
-        table: 'orders', module: '其他业务', action: 'create', targetId: orderId,
-        after: { order_no: it.orderNo, customer_id: it.customer.customer_id, owner_name: it.ownerName, ship_quantity: it.qty, unit: it.unit, order_date: it.date },
-      });
-      db.exec('COMMIT');
+      const info = orderStmt.run(
+        it.orderNo || 'ORD' + Date.now() + Math.floor(Math.random() * 1000),
+        it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date,
+        '未收', it.customer.owner_user_id
+      );
+      lastOrderId = info.lastInsertRowid;
+      invStmt.run(lastOrderId, it.ownerName, it.qty, it.date, '订单导入自动出库');
       success++;
     } catch (e) {
-      db.exec('ROLLBACK');
       failures.push({ row: it.excelRow, reason: '写入失败: ' + e.message, data: it });
     }
-  });
+  }
+  if (success > 0) db.exec('COMMIT'); else db.exec('ROLLBACK');
 
   // 订单导入批次审计：逐行 create 明细日志之外，补一条「导入」批次日志
   require('../services/auditLog').writeLog(req, {
