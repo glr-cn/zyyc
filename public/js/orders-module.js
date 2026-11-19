@@ -128,12 +128,24 @@
     // --- 上传 ---
     const dropZone = card.querySelector('#odDropZone');
     const fileInput = card.querySelector('#odFile');
-    let _selectedFile = null;
+    const previewBox = card.querySelector('#odPreview');
+    let _selectedFiles = [];   // 多文件列表
     dropZone.onclick = () => fileInput.click();
     dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#409eff'; };
     dropZone.ondragleave = () => { dropZone.style.borderColor = '#c0ccda'; };
-    dropZone.ondrop = (e) => { e.preventDefault(); dropZone.style.borderColor = '#c0ccda'; if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]); };
-    fileInput.onchange = () => { if (fileInput.files.length) onFile(fileInput.files[0]); };
+    dropZone.ondrop = (e) => {
+      e.preventDefault(); dropZone.style.borderColor = '#c0ccda';
+      if (e.dataTransfer.files.length) {
+        // 支持一次拖入多个文件
+        Array.from(e.dataTransfer.files).forEach((f) => onFile(f));
+      }
+    };
+    fileInput.onchange = () => {
+      if (fileInput.files.length) {
+        Array.from(fileInput.files).forEach((f) => onFile(f));
+      }
+      fileInput.value = ''; // 清空以便再次选择同名文件
+    };
 
     // Ctrl+V 粘贴导入
     function onPaste(e) {
@@ -177,49 +189,154 @@
     }
 
     function onFile(file) {
-      _selectedFile = file;
-      const prev = card.querySelector('#odPreview'); prev.style.display = 'block';
-      prev.innerHTML = `<div style="padding:12px 16px;background:#ecf5ff;border-radius:4px;border-left:3px solid #409eff;">📄 <b>${file.name}</b> · ${(file.size/1024).toFixed(1)} KB</div>`;
+      // 校验文件类型
+      if (!/\.(xlsx|xls|csv)$/i.test(file.name)) {
+        flashDropZone(dropZone, `❌ 已跳过不支持的文件格式：${file.name}（仅支持 .xlsx / .xls / .csv）`, '#f56c6c');
+        return;
+      }
+      _selectedFiles.push(file);
+      renderFileList();
+    }
+
+    // 渲染已上传文件列表（每项右侧带红色圆形删除按钮）
+    function renderFileList() {
+      if (!_selectedFiles.length) {
+        previewBox.style.display = 'none';
+        previewBox.innerHTML = '';
+        updateSubmitEnabled();
+        return;
+      }
+      previewBox.style.display = 'block';
+      previewBox.innerHTML = `
+        <div style="margin-bottom:6px;font-size:13px;color:#606266;">
+          📄 已上传 <b style="color:#409eff;">${_selectedFiles.length}</b> 个文件：
+        </div>
+        <div id="odFileList" style="display:flex;flex-direction:column;gap:6px;"></div>
+      `;
+      const list = previewBox.querySelector('#odFileList');
+      _selectedFiles.forEach((f, idx) => {
+        const kb = (f.size / 1024).toFixed(1);
+        const row = document.createElement('div');
+        row.dataset.idx = idx;
+        row.style.cssText = [
+          'display:flex;align-items:center;gap:10px;',
+          'padding:10px 12px;background:#ecf5ff;border-radius:6px;border-left:3px solid #409eff;',
+          'transition:background .15s;'
+        ].join('');
+        row.innerHTML = `
+          <span style="font-size:16px;">📄</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#303133;" title="${escapeHtml(f.name)}">
+            <b>${escapeHtml(f.name)}</b>
+          </span>
+          <span style="flex-shrink:0;font-size:12px;color:#909399;">${kb} KB</span>
+          <button class="od-file-del" data-idx="${idx}" title="移除此文件" aria-label="删除文件"
+            style="flex-shrink:0;width:22px;height:22px;border:none;border-radius:50%;background:#f56c6c;color:#fff;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s, background .15s;">
+            <span style="transform:translateY(-1px);">×</span>
+          </button>
+        `;
+        // hover 缩放反馈
+        const delBtn = row.querySelector('.od-file-del');
+        row.addEventListener('mouseenter', () => { row.style.background = '#d9ecff'; });
+        row.addEventListener('mouseleave', () => { row.style.background = '#ecf5ff'; });
+        delBtn.addEventListener('mouseenter', () => {
+          delBtn.style.background = '#f23c3c';
+          delBtn.style.transform = 'scale(1.2)';
+        });
+        delBtn.addEventListener('mouseleave', () => {
+          delBtn.style.background = '#f56c6c';
+          delBtn.style.transform = 'scale(1)';
+        });
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          removeFile(idx);
+        };
+        list.appendChild(row);
+      });
       updateSubmitEnabled();
+    }
+
+    // 移除指定文件项（同时清空关联的临时数据）
+    function removeFile(idx) {
+      if (idx < 0 || idx >= _selectedFiles.length) return;
+      const removed = _selectedFiles.splice(idx, 1)[0];
+      // 如果文件有临时解析缓存，这里清理（当前暂无额外缓存，预留接口）
+      // 释放可能的 ObjectURL
+      if (removed && removed._tempUrl) { URL.revokeObjectURL(removed._tempUrl); }
+      renderFileList();
     }
 
     const submitBtn = card.querySelector('#odSubmit');
     const resetBtn = card.querySelector('#odReset');
     function updateSubmitEnabled() {
       const platform = card.querySelector('#odPlatform').value;
-      if (_selectedFile && platform) { submitBtn.style.cssText = BTN_PRIMARY; submitBtn.disabled = false; }
+      if (_selectedFiles.length > 0 && platform) { submitBtn.style.cssText = BTN_PRIMARY; submitBtn.disabled = false; }
       else { submitBtn.style.cssText = BTN_PRIMARY_DISABLED; submitBtn.disabled = true; }
     }
 
-    submitBtn.onclick = () => {
+    submitBtn.onclick = async () => {
       const platform = card.querySelector('#odPlatform').value;
-      if (!_selectedFile || !platform) return;
+      if (!_selectedFiles.length || !platform) return;
       const prog = card.querySelector('#odProgress'); prog.style.display = 'block';
-      prog.innerHTML = `<div style="padding:14px;background:#fdf6ec;border-radius:4px;border-left:3px solid #e6a23c;color:#e6a23c;font-size:14px;">⏳ 正在导入 <b>${_selectedFile.name}</b>（平台: ${platform}）... 请稍候</div>`;
       const result = card.querySelector('#odResult'); result.style.display = 'none';
       submitBtn.disabled = true; submitBtn.style.cssText = BTN_PRIMARY_DISABLED;
 
-      const fd = new FormData(); fd.append('file', _selectedFile); fd.append('platform', platform);
-      API.upload('/orders/import', fd).then((data) => {
-        prog.style.display = 'none';
-        result.style.display = 'block';
-        const { success = 0, failed = 0, failures = [] } = data;
-        result.innerHTML = `
-          <div style="padding:14px;border-radius:4px;border-left:3px solid ${failed ? '#e6a23c' : '#67c23a'};background:${failed ? '#fdf6ec' : '#f0f9eb'};">
-            <b style="color:${failed ? '#e6a23c' : '#67c23a'};font-size:15px;">导入完成</b>
-            <div style="margin-top:8px;font-size:14px;color:#606266;">✅ 成功 <b style="color:#67c23a;">${success}</b> 行${failed ? ` · ❌ 失败 <b style="color:#f56c6c;">${failed}</b> 行` : ''}</div>
-            ${failures.length ? `<details style="margin-top:10px;"><summary style="cursor:pointer;color:#409eff;font-size:13px;">查看失败清单</summary><div style="margin-top:8px;max-height:240px;overflow:auto;font-size:13px;">${failures.slice(0,50).map(f=>`<div>第${f.row}行: ${f.reason}</div>`).join('')}</div></details>` : ''}
-          </div>`;
-        refreshImportHistory(historyWrap);
-      }).catch((e) => {
-        prog.style.display = 'none'; result.style.display = 'block';
-        result.innerHTML = `<div style="padding:14px;background:#fef0f0;border-radius:4px;border-left:3px solid #f56c6c;color:#f56c6c;">❌ ${e.message}</div>`;
-      });
+      // 逐个提交，汇总结果
+      const total = _selectedFiles.length;
+      let doneCount = 0;
+      let allSuccess = 0, allFailed = 0;
+      const allFailures = [];
+      const perFileResults = [];
+
+      prog.innerHTML = `<div style="padding:14px;background:#fdf6ec;border-radius:4px;border-left:3px solid #e6a23c;color:#e6a23c;font-size:14px;">⏳ 开始导入，共 <b>${total}</b> 个文件（平台: ${platform}）</div>`;
+
+      // 用 for...of 顺序提交，便于显示进度
+      for (let i = 0; i < _selectedFiles.length; i++) {
+        const f = _selectedFiles[i];
+        prog.innerHTML = `<div style="padding:14px;background:#fdf6ec;border-radius:4px;border-left:3px solid #e6a23c;color:#e6a23c;font-size:14px;">⏳ 正在导入（${i + 1}/${total}）<b>${f.name}</b>（平台: ${platform}）</div>`;
+        try {
+          const fd = new FormData(); fd.append('file', f); fd.append('platform', platform);
+          const data = await API.upload('/orders/import', fd);
+          allSuccess += (data.success || 0);
+          allFailed += (data.failed || 0);
+          (data.failures || []).forEach((ff) => allFailures.push({ ...ff, _file: f.name }));
+          perFileResults.push({ file: f.name, ok: true, success: data.success || 0, failed: data.failed || 0 });
+        } catch (e) {
+          allFailures.push({ row: '-', reason: e.message, data: '', _file: f.name });
+          perFileResults.push({ file: f.name, ok: false, error: e.message });
+        }
+        doneCount++;
+      }
+
+      // 清空已上传列表并刷新
+      _selectedFiles = [];
+      renderFileList();
+
+      prog.style.display = 'none';
+      result.style.display = 'block';
+      const hasErr = perFileResults.some((r) => !r.ok);
+      result.innerHTML = `
+        <div style="padding:14px;border-radius:4px;border-left:3px solid ${hasErr || allFailed ? '#e6a23c' : '#67c23a'};background:${hasErr || allFailed ? '#fdf6ec' : '#f0f9eb'};">
+          <b style="color:${hasErr || allFailed ? '#e6a23c' : '#67c23a'};font-size:15px;">导入完成</b>
+          <div style="margin-top:8px;font-size:14px;color:#606266;">✅ 成功 <b style="color:#67c23a;">${allSuccess}</b> 行${allFailed ? ` · ❌ 校验失败 <b style="color:#f56c6c;">${allFailed}</b> 行` : ''}${hasErr ? ` · ⚠️ 请求失败 <b style="color:#f56c6c;">${perFileResults.filter(r=>!r.ok).length}</b> 个文件` : ''}</div>
+          <details style="margin-top:10px;"><summary style="cursor:pointer;color:#409eff;font-size:13px;">查看各文件导入结果</summary>
+            <div style="margin-top:8px;max-height:200px;overflow:auto;font-size:13px;">
+              ${perFileResults.map((r) => r.ok
+                ? `<div>📄 ${escapeHtml(r.file)} — ✅ ${r.success} 行${r.failed ? ` / ❌ ${r.failed} 行` : ''}</div>`
+                : `<div>📄 ${escapeHtml(r.file)} — ❌ ${escapeHtml(r.error)}</div>`
+              ).join('')}
+            </div>
+          </details>
+          ${allFailures.length ? `<details style="margin-top:10px;"><summary style="cursor:pointer;color:#409eff;font-size:13px;">查看失败清单（共 ${allFailures.length} 条）</summary><div style="margin-top:8px;max-height:240px;overflow:auto;font-size:13px;">${allFailures.slice(0,50).map(f=>`<div>📄${escapeHtml(f._file)} · 第${f.row}行: ${escapeHtml(f.reason||f.error||'')}</div>`).join('')}</div></details>` : ''}
+        </div>`;
+      refreshImportHistory(historyWrap);
     };
 
     resetBtn.onclick = () => {
-      _selectedFile = null; fileInput.value = '';
-      panel.querySelector('#odPreview').style.display = 'none';
+      // 释放所有可能的临时 ObjectURL
+      _selectedFiles.forEach((f) => { if (f && f._tempUrl) URL.revokeObjectURL(f._tempUrl); });
+      _selectedFiles = [];
+      fileInput.value = '';
+      renderFileList();
       panel.querySelector('#odProgress').style.display = 'none';
       panel.querySelector('#odResult').style.display = 'none';
       updateSubmitEnabled();
