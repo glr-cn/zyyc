@@ -225,6 +225,11 @@ if (roleCount === 0) {
 // 对已有数据的库完全无害（全部 INSERT OR IGNORE / 条件 UPDATE），业务数据一行不动。
 require('./seed').runSeed(_conn);
 
+// 看板子菜单（2026-11-19）：看板从直达变容器，新增「工时汇总」+「快递分析」子菜单
+// ★ 必须放在 seed.runSeed 之后——空库 menus 表先插入 menu_id=1 的看板父菜单，
+// 此处 INSERT parent_id=1 才能通过外键约束。
+require('./migrateDashboardSubmenus').run(_conn, { verbose: true });
+
 // 新增订单导入 + 数据看板菜单（2026-11-19）：docs(单据) 子菜单 702 order_import / 703
 // order_dashboard；同时给超级管理员自动授权 role_menus。
 // ★ 必须放在 seed.runSeed 之后——空库 menus 表由 menu_seed.sql 先插入 menu_id=7 的单据父菜单，

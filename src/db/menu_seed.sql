@@ -10,13 +10,18 @@
 -- 出库/入库/库存 已在 2026-11-19 移除：菜单 2(outbound)、3(inbound)、4(inventory)
 -- 及其全部子菜单均由 migrateRemoveStockMenus.js 在启动时清理线上存量。
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
- (1,'dashboard',NULL,'看板','dashboard','📉',NULL,10,1),
+ (1,'dashboard',NULL,'看板',NULL,'📉',NULL,10,1),
 -- 2026-11-19 已移除: (2,'outbound', NULL,'出库',NULL,'📦',NULL,20,1),
 -- 2026-11-19 已移除: (3,'inbound',  NULL,'入库',NULL,'📥',NULL,30,1),
 -- 2026-11-19 已移除: (4,'inventory',NULL,'库存',NULL,'📊',NULL,40,1),
  (5,'master',   NULL,'基础资料',NULL,'📁',NULL,50,1),
  (6,'work',     NULL,'工时',NULL,'⏱️',NULL,60,1),
  (7,'docs',     NULL,'单据',NULL,'🧾',NULL,70,1);
+
+-- 看板子菜单（2026-11-19：从直达改容器）
+INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
+ (101,'dash_wh_summary',1,'工时汇总','dash_wh_summary','📈','看板',10,1),
+ (102,'dash_express',   1,'快递分析','dash_express',   '📦','看板',20,0);
 
 -- 2026-11-19 已移除：出库子菜单（menu_id 101-111）
 -- 2026-11-19 已移除：入库子菜单（menu_id 201-207）
