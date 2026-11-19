@@ -114,6 +114,7 @@
         <div style="font-size:48px;color:#909399;margin-bottom:8px;">📁</div>
         <div style="color:#606266;font-size:15px;margin-bottom:4px;">点击或拖拽 Excel / CSV 文件到此处</div>
         <div style="color:#909399;font-size:12px;">支持 .xlsx / .xls / .csv · 无行数/文件大小硬性限制</div>
+        <div style="color:#409eff;font-size:12px;margin-top:6px;">💡 也可以按 <kbd style="padding:1px 6px;background:#fff;border:1px solid #dcdfe6;border-radius:3px;">Ctrl+V</kbd> 粘贴 Excel 表格或文件</div>
         <input type="file" id="odFile" accept=".xlsx,.xls,.csv" style="display:none;" />
       </div>
 
@@ -127,6 +128,21 @@
       </div>
     `;
     panel.appendChild(card);
+
+    // --- 导入记录列表（固定 20 条） ---
+    const historyCard = document.createElement('div');
+    historyCard.style.cssText = CARD_CSS;
+    historyCard.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:16px;color:#303133;">📋 导入记录</h3>
+        <div style="display:flex;gap:8px;">
+          <span id="odHistoryHint" style="color:#909399;font-size:12px;">固定保留最近 20 条</span>
+          <button id="odHistoryRefresh" style="${BTN_GHOST};padding:4px 12px;font-size:12px;">🔄 刷新</button>
+        </div>
+      </div>
+      <div id="odHistoryList" style="min-height:60px;"></div>
+    `;
+    panel.appendChild(historyCard);
 
     // --- 加载平台列表 ---
     API.get('/orders/platforms').then((r) => {
@@ -144,6 +160,11 @@
       sel.innerHTML = '<option value="百世WMS">百世WMS</option>';
     });
 
+    // --- 导入记录刷新 ---
+    const historyWrap = historyCard.querySelector('#odHistoryList');
+    historyCard.querySelector('#odHistoryRefresh').onclick = () => refreshImportHistory(historyWrap);
+    refreshImportHistory(historyWrap);
+
     // --- 拖拽 + 点击上传 ---
     const dropZone = card.querySelector('#odDropZone');
     const fileInput = card.querySelector('#odFile');
@@ -157,6 +178,113 @@
       if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
     };
     fileInput.onchange = () => { if (fileInput.files.length) onFile(fileInput.files[0]); };
+
+    // --- Ctrl+V 粘贴导入 ---
+    function onPaste(e) {
+      if (e.ctrlKey || e.metaKey || (e.key === 'v' || e.key === 'V')) {
+        // 避免在 input/textarea/contenteditable 里触发
+        const target = e.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        // 只有在导入面板可见时拦截
+        if (!isImportPanelVisible()) return;
+      }
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!isImportPanelVisible()) return;
+
+      const items = (e.clipboardData || {}).items;
+      if (!items || !items.length) return;
+
+      // 优先取文件
+      let file = null;
+      let htmlText = null;
+      let plainText = null;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file') {
+          file = item.getAsFile();
+          break;
+        }
+        if (item.type === 'text/html' && htmlText == null) {
+          item.getAsString((s) => { htmlText = s; });
+        } else if (item.type === 'text/plain' && plainText == null) {
+          item.getAsString((s) => { plainText = s; });
+        }
+      }
+
+      // 先处理 File
+      if (file) {
+        e.preventDefault();
+        onFile(file);
+        flashDropZone(dropZone, '已粘贴文件：' + file.name);
+        return;
+      }
+
+      // 从 items 取不到（getAsString 是异步的），改用 getData
+      try {
+        const cb = e.clipboardData;
+        if (cb.types && cb.types.includes && cb.types.includes('text/html')) {
+          htmlText = cb.getData('text/html');
+        }
+        if (cb.types && cb.types.includes && cb.types.includes('text/plain')) {
+          plainText = cb.getData('text/plain');
+        }
+      } catch (_) {}
+
+      let csv = null;
+      let label = '';
+      if (htmlText && /<table/i.test(htmlText)) {
+        // 从 HTML table 解析成 CSV
+        csv = htmlTableToCSV(htmlText);
+        label = '粘贴的 Excel 表格';
+      } else if (plainText && looksLikeTSV(plainText)) {
+        csv = tsvToCSV(plainText);
+        label = '粘贴的表格数据';
+      }
+
+      if (csv) {
+        e.preventDefault();
+        const ts = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const fname = `粘贴导入_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.csv`;
+        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+        const f = new File([blob], fname, { type: 'text/csv' });
+        onFile(f);
+        flashDropZone(dropZone, '已粘贴 ' + label + '，自动转为 CSV 导入');
+      } else if (file === null) {
+        // 无可用数据
+        flashDropZone(dropZone, '剪贴板里没有识别到表格或文件', '#f56c6c');
+      }
+    }
+
+    // 粘贴监听：挂载到 document 但只在导入面板可见时生效
+    document.addEventListener('paste', onPaste);
+    // 切换页面时清理
+    const cleanup = () => document.removeEventListener('paste', onPaste);
+    panel._cleanup = cleanup;
+
+    function flashDropZone(zone, msg, color) {
+      const original = zone.style.borderColor;
+      zone.style.borderColor = color || '#67c23a';
+      const tip = zone.querySelector('.od-paste-tip');
+      if (tip) tip.remove();
+      const el = document.createElement('div');
+      el.className = 'od-paste-tip';
+      el.style.cssText = 'margin-top:8px;font-size:13px;color:' + (color || '#67c23a') + ';';
+      el.textContent = msg;
+      zone.appendChild(el);
+      setTimeout(() => { zone.style.borderColor = original; if (el.parentNode) el.remove(); }, 2500);
+    }
+
+    function isImportPanelVisible() {
+      // panel 本身是 import panel，且 display != none
+      const wrap = panel.parentElement;
+      if (!wrap) return false;
+      const importPanel = wrap.querySelector('[data-panel="import"]');
+      return importPanel && importPanel.style.display !== 'none';
+    }
 
     function onFile(file) {
       _selectedFile = file;
@@ -246,12 +374,11 @@
         html.push('</div>');
         res.innerHTML = html.join('');
 
-        // 导入成功时自动跳到看板 Tab
+        // 导入成功时刷新导入记录 + 自动跳到看板 Tab
+        refreshImportHistory(historyWrap);
         if (success > 0) {
           setTimeout(() => {
             const tabs = wrap.querySelectorAll('.od-tab');
-            const panels = wrap.querySelectorAll('.od-panel');
-            // 触发 click 事件（复用 switchTab）
             tabs.forEach((t) => { if (t.dataset.tab === 'dashboard') t.click(); });
           }, 1200);
         }
@@ -265,9 +392,6 @@
       });
     };
 
-    submitBtn.onclick = submitBtn.onclick; // 避免 jshint 警告
-    submitBtn.addEventListener('click', () => { /* 上面已定义 */ });
-
     resetBtn.onclick = () => {
       _selectedFile = null;
       fileInput.value = '';
@@ -276,6 +400,127 @@
       panel.querySelector('#odResult').style.display = 'none';
       updateSubmitEnabled();
     };
+  }
+
+  // =========================================================================
+  // 粘贴数据解析工具
+  // =========================================================================
+  function htmlTableToCSV(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const tables = doc.querySelectorAll('table');
+    if (!tables.length) return '';
+    const rows = [];
+    tables.forEach((t) => {
+      t.querySelectorAll('tr').forEach((tr) => {
+        const cells = [];
+        tr.querySelectorAll('td,th').forEach((c) => {
+          let text = (c.textContent || '').replace(/\s+/g, ' ').trim();
+          // CSV 转义：含逗号/引号/换行要加引号
+          if (/[,"\n]/.test(text)) text = '"' + text.replace(/"/g, '""') + '"';
+          cells.push(text);
+        });
+        if (cells.length) rows.push(cells.join(','));
+      });
+    });
+    return rows.join('\n');
+  }
+
+  function looksLikeTSV(text) {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return false;
+    // 统计 tab 或逗号数量，至少一行有多个分隔符
+    const first = lines[0];
+    const tabs = (first.match(/\t/g) || []).length;
+    const commas = (first.match(/,/g) || []).length;
+    return tabs >= 1 || commas >= 1;
+  }
+
+  function tsvToCSV(text) {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    return lines.map((l) => {
+      const cells = l.split('\t').map((c) => {
+        let t = c.replace(/\s+/g, ' ').trim();
+        if (/[,"\n]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
+        return t;
+      });
+      // 如果没有 tab，按逗号拆
+      if (cells.length === 1 && l.includes(',')) {
+        return l.split(',').map((c) => c.replace(/\s+/g, ' ').trim()).join(',');
+      }
+      return cells.join(',');
+    }).join('\n');
+  }
+
+  // =========================================================================
+  // 导入记录列表渲染（固定 20 条，由后端 LIMIT 保证）
+  // =========================================================================
+  function refreshImportHistory(container) {
+    container.innerHTML = '<div style="color:#909399;padding:20px;text-align:center;">⏳ 加载中...</div>';
+    fetch('/api/orders/import-history', {
+      headers: { Authorization: 'Bearer ' + (localStorage.getItem('erp_token') || '') },
+    }).then(async (resp) => {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      renderImportHistory(container, data);
+    }).catch((e) => {
+      container.innerHTML = `<div style="color:#f56c6c;padding:20px;text-align:center;">❌ 加载失败: ${e.message}</div>`;
+    });
+  }
+
+  function renderImportHistory(container, data) {
+    const { list = [], limit = 20 } = data;
+    if (!list.length) {
+      container.innerHTML = `<div style="color:#909399;padding:20px;text-align:center;border:1px dashed #dcdfe6;border-radius:6px;">
+        📭 暂无导入记录。开始导入后会显示在这里，最多保留 ${limit} 条。
+      </div>`;
+      return;
+    }
+
+    const rows = list.map((h) => {
+      const total = (h.success || 0) + (h.failed || 0);
+      const rate = total ? (((h.success || 0) * 100) / total).toFixed(1) + '%' : '-';
+      const time = h.operated_at ? h.operated_at.replace('T', ' ').slice(0, 19) : '-';
+      return `
+        <tr style="border-bottom:1px solid #ebeef5;">
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;color:#909399;text-align:center;">#${h.log_id}</td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(h.filename || '')}">${escapeHtml(h.filename || '(未知)')}</td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;text-align:center;">${escapeHtml(h.platform || '-')}</td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;text-align:center;">${escapeHtml(h.operator || '-')}</td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;text-align:center;">
+            <span style="color:#67c23a;">+${h.success || 0}</span>
+            ${h.failed ? ` <span style="color:#f56c6c;">-${h.failed}</span>` : ''}
+          </td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;text-align:center;">${rate}</td>
+          <td style="padding:8px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(time)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    container.innerHTML = `
+      <div style="max-height:360px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead style="position:sticky;top:0;background:#f5f7fa;z-index:1;">
+            <tr>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:50px;">#</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;">原始文件名</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:120px;">目标平台</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:80px;">操作人</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:100px;">成功 / 失败</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:80px;">成功率</th>
+              <th style="padding:6px 8px;border:1px solid #ebeef5;width:160px;">导入时间</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:#909399;text-align:right;">共 ${list.length} 条（固定保留最近 ${limit} 条，超出自动覆盖最早记录）</div>
+    `;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
   }
 
   // =========================================================================

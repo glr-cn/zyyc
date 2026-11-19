@@ -35,6 +35,40 @@ router.use(auth);
 router.use(readonlyGate);
 router.use(menuGate('orders'));
 
+// 导入记录接口：基于 audit_logs 中 table_name='orders' AND action='import' 的条目
+// 固定返回最新 20 条，每条解析出 filename/platform/timestamp/success/failed
+const IMPORT_HISTORY_LIMIT = 20;
+
+router.get('/import-history', auth, menuGate('orders_import'), (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT log_id, operated_at, user_name, target_id, content
+      FROM audit_logs
+      WHERE table_name = 'orders' AND action = 'import'
+      ORDER BY log_id DESC
+      LIMIT ${IMPORT_HISTORY_LIMIT}
+    `).all();
+
+    const list = rows.map((r) => {
+      let c = {};
+      try { c = JSON.parse(r.content || '{}'); } catch (_) {}
+      return {
+        log_id: r.log_id,
+        operated_at: r.operated_at,
+        operator: r.user_name || '',
+        platform: c.platform || '',
+        filename: c.file || (c.content && c.content.file) || '',
+        success: c.success != null ? c.success : 0,
+        failed: c.failed != null ? c.failed : 0,
+      };
+    });
+    res.json({ limit: IMPORT_HISTORY_LIMIT, list });
+  } catch (e) {
+    console.error('[orders/import-history] 异常:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 订单列表（搜索 + 分页，供核对/后续使用）+ 行级隔离（业务员仅自己）
 router.get('/', (req, res) => {
   const q = (req.query.q || '').trim();
