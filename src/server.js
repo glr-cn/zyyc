@@ -88,10 +88,11 @@ app.use(cors(IS_DEV
       origin: [
         'https://wbapp-asi4jzhsb1qg5dmqbgcruy.app.workbuddy.host',
         'https://*.workbuddy.host',
+        'https://*.traesite.cn',           // ★ TraeSite 新平台（2026-11-20 新增）
       ],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-ERP-Token'],  // ★ X-ERP-Token 加入白名单
     }
 ));
 
