@@ -267,14 +267,16 @@ const cache5m = apicache.middleware('5 minutes');
 app.use('/api/auth', authRouter);
 
 // 业务路由（内部自带鉴权中间件）
-app.use('/api/customers', cache2m, customersRouter);          // 客户列表高频读
+// ★ 禁用 apicache：缓存导致 PUT/POST 后 GET 返回旧数据（2 分钟缓存窗口），
+//   用户保存后看不到变更以为没生效。SQLite 查询本身足够快，不需要应用层缓存。
+app.use('/api/customers', customersRouter);
 app.use('/api/orders', ordersRouter);                          // 订单不缓存（经常变更）
 app.use('/api/workhours', workhoursRouter);                    // 工时不缓存（实时提交）
-app.use('/api/analytics', cache5m, analyticsRouter);            // 看板统计重查询 → 5 分钟
-app.use('/api/dashboard', cache2m, dashboardRouter);           // 首页看板 → 2 分钟
+app.use('/api/analytics', analyticsRouter);
+app.use('/api/dashboard', dashboardRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/roles', rolesRouter);
-app.use('/api/menus', cache5m, menusRouter);                    // 菜单树很少变 → 5 分钟
+app.use('/api/menus', menusRouter);
 app.use('/api/logistics-quotes', logisticsQuotesRouter);
 app.use('/api/smart-quote', smartQuoteRouter);
 app.use('/api/logs', logsRouter);
