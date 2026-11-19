@@ -11,6 +11,7 @@
 //       在 N-1 处插入目标货品，然后整体重编号为 1..n 写入 warehouse_sort_config。
 //       由于整体重编号，顺延与空缺填充是同一套逻辑的自然结果。
 const { WAREHOUSES } = require('./customerImport');
+const { warehouseExactLikeValue } = require('../utils/likeEscape');
 
 /**
  * 把客户放到指定仓库的指定排序位置，并保证该仓序号连续 1..n。
@@ -42,9 +43,9 @@ function setWarehouseSortPosition(db, warehouse, customerId, position) {
       FROM customers c
       LEFT JOIN warehouse_sort_config wsc
              ON wsc.customer_id = c.customer_id AND wsc.warehouse = ?
-     WHERE ',' || c.warehouse || ',' LIKE ? AND c.is_deleted = 0 AND c.customer_id != ?
+     WHERE ',' || c.warehouse || ',' LIKE ? ESCAPE '\\' AND c.is_deleted = 0 AND c.customer_id != ?
      ORDER BY COALESCE(wsc.sort_order, c.sort_order, 9999) ASC, c.customer_id ASC
-  `).all(warehouse, '%,' + warehouse + ',%', cid).map((r) => r.customer_id);
+  `).all(warehouse, warehouseExactLikeValue(warehouse), cid).map((r) => r.customer_id);
 
   // 目标位置夹到 [1, 总数]：超出范围自动落到末尾
   const insertAt = Math.min(pos, others.length + 1) - 1;

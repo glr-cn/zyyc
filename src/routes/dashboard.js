@@ -8,6 +8,7 @@ const router = express.Router();
 const db = require('../db');
 const { auth } = require('../middleware/auth');
 const { ownerScope } = require('../middleware/rbac');
+const { warehouseExactLikeValue } = require('../utils/likeEscape');
 const round3 = require('../utils/round');
 
 router.use(auth);
@@ -193,9 +194,9 @@ function buildShippingList({ req, warehouse, curStart, curEnd, prevStart, prevEn
   const custRows = db.prepare(
     `SELECT customer_id, COALESCE(NULLIF(short_name,''), company_name) AS customer_name, sort_order
      FROM customers WHERE is_deleted = 0
-       AND (warehouse = '' OR ',' || warehouse || ',' LIKE ?)
+       AND (warehouse = '' OR ',' || warehouse || ',' LIKE ? ESCAPE '\\')
      ORDER BY sort_order ASC, COALESCE(NULLIF(short_name,''), company_name) ASC`
-  ).all('%,' + warehouse + ',%');
+  ).all(warehouseExactLikeValue(warehouse));
 
   // 2. 本期、上期发货归档
   const curRows  = fetchArchivedRows({ req, warehouse, workType: '发货', startDate: curStart,  endDate: curEnd });
