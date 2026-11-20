@@ -202,6 +202,7 @@ function runMigrations() {
     require('./migrateDashboardSubmenus').run(c, { verbose: true });
     require('./migrateAddOrderMenus').run(c, { verbose: true });
     require('./migrateOrderQueryMenu').run(c, { verbose: true });
+    require('./migrateExpressWaybill').run(c, { verbose: true });
 
     // customers 异常预警
     try {

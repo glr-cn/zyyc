@@ -501,6 +501,9 @@
         <select id="oqPlatform" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:110px;font-size:13px;">
           <option value="全部">平台 - 全部</option>
         </select>
+        <select id="oqWaybill" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:130px;font-size:13px;">
+          <option value="全部">电子面单 - 全部</option>
+        </select>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
           月份 <input id="oqMonth" type="month" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;" value="${thisMonth}">
         </label>
@@ -528,6 +531,8 @@
     API.get('/orders/query/facets').then((r) => {
       const sel = qs('#oqProv');
       (r?.provinces || []).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+      const wsel = qs('#oqWaybill');
+      (r?.waybill_types || []).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; wsel.appendChild(o); });
     }).catch(() => {});
     qs('#oqProv').onchange = () => {
       const prov = qs('#oqProv').value;
@@ -558,6 +563,7 @@
         city: qs('#oqCity').value,
         district: qs('#oqDist').value,
         platform: qs('#oqPlatform').value,
+        waybillType: qs('#oqWaybill').value,
       };
       // ★ 单号非空 → 不带日期参数（后端同样兜底忽略）
       if (!no) {
@@ -591,6 +597,7 @@
         return `<tr style="border-bottom:1px solid #ebeef5;">
           <td style="padding:6px;border:1px solid #ebeef5;font-family:monospace;font-size:12px;">${escapeHtml(d.order_no || '')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.wms_platform || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:center;">${escapeHtml(d.waybill_type || '未标注')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;">${escapeHtml(d.customer_name || d.owner_name || '-')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_province || '-')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_city || '-')}</td>
@@ -610,6 +617,7 @@
             <thead style="position:sticky;top:0;background:#f5f7fa;z-index:1;"><tr>
               <th style="padding:7px;border:1px solid #ebeef5;">快递单号</th>
               <th style="padding:7px;border:1px solid #ebeef5;">平台</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">电子面单类型</th>
               <th style="padding:7px;border:1px solid #ebeef5;">客户</th>
               <th style="padding:7px;border:1px solid #ebeef5;">省</th>
               <th style="padding:7px;border:1px solid #ebeef5;">市</th>
@@ -648,7 +656,7 @@
       qs('#oqNo').value = '';
       qs('#oqProv').value = ''; qs('#oqCity').innerHTML = '<option value="">收件市 - 全部</option>';
       qs('#oqDist').innerHTML = '<option value="">收件区县 - 全部</option>';
-      qs('#oqPlatform').value = '全部'; qs('#oqMonth').value = thisMonth;
+      qs('#oqPlatform').value = '全部'; qs('#oqWaybill').value = '全部'; qs('#oqMonth').value = thisMonth;
       oqState.page = 1; doQuery();
     };
     qs('#oqNo').onkeydown = (e) => { if (e.key === 'Enter') { oqState.page = 1; doQuery(); } };
@@ -705,6 +713,33 @@
     `;
     panel.appendChild(card);
 
+    // ★ 2026-11-20 新增：电子面单类型 × 平台 发货量统计（独立卡片，自带筛选与导出）
+    const wbCard = document.createElement('div');
+    wbCard.style.cssText = CARD_CSS;
+    wbCard.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <h3 style="margin:0;font-size:16px;color:#303133;">📦 电子面单类型 × 平台 发货量统计</h3>
+        <span style="font-size:12px;color:#909399;">按电子面单类型分组，统计各平台发货量</span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
+          月份 <input id="wbMonth" type="month" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;" value="${thisMonth}">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
+          平台 <select id="wbPlatform" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;"><option value="全部">全部</option></select>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
+          电子面单 <select id="wbType" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:130px;"><option value="全部">全部</option></select>
+        </label>
+        <button id="wbQuery" style="${BTN_PRIMARY}">🔍 统计</button>
+        <button id="wbReset" style="${BTN_GHOST}">🔄 重置</button>
+        <button id="wbExport" style="${BTN_GHOST}">⬇ 导出报表</button>
+      </div>
+      <div id="wbResult"></div>
+    `;
+    panel.appendChild(wbCard);
+    mountWaybillStats(wbCard, thisMonth);
+
     // ★ 2026-11-20 重构：原内嵌「订单查询」小面板已升级为独立主 Tab（数据此前未接线属死功能），
     //   完整查询/分页/导出能力见 mountOrderQuery()。
 
@@ -735,6 +770,132 @@
     card.querySelector('#dashPlan').onchange = refreshDashboard;
 
     refreshDashboard();
+  }
+
+  // =========================================================================
+  // 电子面单类型 × 平台 发货量统计（数据看板 · 统计报表）
+  // =========================================================================
+  function mountWaybillStats(card, initMonth) {
+    const q = (sel) => card.querySelector(sel);
+    let lastPlatforms = [];
+    let lastWaybills = [];
+
+    function collect() {
+      const month = q('#wbMonth').value || '';
+      let start = '', end = '';
+      if (month) {
+        start = month + '-01';
+        const [y, m] = month.split('-').map(Number);
+        end = month + '-' + String(new Date(y, m, 0).getDate()).padStart(2, '0');
+      }
+      return {
+        start,
+        end,
+        platform: q('#wbPlatform').value || '全部',
+        waybillType: q('#wbType').value || '全部',
+      };
+    }
+
+    function toQs(f) {
+      const p = new URLSearchParams();
+      if (f.start) p.set('start', f.start);
+      if (f.end) p.set('end', f.end);
+      if (f.platform && f.platform !== '全部') p.set('platform', f.platform);
+      if (f.waybillType && f.waybillType !== '全部') p.set('waybillType', f.waybillType);
+      return p.toString();
+    }
+
+    // 维度下拉：首次加载用返回的维度；后续保留用户当前选择
+    function syncSelects(data) {
+      lastPlatforms = data.platforms || [];
+      lastWaybills = data.waybills || [];
+      const pSel = q('#wbPlatform'), wSel = q('#wbType');
+      const pCur = pSel.value, wCur = wSel.value;
+      pSel.innerHTML = '<option value="全部">全部</option>' +
+        lastPlatforms.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      wSel.innerHTML = '<option value="全部">全部</option>' +
+        lastWaybills.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      if ([...pSel.options].some((o) => o.value === pCur)) pSel.value = pCur;
+      if ([...wSel.options].some((o) => o.value === wCur)) wSel.value = wCur;
+    }
+
+    function render(data) {
+      const wrap = q('#wbResult');
+      const empty = !data.platforms || !data.platforms.length;
+      if (empty) {
+        wrap.innerHTML = '<div style="color:#909399;padding:28px;text-align:center;border:1px dashed #dcdfe6;border-radius:6px;">📭 当前筛选条件下暂无订单数据</div>';
+        return;
+      }
+      const head = ['平台'].concat(data.waybills.map((w) => escapeHtml(w))).concat(['合计']);
+      const body = data.platforms.map((p, i) => {
+        const cells = data.cell[i].map((c) => `<td style="padding:7px 10px;border:1px solid #ebeef5;text-align:right;font-variant-numeric:tabular-nums;">${c.quantity ? c.quantity.toLocaleString() : '-'}<div style="font-size:11px;color:#c0c4cc;">${c.orders ? c.orders + ' 单' : ''}</div></td>`).join('');
+        return `<tr style="border-bottom:1px solid #ebeef5;">
+          <td style="padding:7px 10px;border:1px solid #ebeef5;font-size:13px;white-space:nowrap;">${escapeHtml(p)}</td>
+          ${cells}
+          <td style="padding:7px 10px;border:1px solid #ebeef5;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">${data.platform_totals[i].toLocaleString()}</td>
+        </tr>`;
+      }).join('');
+      const totalRow = `<tr style="background:#fafcff;border-top:2px solid #e4e7ed;">
+        <td style="padding:8px 10px;border:1px solid #ebeef5;font-weight:700;">合计</td>
+        ${data.waybill_totals.map((v) => `<td style="padding:8px 10px;border:1px solid #ebeef5;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;">${v.toLocaleString()}</td>`).join('')}
+        <td style="padding:8px 10px;border:1px solid #ebeef5;text-align:right;font-weight:700;color:#409eff;font-variant-numeric:tabular-nums;">${data.total_quantity.toLocaleString()}</td>
+      </tr>`;
+
+      wrap.innerHTML = `
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+          <div style="flex:1;min-width:150px;padding:12px 16px;background:#f4f8ff;border-radius:8px;">
+            <div style="font-size:12px;color:#909399;">总发货量</div>
+            <div style="font-size:22px;font-weight:700;color:#409eff;font-variant-numeric:tabular-nums;">${data.total_quantity.toLocaleString()}</div>
+          </div>
+          <div style="flex:1;min-width:150px;padding:12px 16px;background:#f0f9eb;border-radius:8px;">
+            <div style="font-size:12px;color:#909399;">订单总数</div>
+            <div style="font-size:22px;font-weight:700;color:#67c23a;font-variant-numeric:tabular-nums;">${data.total_orders.toLocaleString()}</div>
+          </div>
+          <div style="flex:1;min-width:150px;padding:12px 16px;background:#fdf6ec;border-radius:8px;">
+            <div style="font-size:12px;color:#909399;">平台 / 面单类型</div>
+            <div style="font-size:22px;font-weight:700;color:#e6a23c;font-variant-numeric:tabular-nums;">${data.platforms.length} / ${data.waybills.length}</div>
+          </div>
+        </div>
+        <div style="overflow:auto;border:1px solid #ebeef5;border-radius:6px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr style="background:#f5f7fa;">
+              ${head.map((h) => `<th style="padding:8px 10px;border:1px solid #ebeef5;white-space:nowrap;${h === '平台' ? 'text-align:left;' : 'text-align:right;'}">${h}</th>`).join('')}
+            </tr></thead>
+            <tbody>${body}${totalRow}</tbody>
+          </table>
+        </div>`;
+    }
+
+    function load() {
+      const f = collect();
+      q('#wbResult').innerHTML = '<div style="color:#909399;padding:24px;text-align:center;">⏳ 统计中...</div>';
+      API.get('/orders/stats/waybill' + (toQs(f) ? '?' + toQs(f) : '')).then((data) => {
+        syncSelects(data);
+        render(data);
+      }).catch((e) => {
+        q('#wbResult').innerHTML = `<div style="color:#f56c6c;padding:24px;text-align:center;">❌ 统计失败: ${escapeHtml(e.message)}</div>`;
+      });
+    }
+
+    q('#wbQuery').onclick = load;
+    q('#wbMonth').onchange = load;
+    q('#wbPlatform').onchange = load;
+    q('#wbType').onchange = load;
+    q('#wbReset').onclick = () => {
+      q('#wbMonth').value = initMonth;
+      q('#wbPlatform').value = '全部';
+      q('#wbType').value = '全部';
+      load();
+    };
+    q('#wbExport').onclick = () => {
+      const f = collect();
+      const qstr = toQs(f);
+      API.download('/orders/stats/waybill/export' + (qstr ? '?' + qstr : ''),
+        `电子面单类型统计-${q('#wbMonth').value || '全部'}.xlsx`)
+        .catch((e) => { ERP?.toast ? ERP.toast('导出失败：' + e.message, 'error') : alert('导出失败：' + e.message); });
+    };
+
+    load();
   }
 
   function loadPlansIntoSelect(selectEl, onChangeCb) {

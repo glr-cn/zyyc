@@ -27,6 +27,19 @@ function ensureDistrictColumn(db) {
   }
 }
 
+// 幂等加列：orders.waybill_type（电子面单类型；旧库无此列，ALTER 一次后永久生效）
+function ensureWaybillColumn(db) {
+  try {
+    const cols = db.prepare('PRAGMA table_info(orders)').all().map((r) => r.name);
+    if (!cols.includes('waybill_type')) {
+      db.exec('ALTER TABLE orders ADD COLUMN waybill_type TEXT');
+      console.log('[orders-query] ✅ 已新增 orders.waybill_type 列');
+    }
+  } catch (e) {
+    console.error('[orders-query] waybill_type 加列失败（不影响查询）:', e.message);
+  }
+}
+
 // ---------- 快递单号解析 ----------
 // 返回 { list: [...] } 或 { like: 'xxx' } 或 null
 function parseOrderNos(q) {
@@ -42,7 +55,7 @@ function parseOrderNos(q) {
 function buildWhere(filters, scope) {
   const where = [];
   const params = [];
-  const { q, province, city, district, platform, start, end } = filters;
+  const { q, province, city, district, platform, waybillType, start, end } = filters;
 
   // 行级权限（ownerScope）
   if (scope && scope.sql) {
@@ -73,11 +86,21 @@ function buildWhere(filters, scope) {
   // 平台（'全部' 视为不过滤，与地区看板口径一致）
   if (platform && platform !== '全部') { where.push('o.wms_platform = ?'); params.push(platform); }
 
+  // 电子面单类型（'全部' 视为不过滤；'未标注' 匹配 NULL/空串历史数据）
+  if (waybillType && waybillType !== '全部') {
+    if (waybillType === '未标注') {
+      where.push("(o.waybill_type IS NULL OR TRIM(o.waybill_type) = '')");
+    } else {
+      where.push('o.waybill_type = ?');
+      params.push(waybillType);
+    }
+  }
+
   return { where: where.join(' AND '), params };
 }
 
 const SELECT_COLS = `
-  o.order_id, o.order_no, o.wms_platform, o.owner_name,
+  o.order_id, o.order_no, o.wms_platform, o.waybill_type, o.owner_name,
   o.ship_quantity, o.unit, o.order_date, o.payment_status,
   o.to_province, o.to_city, o.to_district, o.region_class,
   c.company_name AS customer_name
@@ -86,6 +109,7 @@ const SELECT_COLS = `
 // ---------- 分页查询 ----------
 function queryPage(db, filters, page, pageSize, scope) {
   ensureDistrictColumn(db);
+  ensureWaybillColumn(db);
   const { where, params } = buildWhere(filters, scope);
   const w = where ? 'WHERE ' + where : '';
   const total = db.prepare(
@@ -103,6 +127,7 @@ function queryPage(db, filters, page, pageSize, scope) {
 // ---------- 全量导出（大数据量：单次有上限保护） ----------
 function queryAll(db, filters, scope, limit = 100000) {
   ensureDistrictColumn(db);
+  ensureWaybillColumn(db);
   const { where, params } = buildWhere(filters, scope);
   const w = where ? 'WHERE ' + where : '';
   return db.prepare(`
@@ -151,8 +176,47 @@ function facetDistricts(db, province, city) {
   `).all(province).map((r) => r.v);
 }
 
+// ---------- 电子面单类型下拉（去重，NULL/空串归为「未标注」且排最后） ----------
+function facetWaybillTypes(db) {
+  ensureWaybillColumn(db);
+  const list = db.prepare(`
+    SELECT DISTINCT TRIM(waybill_type) AS v FROM orders
+    WHERE waybill_type IS NOT NULL AND TRIM(waybill_type) != ''
+    ORDER BY v
+  `).all().map((r) => r.v);
+  let hasEmpty = false;
+  try {
+    hasEmpty = !!db.prepare("SELECT 1 FROM orders WHERE waybill_type IS NULL OR TRIM(waybill_type)='' LIMIT 1").get();
+  } catch (e) { /* ignore */ }
+  if (hasEmpty) list.push('未标注');
+  return list;
+}
+
+// ---------- 电子面单类型 × 平台 发货量分组统计 ----------
+// 返回 [{ platform, waybill_type, orders, quantity }]，按平台、发货量降序。
+// 口径：orders=单据数，quantity=发货量合计（ship_quantity）
+function statsWaybill(db, filters, scope) {
+  ensureDistrictColumn(db);
+  ensureWaybillColumn(db);
+  const f = { ...filters, q: '' };   // 统计不接受单号条件，避免口径混乱
+  const { where, params } = buildWhere(f, scope);
+  const w = where ? 'WHERE ' + where : '';
+  return db.prepare(`
+    SELECT
+      COALESCE(NULLIF(TRIM(o.wms_platform), ''), '未知平台') AS platform,
+      COALESCE(NULLIF(TRIM(o.waybill_type), ''), '未标注')   AS waybill_type,
+      COUNT(*) AS orders,
+      COALESCE(SUM(o.ship_quantity), 0) AS quantity
+    FROM orders o
+    ${w}
+    GROUP BY platform, waybill_type
+    ORDER BY platform ASC, quantity DESC
+  `).all(...params);
+}
+
 module.exports = {
   ensureDistrictColumn,
+  ensureWaybillColumn,
   parseOrderNos,
   buildWhere,
   queryPage,
@@ -160,4 +224,6 @@ module.exports = {
   facetProvinces,
   facetCities,
   facetDistricts,
+  facetWaybillTypes,
+  statsWaybill,
 };

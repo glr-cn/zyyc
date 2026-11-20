@@ -14,6 +14,7 @@
 const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
 const auditLog = require('./auditLog');
+const expressMap = require('./expressMap');
 
 // ★ 本地今天（不受时区影响）—— 替代 new Date().toISOString().slice(0,10) 取 UTC 日期
 function localToday() {
@@ -33,6 +34,8 @@ const UNIFIED_COLUMNS = {
   unit:           '单位',
   order_date:     '订单日期',
   payment_status: '付款状态',
+  // 电子面单类型（快递公司）—— 经 express_map 编码→名称映射后入库
+  waybill_type:   '电子面单类型',
   // 收件地址（地区分类依据）
   receiver_name:  '收件人',
   receiver_phone: '收件电话',
@@ -61,6 +64,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主名称', '货主', '客户'],
     ship_quantity:  ['发货件数', '发货量', '数量', '出库数量', '包裹数'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['出库日期', '发货时间', '订单日期', '发货日期', '创建时间'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
@@ -75,6 +79,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主名称', '货主', '客户'],
     ship_quantity:  ['发货件数', '发货量', '数量', '出库数量'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['出库日期', '发货时间', '订单日期', '发货日期'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
@@ -89,6 +94,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['发货数量', '出库数量', '数量', '发货件数'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['发货日期', '发货时间', '出库日期', '订单日期', '下单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
@@ -103,6 +109,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['出库数量', '发货数量', '数量', '发货件数'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['发货日期', '发货时间', '出库日期', '订单日期', '打印时间'],
     to_province:    ['收件省份', '省', '省份', '收货省份'],
     to_city:        ['收件城市', '市', '城市', '收货城市'],
@@ -117,6 +124,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['出库数量', '发货数量', '数量', '发货件数'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['发货日期', '发货时间', '出库日期', '订单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
@@ -131,6 +139,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['发货数量', '出库数量', '数量', '发货件数'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['发货日期', '发货时间', '出库日期', '订单日期', '打印时间'],
     to_province:    ['省', '省份', '收件省', '收货省份'],
     to_city:        ['市', '城市', '收件市', '收货城市'],
@@ -145,6 +154,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['数量', '发货件数', '包裹数', '商品数量'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
@@ -159,6 +169,7 @@ const PLATFORM_COL_MAP = {
     owner_name:     ['货主', '客户'],
     ship_quantity:  ['数量', '发货件数', '包裹数', '商品数量'],
     unit:           ['单位'],
+    waybill_type:   ['电子面单类型', '面单类型', '快递类型', '快递公司', '快递公司名称', '物流公司', '承运商', '快递编码', '物流代码', '快递代码'],
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
@@ -238,6 +249,15 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   );
   const batchNos = new Set();
 
+  // ★ 幂等加列：极旧库尚未跑迁移时，导入前先保证 waybill_type 存在（只加不删）
+  try {
+    const cols = db.prepare('PRAGMA table_info(orders)').all().map((r) => r.name);
+    if (!cols.includes('waybill_type')) db.exec('ALTER TABLE orders ADD COLUMN waybill_type TEXT');
+  } catch (e) { /* ignore */ }
+
+  // ★ 电子面单类型解析器（一次读取映射，循环内复用；编码 STO→申通快递，未知原样保留）
+  const resolveWaybill = expressMap.createResolver(db);
+
   rows.forEach((rawRow, i) => {
     const excelRow = i + 2;
     const row = platform
@@ -251,6 +271,8 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     const unit = String(pick(row, 'unit') ?? '').trim();
     const dateRaw = pick(row, 'order_date');
     const paymentStatus = String(pick(row, 'payment_status') ?? '未收').trim();
+    // 电子面单类型：原始值（可能是 STO/申通快递/空）→ 映射为快递公司名称
+    const waybillType = resolveWaybill(pick(row, 'waybill_type')) || null;
 
     // 收件地址（地区分类依据）
     const toProvince = String(pick(row, 'to_province') ?? '').trim();
@@ -302,6 +324,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     successItems.push({
       excelRow, customerName, ownerName: finalOwner, orderNo,
       qty: round3(qty), unit: finalUnit, date, paymentStatus,
+      waybillType,
       toProvince: toProvince || null, toCity: toCity || null, toDistrict: toDistrict || null,
       regionClass, customer,
     });
@@ -310,7 +333,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   // 批量事务
   let success = 0;
   const orderStmt = db.prepare(
-    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id,wms_platform,to_province,to_city,to_district,region_class) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id,wms_platform,to_province,to_city,to_district,region_class,waybill_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
   );
   const invStmt = db.prepare(
     "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
@@ -323,6 +346,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
         it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date,
         it.paymentStatus, it.customer.owner_user_id,
         platform || '未知', it.toProvince, it.toCity, it.toDistrict, it.regionClass,
+        it.waybillType,
       );
       invStmt.run(info.lastInsertRowid, it.ownerName, it.qty, it.date, '订单导入自动出库');
       success++;

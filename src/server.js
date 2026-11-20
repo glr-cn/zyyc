@@ -14,6 +14,7 @@ const db = require('./db');
 const authRouter = require('./routes/auth');
 const customersRouter = require('./routes/customers');
 const ordersRouter = require('./routes/orders');
+const settingsRouter = require('./routes/settings');
 const workhoursRouter = require('./routes/workhours');
 const analyticsRouter = require('./routes/analytics');
 const dashboardRouter = require('./routes/dashboard');
@@ -301,6 +302,7 @@ app.use('/api/auth', authRouter);
 //   用户保存后看不到变更以为没生效。SQLite 查询本身足够快，不需要应用层缓存。
 app.use('/api/customers', customersRouter);
 app.use('/api/orders', ordersRouter);                          // 订单不缓存（经常变更）
+app.use('/api/settings', settingsRouter);                      // 系统设置（物流映射，实时生效）
 app.use('/api/workhours', workhoursRouter);                    // 工时不缓存（实时提交）
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/dashboard', dashboardRouter);

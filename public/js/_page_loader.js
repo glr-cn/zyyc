@@ -54,6 +54,8 @@
     // 系统专用（仅 super_admin）
     data_migration: 'js/data-migration.js',
     menu_sort:      'js/menu-sort.js',
+    // 系统设置（物流映射配置等）
+    settings:       'js/settings.js',
   };
 
   // 已加载的脚本文件集合（按文件路径去重，同一文件多 pageId 只加载一次）
@@ -66,7 +68,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=20';  // 2026-11-20 → 地区看板：各地区累计分布改为左右两栏布局 + 进度条排行
+  const BUILD_VERSION = 'v=21';  // 2026-11-20 → 物流映射配置 + 电子面单类型筛选/统计报表 + 系统设置页
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

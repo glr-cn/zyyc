@@ -31,6 +31,7 @@ const TEMPLATE_FIELDS = [
   { key: 'owner_name',    name: '货主名称',   required: true,  sample: '杭州绵绵的羊网络科技有限公司', note: '必须与客户名称/简称匹配，且该客户 coop_status=合作中' },
   { key: 'ship_quantity', name: '发货量',     required: true,  sample: '1200', note: '正数；自动保留 3 位小数' },
   { key: 'unit',          name: '单位',       required: true,  sample: '件',   note: '必须是：件 / 箱 / 托 / 公斤 四选一' },
+  { key: 'waybill_type',  name: '电子面单类型', required: false, sample: 'STO', note: '快递公司编码或名称（STO/ZTO/YTO4/YTO5/SF/DBKD 等，可在系统设置里扩展）' },
   { key: 'order_date',    name: '订单日期',   required: true,  sample: '2025-01-15', note: '日期格式 YYYY-MM-DD（Excel 日期序列号会自动转换）' },
   { key: 'payment_status',name: '付款状态',   required: false, sample: '未收',  note: '未收（默认）/ 部分 / 已收' },
 ];
@@ -286,6 +287,7 @@ router.get('/query', auth, menuGate('order_dashboard'), (req, res) => {
     city: String(req.query.city || '').trim(),
     district: String(req.query.district || '').trim(),
     platform: String(req.query.platform || '').trim(),
+    waybillType: String(req.query.waybillType || '').trim(),
     start: String(req.query.start || '').trim(),
     end: String(req.query.end || '').trim(),
   };
@@ -314,7 +316,10 @@ router.get('/query/facets', auth, menuGate('order_dashboard'), (req, res) => {
     if (province) {
       return res.json({ cities: ordersQuery.facetCities(db, province) });
     }
-    return res.json({ provinces: ordersQuery.facetProvinces(db) });
+    return res.json({
+      provinces: ordersQuery.facetProvinces(db),
+      waybill_types: ordersQuery.facetWaybillTypes(db),
+    });
   } catch (e) {
     res.status(500).json({ error: '获取下拉数据失败：' + e.message });
   }
@@ -328,6 +333,7 @@ router.get('/query/export', auth, menuGate('order_dashboard'), (req, res) => {
     city: String(req.query.city || '').trim(),
     district: String(req.query.district || '').trim(),
     platform: String(req.query.platform || '').trim(),
+    waybillType: String(req.query.waybillType || '').trim(),
     start: String(req.query.start || '').trim(),
     end: String(req.query.end || '').trim(),
   };
@@ -336,14 +342,14 @@ router.get('/query/export', auth, menuGate('order_dashboard'), (req, res) => {
   }
   try {
     const rows = ordersQuery.queryAll(db, filters, ownerScope(req), 100000);
-    const EXPORT_HEADERS = ['快递单号', '平台', '客户名称', '货主名称', '发货量', '单位', '订单日期', '付款状态', '收件省', '收件市', '收件区县', '地区分类'];
+    const EXPORT_HEADERS = ['快递单号', '平台', '电子面单类型', '客户名称', '货主名称', '发货量', '单位', '订单日期', '付款状态', '收件省', '收件市', '收件区县', '地区分类'];
     const aoa = [EXPORT_HEADERS].concat(rows.map((r) => [
-      r.order_no, r.wms_platform, r.customer_name || '', r.owner_name,
+      r.order_no, r.wms_platform, r.waybill_type || '未标注', r.customer_name || '', r.owner_name,
       r.ship_quantity, r.unit, r.order_date, r.payment_status,
       r.to_province || '', r.to_city || '', r.to_district || '', r.region_class,
     ]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 30 }, { wch: 26 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 26 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '订单查询导出');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -445,6 +451,99 @@ router.get('/template', (req, res) => {
   } catch (e) {
     console.error('[orders] 模板生成失败:', e);
     res.status(500).json({ error: '模板生成失败：' + e.message });
+  }
+});
+
+// ============================================================================
+// 电子面单类型 × 平台 发货量统计（数据看板 / 统计报表）
+// ----------------------------------------------------------------------------
+// GET /api/orders/stats/waybill           rows + 平台/面单类型维度 + 合计
+// GET /api/orders/stats/waybill/export    导出交叉表 xlsx（平台为行，面单类型为列）
+// query: start, end, platform, waybillType
+// ============================================================================
+function parseStatsFilters(req) {
+  const f = {
+    platform: String(req.query.platform || '').trim(),
+    waybillType: String(req.query.waybillType || '').trim(),
+    start: String(req.query.start || '').trim(),
+    end: String(req.query.end || '').trim(),
+  };
+  if (f.start && f.end && f.start > f.end) { const t = f.start; f.start = f.end; f.end = t; }
+  return f;
+}
+
+function buildMatrix(rows) {
+  const platforms = [];
+  const waybills = [];
+  const cell = new Map();     // platform|waybill -> {orders, quantity}
+  let totalOrders = 0, totalQty = 0;
+  const platformTotals = new Map();
+  const waybillTotals = new Map();
+  for (const r of rows) {
+    if (!platforms.includes(r.platform)) platforms.push(r.platform);
+    if (!waybills.includes(r.waybill_type)) waybills.push(r.waybill_type);
+    cell.set(r.platform + '|' + r.waybill_type, { orders: r.orders, quantity: r.quantity });
+    totalOrders += r.orders;
+    totalQty += r.quantity;
+    platformTotals.set(r.platform, (platformTotals.get(r.platform) || 0) + r.quantity);
+    waybillTotals.set(r.waybill_type, (waybillTotals.get(r.waybill_type) || 0) + r.quantity);
+  }
+  platforms.sort((a, b) => (platformTotals.get(b) || 0) - (platformTotals.get(a) || 0));
+  waybills.sort((a, b) => {
+    if (a === '未标注') return 1;
+    if (b === '未标注') return -1;
+    return (waybillTotals.get(b) || 0) - (waybillTotals.get(a) || 0);
+  });
+  return {
+    platforms, waybills,
+    cell: platforms.map((p) => waybills.map((w) => cell.get(p + '|' + w) || { orders: 0, quantity: 0 })),
+    platform_totals: platforms.map((p) => platformTotals.get(p) || 0),
+    waybill_totals: waybills.map((w) => waybillTotals.get(w) || 0),
+    total_orders: totalOrders,
+    total_quantity: totalQty,
+  };
+}
+
+router.get('/stats/waybill', auth, menuGate('order_dashboard'), (req, res) => {
+  try {
+    const f = parseStatsFilters(req);
+    const rows = ordersQuery.statsWaybill(db, f, ownerScope(req));
+    res.json({ filters: f, rows, ...buildMatrix(rows) });
+  } catch (e) {
+    console.error('[orders/stats-waybill] 异常:', e);
+    res.status(500).json({ error: '统计失败：' + e.message });
+  }
+});
+
+router.get('/stats/waybill/export', auth, menuGate('order_dashboard'), (req, res) => {
+  try {
+    const f = parseStatsFilters(req);
+    const rows = ordersQuery.statsWaybill(db, f, ownerScope(req));
+    const m = buildMatrix(rows);
+    const head = ['平台', ...m.waybills, '合计'];
+    const aoa = [head];
+    m.platforms.forEach((p, i) => {
+      aoa.push([p, ...m.cell[i].map((c) => c.quantity), m.platform_totals[i]]);
+    });
+    aoa.push(['合计', ...m.waybill_totals, m.total_quantity]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 16 }].concat(m.waybills.map(() => ({ wch: 14 }))).concat([{ wch: 14 }]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '电子面单类型统计');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    auditLog.writeLog(req, {
+      table: 'orders', module: '数据看板', action: 'export',
+      targetId: 'waybill_stats_export',
+      content: { op: 'waybill_stats_export', filters: f, rows: rows.length, total: m.total_quantity },
+    });
+    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="waybill-stats-${ts}.xlsx"`);
+    res.send(buf);
+  } catch (e) {
+    console.error('[orders/stats-waybill-export] 异常:', e);
+    res.status(500).json({ error: '导出失败：' + e.message });
   }
 });
 

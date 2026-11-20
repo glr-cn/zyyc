@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS orders (
   unit           TEXT NOT NULL,           -- 单位
   order_date     TEXT NOT NULL,           -- 订单日期
   payment_status TEXT NOT NULL DEFAULT '未收',  -- 未收 / 部分 / 已收
+  waybill_type   TEXT,                    -- 电子面单类型（快递公司名称，经 express_map 映射）
   owner_user_id  INTEGER REFERENCES users(user_id),
   created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
