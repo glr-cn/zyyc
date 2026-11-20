@@ -503,7 +503,7 @@
           <option value="全部">平台 - 全部</option>
         </select>
         <select id="oqWaybill" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:130px;font-size:13px;">
-          <option value="全部">电子面单 - 全部</option>
+          <option value="全部">快递公司 - 全部</option>
         </select>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
           月份 <input id="oqMonth" type="month" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;" value="${thisMonth}">
@@ -603,7 +603,6 @@
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_province || '-')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_city || '-')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_district || '-')}</td>
-          <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;text-align:right;">${d.ship_quantity} ${escapeHtml(d.unit || '')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.order_date || '')}</td>
           <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:center;">
             <span style="padding:2px 8px;border-radius:3px;background:${c.bg};color:${c.text};border:1px solid ${c.border};font-size:12px;">${escapeHtml(d.region_class || '正常')}</span>
@@ -618,12 +617,11 @@
             <thead style="position:sticky;top:0;background:#f5f7fa;z-index:1;"><tr>
               <th style="padding:7px;border:1px solid #ebeef5;">快递单号</th>
               <th style="padding:7px;border:1px solid #ebeef5;">平台</th>
-              <th style="padding:7px;border:1px solid #ebeef5;">电子面单类型</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">快递公司</th>
               <th style="padding:7px;border:1px solid #ebeef5;">客户</th>
               <th style="padding:7px;border:1px solid #ebeef5;">省</th>
               <th style="padding:7px;border:1px solid #ebeef5;">市</th>
               <th style="padding:7px;border:1px solid #ebeef5;">区县</th>
-              <th style="padding:7px;border:1px solid #ebeef5;">数量</th>
               <th style="padding:7px;border:1px solid #ebeef5;">日期</th>
               <th style="padding:7px;border:1px solid #ebeef5;">地区分类</th>
             </tr></thead>
@@ -719,8 +717,8 @@
     wbCard.style.cssText = CARD_CSS;
     wbCard.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-        <h3 style="margin:0;font-size:16px;color:#303133;">📦 电子面单类型 × 平台 发货量统计</h3>
-        <span style="font-size:12px;color:#909399;">按电子面单类型分组，统计各平台发货量</span>
+        <h3 style="margin:0;font-size:16px;color:#303133;">📦 快递公司 × 平台 发货量统计</h3>
+        <span style="font-size:12px;color:#909399;">按快递公司分组，统计各平台发货量</span>
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
@@ -730,7 +728,7 @@
           平台 <select id="wbPlatform" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;"><option value="全部">全部</option></select>
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
-          电子面单 <select id="wbType" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:130px;"><option value="全部">全部</option></select>
+          快递公司 <select id="wbType" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:130px;"><option value="全部">全部</option></select>
         </label>
         <button id="wbQuery" style="${BTN_PRIMARY}">🔍 统计</button>
         <button id="wbReset" style="${BTN_GHOST}">🔄 重置</button>
@@ -853,7 +851,7 @@
             <div style="font-size:22px;font-weight:700;color:#67c23a;font-variant-numeric:tabular-nums;">${data.total_orders.toLocaleString()}</div>
           </div>
           <div style="flex:1;min-width:150px;padding:12px 16px;background:#fdf6ec;border-radius:8px;">
-            <div style="font-size:12px;color:#909399;">平台 / 面单类型</div>
+            <div style="font-size:12px;color:#909399;">平台 / 快递公司</div>
             <div style="font-size:22px;font-weight:700;color:#e6a23c;font-variant-numeric:tabular-nums;">${data.platforms.length} / ${data.waybills.length}</div>
           </div>
         </div>
@@ -892,7 +890,7 @@
       const f = collect();
       const qstr = toQs(f);
       API.download('/orders/stats/waybill/export' + (qstr ? '?' + qstr : ''),
-        `电子面单类型统计-${q('#wbMonth').value || '全部'}.xlsx`)
+        `快递公司统计-${q('#wbMonth').value || '全部'}.xlsx`)
         .catch((e) => { ERP?.toast ? ERP.toast('导出失败：' + e.message, 'error') : alert('导出失败：' + e.message); });
     };
 

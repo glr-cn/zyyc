@@ -31,7 +31,7 @@ const TEMPLATE_FIELDS = [
   { key: 'owner_name',    name: '货主名称',   required: true,  sample: '杭州绵绵的羊网络科技有限公司', note: '必须与客户名称/简称匹配，且该客户 coop_status=合作中' },
   { key: 'ship_quantity', name: '发货量',     required: true,  sample: '1200', note: '正数；自动保留 3 位小数' },
   { key: 'unit',          name: '单位',       required: true,  sample: '件',   note: '必须是：件 / 箱 / 托 / 公斤 四选一' },
-  { key: 'waybill_type',  name: '电子面单类型', required: false, sample: 'STO', note: '快递公司编码或名称（STO/ZTO/YTO4/YTO5/SF/DBKD 等，可在系统设置里扩展）' },
+  { key: 'waybill_type',  name: '快递公司',   required: false, sample: 'STO', note: '快递公司编码或名称（STO/ZTO/YTO4/YTO5/SF/DBKD 等，可在系统设置里扩展）' },
   { key: 'order_date',    name: '订单日期',   required: true,  sample: '2025-01-15', note: '日期格式 YYYY-MM-DD（Excel 日期序列号会自动转换）' },
   { key: 'payment_status',name: '付款状态',   required: false, sample: '未收',  note: '未收（默认）/ 部分 / 已收' },
 ];
@@ -342,7 +342,7 @@ router.get('/query/export', auth, menuGate('order_dashboard'), (req, res) => {
   }
   try {
     const rows = ordersQuery.queryAll(db, filters, ownerScope(req), 100000);
-    const EXPORT_HEADERS = ['快递单号', '平台', '电子面单类型', '客户名称', '货主名称', '发货量', '单位', '订单日期', '付款状态', '收件省', '收件市', '收件区县', '地区分类'];
+    const EXPORT_HEADERS = ['快递单号', '平台', '快递公司', '客户名称', '货主名称', '发货量', '单位', '订单日期', '付款状态', '收件省', '收件市', '收件区县', '地区分类'];
     const aoa = [EXPORT_HEADERS].concat(rows.map((r) => [
       r.order_no, r.wms_platform, r.waybill_type || '未标注', r.customer_name || '', r.owner_name,
       r.ship_quantity, r.unit, r.order_date, r.payment_status,
@@ -530,7 +530,7 @@ router.get('/stats/waybill/export', auth, menuGate('order_dashboard'), (req, res
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = [{ wch: 16 }].concat(m.waybills.map(() => ({ wch: 14 }))).concat([{ wch: 14 }]);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '电子面单类型统计');
+    XLSX.utils.book_append_sheet(wb, ws, '快递公司统计');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     auditLog.writeLog(req, {
       table: 'orders', module: '数据看板', action: 'export',

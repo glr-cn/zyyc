@@ -201,7 +201,7 @@
             <div style="font-size:14px;font-weight:600;color:#303133;">🚚 物流映射配置</div>
             <div style="font-size:13px;color:#909399;margin-top:6px;line-height:1.6;">
               维护快递公司编码与名称的对应关系（如 STO → 申通快递）。<br>
-              订单导入时自动按映射把编码转换为名称，并作为「电子面单类型」保存与统计。
+              订单导入时自动按映射把编码转换为名称，并作为「快递公司」保存与统计。
             </div>
           </div>
           <button id="openExpressMap" style="${BTN_PRIMARY}">⚙️ 物流映射配置</button>
