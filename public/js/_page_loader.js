@@ -66,7 +66,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=19';  // 2026-11-20 → 订单导入修复：快递单号列优先映射 + 导入查重防重复（23322 条单号查不到根因）
+  const BUILD_VERSION = 'v=20';  // 2026-11-20 → 地区看板：各地区累计分布改为左右两栏布局 + 进度条排行
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

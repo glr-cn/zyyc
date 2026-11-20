@@ -820,44 +820,66 @@
         📦 <b>偏远地区合计</b>（大偏远 + 小偏远）：${(remote_total||0).toLocaleString()} 单 · 占比 <b style="color:#e6a23c;">${pct(remote_total||0)}</b> · 总订单：<b>${(total||0).toLocaleString()}</b> 单
       </div>`;
 
-    // --- 3 个省占比区块（参考图2）---
+    // --- 各地区累计分布（参考图布局：左栏 小偏远 + 大偏远，右栏 正常地区）---
+    // 排行顺序沿用后端 by_class_province 的 count 降序，不做重排。
+    // 进度条：每个地区按「本组最大值」归一化（正相关比例），合计行固定满格。
     provinceWrap.innerHTML = '';
-    ['大偏远', '小偏远', '正常'].forEach((clsName) => {
+
+    const groupTitle = { '大偏远': '大偏远', '小偏远': '小偏远', '正常': '正常地区' };
+
+    const buildGroup = (clsName) => {
       const color = CLASS_COLOR[clsName];
       const list = (by_class_province && by_class_province[clsName]) || [];
-      const clsTotal = list.reduce((s, x) => s + x.count, 0);
-      const items = list.map((p, idx) => {
-        const barWidth = total ? ((p.count / total) * 100).toFixed(2) : 0;
-        return `
-          <div style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13px;">
-            <div style="width:32px;color:#909399;text-align:center;">${idx+1}</div>
-            <div style="flex:0 0 160px;color:#606266;">${escapeHtml(p.province)}</div>
-            <div style="flex:1;height:14px;background:#f2f6fc;border-radius:3px;overflow:hidden;">
-              <div style="height:100%;width:${Math.max(barWidth*10,3)}%;background:${color.bar};border-radius:3px;transition:width .3s;"></div>
-            </div>
-            <div style="flex:0 0 100px;text-align:right;font-family:monospace;color:#303133;">${p.count.toLocaleString()}</div>
-            <div style="flex:0 0 70px;text-align:right;color:#909399;">${p.pct}%</div>
-          </div>`;
-      }).join('') || `<div style="color:#909399;padding:20px;text-align:center;font-size:13px;">${clsName}地区暂无订单</div>`;
+      const groupTotal = list.reduce((s, x) => s + x.count, 0);
+      const max = list.length ? Math.max(...list.map((x) => x.count)) : 0;
 
-      const block = document.createElement('div');
-      block.style.cssText = 'margin-bottom:16px;padding:16px;background:#fff;border:1px solid #ebeef5;border-radius:8px;';
-      block.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <h4 style="margin:0;font-size:14px;color:${color.text};font-weight:600;">${color.label}地区</h4>
-          <span style="font-size:12px;color:#909399;">${list.length} 个省 · 合计 ${clsTotal.toLocaleString()} 单</span>
+      const rows = list.map((p, idx) => {
+        const w = max ? (p.count / max) * 100 : 0;
+        return `<div class="od-region-row">
+          <div class="od-region-rank">${idx + 1}</div>
+          <span class="od-region-dot" style="background:${color.bar};"></span>
+          <div class="od-region-name" title="${escapeHtml(p.province)}">${escapeHtml(p.province)}</div>
+          <div class="od-region-track"><div class="od-region-fill" style="width:${Math.max(w, 1).toFixed(1)}%;background:${color.bar};"></div></div>
+          <div class="od-region-val">${p.count.toLocaleString()}</div>
+          <div class="od-region-pct">${(p.pct || 0).toFixed(2)}%</div>
+        </div>`;
+      }).join('');
+
+      const totalPct = total ? ((groupTotal * 100) / total).toFixed(2) : '0.00';
+      return `<div>
+        <div class="od-region-group-title" style="color:${color.text};">${groupTitle[clsName]}</div>
+        ${list.length ? rows : '<div class="od-region-empty">暂无订单</div>'}
+        <div class="od-region-row total">
+          <div class="od-region-rank"></div>
+          <span class="od-region-dot" style="background:${color.bar};"></span>
+          <div class="od-region-name">合计</div>
+          <div class="od-region-track"><div class="od-region-fill" style="width:100%;background:${color.bar};"></div></div>
+          <div class="od-region-val">${groupTotal.toLocaleString()}</div>
+          <div class="od-region-pct">${totalPct}%</div>
         </div>
-        ${items}
-        ${list.length ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;margin-top:8px;border-top:1px solid #ebeef5;font-weight:600;color:${color.text};">
-          <div style="width:32px;text-align:center;">合计</div>
-          <div style="flex:0 0 160px;">——</div>
-          <div style="flex:1;"></div>
-          <div style="flex:0 0 100px;text-align:right;font-family:monospace;">${clsTotal.toLocaleString()}</div>
-          <div style="flex:0 0 70px;text-align:right;">${pct(clsTotal)}</div>
-        </div>` : ''}
-      `;
-      provinceWrap.appendChild(block);
-    });
+      </div>`;
+    };
+
+    const legend = ['大偏远', '小偏远', '正常'].map((c) =>
+      `<span class="od-region-legend-item"><span class="od-region-legend-dot" style="background:${CLASS_COLOR[c].bar};"></span>${groupTitle[c]}</span>`
+    ).join('');
+
+    provinceWrap.innerHTML = `
+      <div class="od-region-dist">
+        <div class="od-region-dist-head">
+          <h4 class="od-region-dist-title">各地区累计分布</h4>
+          <div class="od-region-legend">${legend}</div>
+        </div>
+        <div class="od-region-grid">
+          <div class="od-region-col left">
+            ${buildGroup('小偏远')}
+            ${buildGroup('大偏远')}
+          </div>
+          <div class="od-region-col right">
+            ${buildGroup('正常')}
+          </div>
+        </div>
+      </div>`;
   }
 
   function CLASS_COLOR_MAP(cls) {

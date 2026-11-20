@@ -1293,3 +1293,115 @@ button.ghost {
 }
 button.ghost:hover { background: #f5f7fa; }
 
+/* ============================================================================
+   地区看板 · 各地区累计分布（左右两栏 + 进度条排行）
+   左栏：小偏远（橙）在上、大偏远（红）在下；右栏：正常地区（蓝）
+   ========================================================================== */
+.od-region-dist {
+  margin-top: 24px;
+  padding: 20px 22px 24px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+}
+.od-region-dist-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+  padding-bottom: 14px; margin-bottom: 18px;
+  border-bottom: 1px solid #f2f4f7;
+}
+.od-region-dist-title {
+  margin: 0; font-size: 16px; font-weight: 700; color: #303133;
+}
+.od-region-legend {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 18px; font-size: 12px; color: #606266;
+}
+.od-region-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.od-region-legend-dot {
+  width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+}
+
+.od-region-grid {
+  display: flex; gap: 44px; align-items: flex-start;
+}
+.od-region-col { min-width: 0; }
+.od-region-col.left {
+  flex: 0 0 46%;
+  display: flex; flex-direction: column; gap: 28px;
+}
+.od-region-col.right { flex: 1 1 auto; }
+
+.od-region-group-title {
+  text-align: center; font-size: 15px; font-weight: 700;
+  margin-bottom: 14px; letter-spacing: 0.5px;
+}
+.od-region-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 0; font-size: 13px; line-height: 1.4;
+}
+.od-region-rank {
+  flex: 0 0 18px; text-align: right;
+  color: #909399; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.od-region-dot {
+  flex: 0 0 8px; width: 8px; height: 8px;
+  border-radius: 2px; display: inline-block;
+}
+.od-region-name {
+  flex: 0 0 132px; color: #303133;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.od-region-track {
+  flex: 1 1 auto; min-width: 40px; height: 8px;
+  background: #f2f6fc; border-radius: 4px; overflow: hidden;
+}
+.od-region-fill {
+  height: 100%; border-radius: 4px;
+  transition: width .35s ease;
+}
+.od-region-val {
+  flex: 0 0 68px; text-align: right; color: #303133;
+  font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.od-region-pct {
+  flex: 0 0 54px; text-align: right; color: #909399;
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+
+/* 合计行：顶部分隔线 + 加粗 */
+.od-region-row.total {
+  margin-top: 6px; padding-top: 9px;
+  border-top: 1px solid #f0f2f5;
+}
+.od-region-row.total .od-region-name { font-weight: 700; }
+.od-region-row.total .od-region-val { font-weight: 700; }
+.od-region-row.total .od-region-pct { font-weight: 600; color: #606266; }
+
+.od-region-empty {
+  color: #909399; font-size: 13px;
+  text-align: center; padding: 22px 0;
+}
+
+/* 中等屏幕：两栏收窄但保持左右结构 */
+@media (max-width: 1180px) {
+  .od-region-grid { gap: 28px; }
+  .od-region-col.left { flex: 0 0 47%; }
+  .od-region-name { flex: 0 0 118px; }
+}
+/* 窄屏：左右两栏改上下堆叠，间距与对齐保持一致 */
+@media (max-width: 900px) {
+  .od-region-grid { flex-direction: column; gap: 26px; }
+  .od-region-col.left, .od-region-col.right { flex: 1 1 auto; width: 100%; }
+}
+@media (max-width: 560px) {
+  .od-region-dist { padding: 16px 14px 18px; }
+  .od-region-grid { gap: 20px; }
+  .od-region-name { flex: 0 0 104px; font-size: 12px; }
+  .od-region-row { gap: 7px; padding: 4px 0; }
+  .od-region-val { flex: 0 0 56px; font-size: 12px; }
+  .od-region-pct { flex: 0 0 46px; }
+  .od-region-legend { gap: 10px; }
+}
+
