@@ -45,6 +45,12 @@ const UNIFIED_COLUMNS = {
 // 8 平台列名映射：统一 schema key → 该平台对应的表头列名（支持多候选，首命中）
 // 设计说明：不同 WMS/打单系统 给的"省"列名差异大，这里把所有见过的别名都列出来，
 // 运行时按顺序 pick() 取第一个有值的。
+// ★★★ 2026-11-20 根因修复：快递单号类列名（快递单号/运单号/物流单号）必须优先于
+//   「订单编号/订单号」——申通/中通等派件导出同时有这两列，订单查询模块按快递单号检索，
+//   若 order_no 存了内部订单号则永远查不到（用户 23322 条导入全部命中此坑）。
+//   TRACKING_NO_ALIASES 在 normalizeRow 中前置拼进 order_no 候选。
+const TRACKING_NO_ALIASES = ['快递单号', '运单号', '物流单号', '快递编号', '快递单号 '];
+
 const PLATFORM_COL_MAP = {
   '百世WMS': {
     order_no:       ['订单编号', '订单号', '单号', '出库单号'],
@@ -194,7 +200,12 @@ function normalizeRow(platform, rawRow) {
     if (!aliases) continue;
     // ★ 兜底：平台别名 + 统一模板表头（保证「下载模板→填写→导入」对全部平台永远可用）
     const unifiedLabel = UNIFIED_COLUMNS[schemaKey];
-    const all = unifiedLabel ? [...aliases, unifiedLabel] : aliases;
+    let all = unifiedLabel ? [...aliases, unifiedLabel] : aliases;
+    // ★★★ 快递单号优先（2026-11-20 根因修复）：派件导出同时有快递单号与订单号时，
+    //   order_no 必须存快递单号，否则订单查询按单号检索永远落空
+    if (schemaKey === 'order_no') {
+      all = [...TRACKING_NO_ALIASES, ...all];
+    }
     for (const alias of all) {
       if (rawRow[alias] != null && String(rawRow[alias]).trim() !== '') {
         normalized[schemaKey] = rawRow[alias];
@@ -217,6 +228,13 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   const failures = [];
   const successItems = [];
 
+  // ★ 边界校验（2026-11-20）：导入查重——库内已有同号订单或本批次内重复 → 跳过不插入，
+  //   防止同一文件重复导入造成数据翻倍（work_hours 有查重，orders 此前缺失）
+  const existingNos = new Set(
+    db.prepare('SELECT order_no FROM orders WHERE order_no IS NOT NULL').all().map((r) => r.order_no)
+  );
+  const batchNos = new Set();
+
   rows.forEach((rawRow, i) => {
     const excelRow = i + 2;
     const row = platform
@@ -235,6 +253,12 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     const toProvince = String(pick(row, 'to_province') ?? '').trim();
     const toCity = String(pick(row, 'to_city') ?? '').trim();
     const toDistrict = String(pick(row, 'to_district') ?? '').trim();
+
+    // ★ 导入查重：单号已在库 / 本批次已出现 → 跳过（在客户解析前拦截，避免无谓建客户）
+    if (orderNo && (existingNos.has(orderNo) || batchNos.has(orderNo))) {
+      return failures.push({ row: excelRow, orderNo, reason: '快递单号已存在，跳过（防重复导入）' });
+    }
+    if (orderNo) batchNos.add(orderNo);
 
     if (!customerName) return failures.push({ row: excelRow, reason: '客户名称为空' });
 
