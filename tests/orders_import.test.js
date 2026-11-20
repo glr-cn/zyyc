@@ -103,6 +103,26 @@ test('normalizeRow: 统一模板表头（订单号/收件省/收件市/收件区
   assert.equal(r.to_district, '西湖区');
 });
 
+// ---------- 1.5 发货时间映射（2026-11-20 修复回归） ----------
+test('normalizeRow: 派件导出仅有「发货时间」列 → order_date 取到该列', () => {
+  const r = normalizeRow('百世WMS', {
+    '客户': '沃谷(山东)临沂-化武', '快递单号': '770356000981892', '发货时间': '2026-11-19 15:30:22',
+  });
+  assert.equal(r.order_date, '2026-11-19 15:30:22');
+});
+
+test('processImport: 发货时间含时分秒 → 入库仅保留日期，不落导入当天', () => {
+  const db = setupDb();
+  const buf = xlsxBuf(['快递单号', '客户', '发货件数', '收货省份', '收货城市', '发货时间'], [
+    ['770356000981900', '新客户D', 1, '山东省', '济南市', '2026-11-19 15:30:22'],
+  ]);
+  const r = processImport({ db, req: REQ, fileBuf: buf, platform: '百世WMS' });
+  assert.equal(r.success, 1);
+  const row = db.prepare('SELECT order_date FROM orders WHERE order_no=?').get('770356000981900');
+  assert.equal(row.order_date, '2026-11-19');
+  db.close();
+});
+
 // ---------- 2. 导入查重 ----------
 test('processImport: 批次内同单号重复 → 第二条跳过，不翻倍', () => {
   const db = setupDb();
