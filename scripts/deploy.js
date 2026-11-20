@@ -158,7 +158,8 @@ function fatal(msg) {
     report.gates.G1_tests = 'skipped';
   } else {
     console.log('\n[G1] 运行 npm test ...');
-    const t = spawnSync('npm', ['test'], { cwd: ROOT, encoding: 'utf8', timeout: 300000, shell: true });
+    // shell:true + 单字符串命令（避免 args 数组拼接的 DEP0190 警告；Windows 下 npm 是 .cmd 必须 shell 解析）
+    const t = spawnSync('npm test', { cwd: ROOT, encoding: 'utf8', timeout: 300000, shell: true });
     const m = String(t.stdout).match(/ℹ pass (\d+)/);
     const fail = String(t.stdout).match(/ℹ fail (\d+)/);
     if (t.status !== 0 || !m || (fail && Number(fail[1]) > 0)) {
