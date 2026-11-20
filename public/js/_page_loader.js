@@ -68,7 +68,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=22';  // 2026-11-20 → 工时导入：缺口行日期口径修复 + 导入后导向已归档视图
+  const BUILD_VERSION = 'v=23';  // 2026-11-20 → 物流映射 + 电子面单类型统计 + 导入补全面单类型
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

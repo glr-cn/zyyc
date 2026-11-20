@@ -88,6 +88,43 @@ test('processImport: 自定义映射新增后导入立即生效', () => {
   db.close();
 });
 
+// ---------- 1.5 历史数据回填（单号重复但面单类型为空） ----------
+test('processImport: 单号已存在且面单类型为空 → 仅回填该列，不新增订单、不改其他字段', () => {
+  const db = setupDb();
+  const cid = db.prepare("INSERT INTO customers (company_name) VALUES ('客户甲')").run().lastInsertRowid;
+  db.prepare(`INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,wms_platform,waybill_type)
+    VALUES ('STO9001',?, '客户甲', 8, '件', '2026-11-01', '百世WMS', NULL)`).run(cid);
+
+  const buf = xlsxBuf(HDR, [
+    ['STO9001', '客户甲', 99, '2026-11-05', '浙江省', '杭州市', 'STO'],
+  ]);
+  const r = processImport({ db, req: REQ, fileBuf: buf, platform: '百世WMS' });
+  assert.equal(r.success, 0);
+  assert.equal(r.backfilled, 1);
+  assert.equal(r.failed, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM orders').get().c, 1);
+
+  const row = db.prepare('SELECT waybill_type, ship_quantity, order_date FROM orders WHERE order_no=?').get('STO9001');
+  assert.equal(row.waybill_type, '申通快递');
+  assert.equal(row.ship_quantity, 8);        // 原有数值不被覆盖
+  assert.equal(row.order_date, '2026-11-01'); // 原有日期不被覆盖
+  db.close();
+});
+
+test('processImport: 已有面单类型不被覆盖（重复导入仍按查重跳过）', () => {
+  const db = setupDb();
+  const cid = db.prepare("INSERT INTO customers (company_name) VALUES ('客户甲')").run().lastInsertRowid;
+  db.prepare(`INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,wms_platform,waybill_type)
+    VALUES ('ZTO9002',?, '客户甲', 5, '件', '2026-11-01', '百世WMS', '中通快递')`).run(cid);
+
+  const buf = xlsxBuf(HDR, [['ZTO9002', '客户甲', 1, '2026-11-05', '浙江省', '杭州市', 'STO']]);
+  const r = processImport({ db, req: REQ, fileBuf: buf, platform: '百世WMS' });
+  assert.equal(r.backfilled, 0);
+  assert.equal(r.failed, 1);
+  assert.equal(db.prepare('SELECT waybill_type FROM orders WHERE order_no=?').get('ZTO9002').waybill_type, '中通快递');
+  db.close();
+});
+
 // ---------- 2. 查询筛选 ----------
 function seed(db) {
   const cid = db.prepare("INSERT INTO customers (company_name) VALUES ('客户A')").run().lastInsertRowid;

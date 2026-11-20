@@ -242,18 +242,22 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   const failures = [];
   const successItems = [];
 
-  // ★ 边界校验（2026-11-20）：导入查重——库内已有同号订单或本批次内重复 → 跳过不插入，
-  //   防止同一文件重复导入造成数据翻倍（work_hours 有查重，orders 此前缺失）
-  const existingNos = new Set(
-    db.prepare('SELECT order_no FROM orders WHERE order_no IS NOT NULL').all().map((r) => r.order_no)
-  );
-  const batchNos = new Set();
-
   // ★ 幂等加列：极旧库尚未跑迁移时，导入前先保证 waybill_type 存在（只加不删）
   try {
     const cols = db.prepare('PRAGMA table_info(orders)').all().map((r) => r.name);
     if (!cols.includes('waybill_type')) db.exec('ALTER TABLE orders ADD COLUMN waybill_type TEXT');
   } catch (e) { /* ignore */ }
+
+  // ★ 边界校验（2026-11-20）：导入查重——库内已有同号订单或本批次内重复 → 跳过不插入，
+  //   防止同一文件重复导入造成数据翻倍（work_hours 有查重，orders 此前缺失）
+  //   ★ 2026-11-20 增强：库内已有单但 waybill_type 为空、本次能解析出面单类型时 → 仅补全该字段
+  //     （历史导入缺列，重新导入原文件即可回填统计维度，不触碰其他任何列）
+  const existingMap = new Map(
+    db.prepare('SELECT order_no, waybill_type FROM orders WHERE order_no IS NOT NULL').all()
+      .map((r) => [r.order_no, r.waybill_type])
+  );
+  const batchNos = new Set();
+  const backfillItems = [];
 
   // ★ 电子面单类型解析器（一次读取映射，循环内复用；编码 STO→申通快递，未知原样保留）
   const resolveWaybill = expressMap.createResolver(db);
@@ -280,7 +284,14 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     const toDistrict = String(pick(row, 'to_district') ?? '').trim();
 
     // ★ 导入查重：单号已在库 / 本批次已出现 → 跳过（在客户解析前拦截，避免无谓建客户）
-    if (orderNo && (existingNos.has(orderNo) || batchNos.has(orderNo))) {
+    if (orderNo && (existingMap.has(orderNo) || batchNos.has(orderNo))) {
+      // 库内已有且面单类型为空、本次能解析出类型 → 仅回填该列（历史数据补维度）
+      const curType = existingMap.get(orderNo);
+      if (waybillType && (!curType || !String(curType).trim())) {
+        backfillItems.push({ excelRow, orderNo, waybillType });
+        existingMap.set(orderNo, waybillType);
+        return;
+      }
       return failures.push({ row: excelRow, orderNo, reason: '快递单号已存在，跳过（防重复导入）' });
     }
     if (orderNo) batchNos.add(orderNo);
@@ -338,6 +349,11 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   const invStmt = db.prepare(
     "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
   );
+  // 面单类型回填：仅更新 waybill_type 列为空的行（不触碰其他列）
+  const backfillStmt = db.prepare(
+    "UPDATE orders SET waybill_type=? WHERE order_no=? AND (waybill_type IS NULL OR TRIM(waybill_type)='')"
+  );
+  let backfilled = 0;
   db.exec('BEGIN');
   for (const it of successItems) {
     try {
@@ -354,7 +370,15 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
       failures.push({ row: it.excelRow, reason: '写入失败: ' + e.message });
     }
   }
-  if (success > 0) db.exec('COMMIT'); else db.exec('ROLLBACK');
+  for (const it of backfillItems) {
+    try {
+      const info = backfillStmt.run(it.waybillType, it.orderNo);
+      if (info.changes > 0) backfilled++;
+    } catch (e) {
+      failures.push({ row: it.excelRow, orderNo: it.orderNo, reason: '面单类型回填失败: ' + e.message });
+    }
+  }
+  if (success > 0 || backfilled > 0) db.exec('COMMIT'); else db.exec('ROLLBACK');
 
   // 批次审计
   auditLog.writeLog(req, {
@@ -362,11 +386,11 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     targetId: 'import:' + (platform || '通用') + ':' + (req.file?.originalname || 'orders.xlsx'),
     content: {
       platform, file: req.file?.originalname || '',
-      success, failed: failures.length, failures: failures.slice(0, 50),
+      success, backfilled, failed: failures.length, failures: failures.slice(0, 50),
     },
   });
 
-  return { success, failed: failures.length, failures };
+  return { success, backfilled, failed: failures.length, failures };
 }
 
 module.exports = {

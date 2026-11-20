@@ -349,7 +349,7 @@
       // 逐个提交，汇总结果
       const total = _selectedFiles.length;
       let doneCount = 0;
-      let allSuccess = 0, allFailed = 0;
+      let allSuccess = 0, allFailed = 0, allBackfilled = 0;
       const allFailures = [];
       const perFileResults = [];
 
@@ -364,8 +364,9 @@
           const data = await API.upload('/orders/import', fd);
           allSuccess += (data.success || 0);
           allFailed += (data.failed || 0);
+          allBackfilled += (data.backfilled || 0);
           (data.failures || []).forEach((ff) => allFailures.push({ ...ff, _file: f.name }));
-          perFileResults.push({ file: f.name, ok: true, success: data.success || 0, failed: data.failed || 0 });
+          perFileResults.push({ file: f.name, ok: true, success: data.success || 0, backfilled: data.backfilled || 0, failed: data.failed || 0 });
         } catch (e) {
           allFailures.push({ row: '-', reason: e.message, data: '', _file: f.name });
           perFileResults.push({ file: f.name, ok: false, error: e.message });
@@ -384,11 +385,11 @@
       result.innerHTML = `
         <div style="padding:14px;border-radius:4px;border-left:3px solid ${hasErr || allFailed ? '#e6a23c' : '#67c23a'};background:${hasErr || allFailed ? '#fdf6ec' : '#f0f9eb'};">
           <b style="color:${hasErr || allFailed ? '#e6a23c' : '#67c23a'};font-size:15px;">导入完成</b>
-          <div style="margin-top:8px;font-size:14px;color:#606266;">✅ 成功 <b style="color:#67c23a;">${allSuccess}</b> 行${allFailed ? ` · ❌ 校验失败 <b style="color:#f56c6c;">${allFailed}</b> 行` : ''}${hasErr ? ` · ⚠️ 请求失败 <b style="color:#f56c6c;">${perFileResults.filter(r=>!r.ok).length}</b> 个文件` : ''}</div>
+          <div style="margin-top:8px;font-size:14px;color:#606266;">✅ 成功 <b style="color:#67c23a;">${allSuccess}</b> 行${allBackfilled ? ` · 🔄 补全面单类型 <b style="color:#409eff;">${allBackfilled}</b> 行` : ''}${allFailed ? ` · ❌ 校验失败 <b style="color:#f56c6c;">${allFailed}</b> 行` : ''}${hasErr ? ` · ⚠️ 请求失败 <b style="color:#f56c6c;">${perFileResults.filter(r=>!r.ok).length}</b> 个文件` : ''}</div>
           <details style="margin-top:10px;"><summary style="cursor:pointer;color:#409eff;font-size:13px;">查看各文件导入结果</summary>
             <div style="margin-top:8px;max-height:200px;overflow:auto;font-size:13px;">
               ${perFileResults.map((r) => r.ok
-                ? `<div>📄 ${escapeHtml(r.file)} — ✅ ${r.success} 行${r.failed ? ` / ❌ ${r.failed} 行` : ''}</div>`
+                ? `<div>📄 ${escapeHtml(r.file)} — ✅ ${r.success} 行${r.backfilled ? ` / 🔄 补全 ${r.backfilled} 行` : ''}${r.failed ? ` / ❌ ${r.failed} 行` : ''}</div>`
                 : `<div>📄 ${escapeHtml(r.file)} — ❌ ${escapeHtml(r.error)}</div>`
               ).join('')}
             </div>
