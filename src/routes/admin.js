@@ -381,6 +381,36 @@ router.delete('/business-data', (req, res) => {
   res.json({ ok: true, before, after });
 });
 
+// ---------- DELETE /api/admin/imported-orders ----------
+// ⚠️ 清空订单导入业务数据：orders 全表 + inventory_transactions 中挂在订单上的自动出库流水。
+//    仅删有 order_id 关联的流水，历史遗留无关联流水不受影响；客户资料/表结构/用户权限全部保留。
+//    （2026-11-20 发货时间修复配套：清掉日期错为导入当天的旧导入数据，供原文件重新导入）
+// 仅限 super_admin，操作写审计日志。body: { confirm: 'YES' }
+router.delete('/imported-orders', (req, res) => {
+  if ((req.body || {}).confirm !== 'YES') {
+    return res.status(400).json({ ok: false, error: '必须传 { confirm: "YES" }' });
+  }
+  const before = {
+    orders: db.prepare('SELECT COUNT(*) c FROM orders').get().c,
+    inventory_transactions: db.prepare('SELECT COUNT(*) c FROM inventory_transactions').get().c,
+  };
+  db._raw.exec('BEGIN');
+  try {
+    db._raw.exec('DELETE FROM inventory_transactions WHERE order_id IN (SELECT order_id FROM orders)');
+    db._raw.exec('DELETE FROM orders');
+    db._raw.exec('COMMIT');
+  } catch (e) {
+    try { db._raw.exec('ROLLBACK'); } catch (_) { /* ignore */ }
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+  const after = {
+    orders: db.prepare('SELECT COUNT(*) c FROM orders').get().c,
+    inventory_transactions: db.prepare('SELECT COUNT(*) c FROM inventory_transactions').get().c,
+  };
+  audit.writeLog(req, { table: 'orders,inventory_transactions', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ before, after }) });
+  res.json({ ok: true, before, after });
+});
+
 // ---------- DELETE /api/admin/backups ----------
 // ⚠️ 清空持久目录 backups/ 下所有快照文件。仅限 super_admin，需 confirm=YES。
 router.delete('/backups', (req, res) => {
