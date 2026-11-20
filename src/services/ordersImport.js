@@ -55,7 +55,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['出库日期', '订单日期', '发货日期', '创建时间'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收货地址', '详细地址', '收货详细地址', '收件地址'],
     receiver_name:  ['收货人', '收件人', '收货客户'],
     receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
@@ -69,7 +69,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['出库日期', '订单日期', '发货日期'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收货地址', '详细地址', '收货详细地址', '收件地址'],
     receiver_name:  ['收货人', '收件人', '收货客户'],
     receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
@@ -83,7 +83,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '下单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -97,7 +97,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
     to_province:    ['收件省份', '省', '省份', '收货省份'],
     to_city:        ['收件城市', '市', '城市', '收货城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址', '地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话', '电话'],
@@ -111,7 +111,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -125,7 +125,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
     to_province:    ['省', '省份', '收件省', '收货省份'],
     to_city:        ['市', '城市', '收件市', '收货城市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -139,7 +139,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -153,7 +153,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
-    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
+    to_district:    ['收件区县', '收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -192,7 +192,10 @@ function normalizeRow(platform, rawRow) {
   const normalized = {};
   for (const [schemaKey, aliases] of Object.entries(map)) {
     if (!aliases) continue;
-    for (const alias of aliases) {
+    // ★ 兜底：平台别名 + 统一模板表头（保证「下载模板→填写→导入」对全部平台永远可用）
+    const unifiedLabel = UNIFIED_COLUMNS[schemaKey];
+    const all = unifiedLabel ? [...aliases, unifiedLabel] : aliases;
+    for (const alias of all) {
       if (rawRow[alias] != null && String(rawRow[alias]).trim() !== '') {
         normalized[schemaKey] = rawRow[alias];
         break;
