@@ -226,8 +226,46 @@ function attachTrend(rows, mode, db) {
   return rows;
 }
 
+// ---------- 缺口（未填报货主）判定口径 ----------
+// 背景（2026-11-20 修复）：缺口行的「判定日期」与「展示日期」此前不一致——
+//   判定按用户筛选期（如按日 2026-11-20），展示却固定为「昨天」（2026-11-19）。
+//   于是 11-19 已归档的数据仍在未归档列表以 11-19 日期出现，用户误以为导入被归到未归档。
+// 统一口径：缺口行展示哪一天，就用哪一天判定是否已填。
+//   单日筛选（dateFrom === dateTo）→ 判定/展示都用该日；need_backfill = 该日早于今天
+//   多日范围 → 沿用「昨天」作为补报建议日；need_backfill = 昨天落在范围内
+function resolveGapScope(dateFrom, dateTo, todayStr) {
+  const today = todayStr || ymd(new Date());
+  const yst = new Date(today + 'T00:00:00');
+  yst.setDate(yst.getDate() - 1);
+  const yesterday = ymd(yst);
+
+  if (dateFrom && dateTo && dateFrom === dateTo) {
+    return { date: dateFrom, need_backfill: dateFrom < today };
+  }
+  const inRange = (!dateFrom || yesterday >= dateFrom) && (!dateTo || yesterday <= dateTo);
+  return { date: yesterday, need_backfill: inRange };
+}
+
+// ---------- 导入重复判定（预览 / 导入共用同一实现） ----------
+// 数值字段统一转 Number 比较：Excel 里 161 与库内 161.0、'161' 必须视为一致，
+// 否则会被误判为「有差异」而触发覆盖写（无谓删除+重插，且审计噪音）。
+function parseNum(v) {
+  if (v == null || v === '') return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function isSameHoursRow(a, b) {
+  const eqText = (x, y) => String(x ?? '').trim() === String(y ?? '').trim();
+  return parseNum(a.ship_orders) === parseNum(b.ship_orders)
+    && eqText(a.unit, b.unit)
+    && parseNum(a.main_hours) === parseNum(b.main_hours)
+    && parseNum(a.other_hours) === parseNum(b.other_hours)
+    && eqText(a.remark ?? '', b.remark ?? '');
+}
+
 module.exports = {
   WAREHOUSES, WORK_TYPES, UNITS, LEGACY_UNITS, PROJECT_OPTIONS,
   TYPE_CONFIG, TYPE_KEY, KEY_LABEL, workTypeKey, configOf,
   calcRow, validateByType, attachTrend, resolveCustomer,
+  resolveGapScope, parseNum, isSameHoursRow,
 };

@@ -794,10 +794,13 @@ function createWorkhoursPage(warehouse) {
         // 规则 2：全部是完全相同的重复，后端会返回 409，前端直接弹 confirmOnly 不发请求
         if (s.rule === 2) {
           close();
+          const dupDates = [...new Set(rows.map((r) => r.date))].sort();
           confirmDialog({
             title: '所有数据均与已归档完全一致',
-            message: fmtMsg() + '<br><br>本次导入未写入任何新数据，请调整 Excel 后重新导入。',
-            okText: '跳过',
+            message: fmtMsg()
+              + `<br><br>数据已归档在 <b>${dupDates.join('、')}</b>，请切换到「已归档」状态并按上述日期筛选查看。`
+              + '<br><br>本次导入未写入任何新数据，请调整 Excel 后重新导入。',
+            okText: '知道了',
             confirmOnly: true,
           });
           return;
@@ -821,11 +824,40 @@ function createWorkhoursPage(warehouse) {
           const fd = new FormData();
           fd.append('file', ctx.file);
           const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
+          const dates = Array.isArray(res.dates) ? res.dates : [];
           let msg = `已归档 ${res.created || 0} 行`;
           if (res.overwritten) msg += `，覆盖 ${res.overwritten} 行`;
           if (res.skip_exact) msg += `，跳过 ${res.skip_exact} 行（与归档完全一致）`;
+          if (res.repaired_duplicates) msg += `，修复重复归档 ${res.repaired_duplicates} 条`;
+          if (dates.length) msg += `（日期 ${dates.join('、')}）`;
           if (res.errors && res.errors.length) msg += `，忽略 ${res.errors.length} 行格式不匹配`;
           toast(msg);
+
+          // ★ 导入成功后引导到「已归档」视图的对应日期：
+          //   导入数据一律落 archived + 文件内日期；若当前筛选的日期/状态不覆盖它，
+          //   用户会误以为「导入的数据跑到未归档/查不到」，因此主动询问是否跳转。
+          const covered = !!(state.dateFrom && state.dateTo && dates.length)
+            && dates.every((d) => d >= state.dateFrom && d <= state.dateTo);
+          if (dates.length && (!covered || state.status !== 'archived')) {
+            const go = await confirmDialog({
+              title: '导入完成',
+              message: `本次数据已归档在 <b>${dates.join('、')}</b>。<br><br>是否切换到「已归档」视图查看？`,
+              okText: '查看已归档',
+              cancelText: '留在当前页',
+            });
+            if (go) {
+              state.status = 'archived';
+              const sf = $('statusFilter'); if (sf) sf.value = 'archived';
+              state.dateMode = 'day';
+              state.dateFrom = dates[0];
+              state.dateTo = dates[dates.length - 1];
+              if (drp) drp.setValue({ mode: 'day', startDate: state.dateFrom, endDate: state.dateTo }, true);
+              syncTabUI();
+              state.page = 1;
+              load();
+              return;
+            }
+          }
           state.page = 1; load();
         } catch (ex) {
           errAlert('导入失败', friendlyErrMsg(ex));

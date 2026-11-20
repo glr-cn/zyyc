@@ -127,15 +127,6 @@ function checkUnique(workType, { warehouse, date, customer_id, customer_name, pr
 }
 
 
-// 补报日期识别：缺口行显示"昨天"并标注 need_backfill（前端渲染红色 [待补]）。
-// ★ 独立于用户查询的日期范围 —— 只要今天 ≤ 今天（永远成立），就返回昨天作为 suggest_date。
-// 这样即使用户按日查询（范围仅今天），缺口行依然正确显示昨天 + 红色 [待补]。
-function resolveBackfillDate() {
-  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const yst = new Date(); yst.setDate(yst.getDate() - 1);
-  return { suggest_date: fmt(yst), need_backfill: true };
-}
-
 // 列表：强制 warehouse + work_type 过滤（防串仓）+ 搜索 + 日期范围 + 分页(20) + 日期倒序
 // status：默认 pending（未归档）；archived 已归档；all 全部（归档中心）
 // 发货 + pending：追加「本仓未填写货主」缺口行（filled=0），供录入人员一眼看到谁没报。
@@ -185,17 +176,17 @@ router.get('/', (req, res) => {
     // 本仓货主：warehouse 精确边界匹配多仓串；排除已删除（软删 is_deleted=1）与停用货主（仅合作中展示缺口）
     const ownerWhere = ["',' || c.warehouse || ',' LIKE ? ESCAPE '\\'", 'c.is_deleted=0', "c.coop_status='合作中'"];
     const ownerParams = [warehouseExactLikeValue(warehouse)];
-    const backfill = resolveBackfillDate(); // ★ 独立于 period：永远返回昨天 + need_backfill=true
+    const gap = svc.resolveGapScope(dateFrom, dateTo); // ★ 缺口判定日与展示日统一（单日=该日，多日=昨天）
     if (custScope.sql) { ownerWhere.push(custScope.sql); ownerParams.push(...custScope.params); }
     if (q) { ownerWhere.push('(COALESCE(NULLIF(c.short_name,\'\'),c.company_name) LIKE ? OR c.company_name LIKE ?)'); const like = `%${q}%`; ownerParams.push(like, like); }
     const ownerWhereSql = ownerWhere.join(' AND ');
 
-    // filled：本期已填的 pending 发货记录（沿用上面的 whereSql，追加本期日期约束）
+    // filled：当前筛选下的 pending 发货记录（沿用上面的 whereSql）
     const filledWhere = whereSql === 'WHERE ' ? '' : whereSql;
     const CUST_STATUS = `CASE WHEN c.is_deleted=1 THEN '已删除' WHEN c.coop_status<>'合作中' THEN '停用' ELSE '启用' END`;
-    // 已填记录口径：仍用 whereSql（含用户显式日期/搜索），但缺口判定统一按 period 本期。
-    // 为保证「本期未填」严格联动 dateFrom/dateTo（默认当月），filled 的日期约束以 period 为准。
-    const periodWhere = 'w.date >= ? AND w.date <= ?';
+    // 缺口判定：与缺口行展示的日期严格一致（gap.date 是单日筛选日或多日下的补报建议日）。
+    // 之前用 period 判定、却展示「昨天」，导致 11-19 已归档的货主仍在未归档列表以 11-19 出现。
+    const periodWhere = 'w.date = ?';
 
     const countSql = `
       SELECT (
@@ -210,9 +201,9 @@ router.get('/', (req, res) => {
            )
       ) AS c`;
     const total = db.prepare(countSql).get(
-      ...params,                       // filled 计数参数
-      ...ownerParams,                  // owners 计数参数
-      warehouse, period.from, period.to // NOT EXISTS 参数
+      ...params,                        // filled 计数参数
+      ...ownerParams,                   // owners 计数参数
+      warehouse, gap.date               // NOT EXISTS 参数
     ).c;
 
     const rows = db.prepare(`
@@ -251,11 +242,11 @@ router.get('/', (req, res) => {
     ).all(
       ...params,                       // ① filled 分支 WHERE 参数（SQL 文本中最先出现）
       warehouse,                       // ② UNION ALL 下半部 SELECT 常量 ? AS warehouse
-      backfill.suggest_date,           // ③ 缺口行 ? AS date（显示用建议日期）
-      backfill.suggest_date,           // ④ 缺口行 ? AS suggest_date
-      backfill.need_backfill ? 1 : 0,  // ⑤ 缺口行 ? AS need_backfill
+      gap.date,                        // ③ 缺口行 ? AS date（判定日即展示日）
+      gap.date,                        // ④ 缺口行 ? AS suggest_date
+      gap.need_backfill ? 1 : 0,       // ⑤ 缺口行 ? AS need_backfill
       ...ownerParams,                  // ⑥ owners 分支 WHERE 参数
-      warehouse, period.from, period.to, // ⑦ NOT EXISTS 参数
+      warehouse, gap.date,             // ⑦ NOT EXISTS 参数（与展示日一致）
       pageSize, (page - 1) * pageSize  // ⑧ LIMIT / OFFSET
     );
 
@@ -892,16 +883,8 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
       ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id`
   );
 
-  // 对比函数：比较导入行 vs 归档行，返回 true 表示完全一致
-  const isExactMatch = (p, existing) => {
-    // 关键业务字段逐一精确比对（全转为字符串 trim 后比较）
-    const eq = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
-    return eq(p.ship_orders, existing.ship_orders)
-      && eq(p.unit, existing.unit)
-      && eq(p.main_hours, existing.main_hours)
-      && eq(p.other_hours || 0, existing.other_hours || 0)
-      && eq(p.remark || '', existing.remark || '');
-  };
+  // 对比函数：比较导入行 vs 归档行，返回 true 表示完全一致（共用 svc 实现，数值按 Number 比较）
+  const isExactMatch = svc.isSameHoursRow;
 
   const rows = parsed.map((p) => {
     const existingAll = findAll.all(warehouse, p.customer_id, p.date);
@@ -957,14 +940,7 @@ router.post('/import', upload.single('file'), (req, res) => {
       WHERE warehouse = ? AND work_type='发货' AND customer_id=? AND date=?
       ORDER BY CASE WHEN status='archived' THEN 0 ELSE 1 END, work_id`
   );
-  const isExactMatch = (p, existing) => {
-    const eq = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
-    return eq(p.ship_orders, existing.ship_orders)
-      && eq(p.unit, existing.unit)
-      && eq(p.main_hours, existing.main_hours)
-      && eq(p.other_hours || 0, existing.other_hours || 0)
-      && eq(p.remark || '', existing.remark || '');
-  };
+  const isExactMatch = svc.isSameHoursRow;   // 与 /import/preview 共用同一实现
 
   const ACTIONS = new Map(); // line → 'create' | 'overwrite' | 'skip_exact'
   for (const p of parsed) {
@@ -978,6 +954,8 @@ router.post('/import', upload.single('file'), (req, res) => {
       ACTIONS.set(p.line, {
         action: exact ? 'skip_exact' : 'overwrite',
         existing: arch,
+        // 同维度多条 archived（历史脏数据）→ 覆盖时一并清理，恢复「同日同客户唯一」不变量
+        extras: archived.slice(1).map((r) => r.work_id),
       });
     }
   }
@@ -985,6 +963,10 @@ router.post('/import', upload.single('file'), (req, res) => {
   const createCnt = [...ACTIONS.values()].filter((v) => v.action === 'create').length;
   const skipCnt = [...ACTIONS.values()].filter((v) => v.action === 'skip_exact').length;
   const overwriteCnt = [...ACTIONS.values()].filter((v) => v.action === 'overwrite').length;
+
+  // 本次文件覆盖的日期集合（升序）：用于前端把用户带到「已归档」视图对应日期，
+  // 避免出现「导入成功但当前筛选日期看不到数据」的误解。
+  const fileDates = [...new Set(parsed.map((p) => p.date))].sort();
 
   // ---------- 规则 2：全 skip_exact → 终止导入，不启动事务 ----------
   if (overwriteCnt === 0 && createCnt === 0 && skipCnt > 0) {
@@ -997,17 +979,19 @@ router.post('/import', upload.single('file'), (req, res) => {
       code: 'IMPORT_ALL_EXACT_MATCH',
       skipCount: skipCnt,
       detail: sampleRows,
+      dates: fileDates,
+      hint: `这些数据已归档在 ${fileDates.join('、')}，请在「状态=已归档」并按上述日期筛选查看。`,
     });
   }
 
   // ---------- 规则 1/3/4：启动事务执行 ----------
   const submitter = operatorName(req);
-  let created = 0, overwritten = 0, skippedExact = 0;
+  let created = 0, overwritten = 0, skippedExact = 0, repairedDuplicates = 0;
   const log = [];
   db.exec('BEGIN');
   try {
     for (const p of parsed) {
-      const { action, existing } = ACTIONS.get(p.line);
+      const { action, existing, extras } = ACTIONS.get(p.line);
 
       if (action === 'skip_exact') {
         skippedExact++;
@@ -1019,6 +1003,16 @@ router.post('/import', upload.single('file'), (req, res) => {
         // DELETE 旧行（先深拷贝 old blob 用于审计）
         const oldRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(existing.work_id);
         db.prepare('DELETE FROM work_hours WHERE work_id=?').run(existing.work_id);
+        // 一致性修复：同维度多余归档行一并清理（业务不变量：同仓+同日+同客户仅一条 archived）
+        for (const dupId of (extras || [])) {
+          const dupRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(dupId);
+          if (!dupRow) continue;
+          db.prepare('DELETE FROM work_hours WHERE work_id=?').run(dupId);
+          writeAudit(req, 'force_archive_overwrite', dupId, dupRow, JSON.stringify({
+            note: '同维度重复归档清理（导入覆盖时修复）', kept_work_id: existing.work_id,
+          }));
+          repairedDuplicates++;
+        }
         const r = {
           warehouse, work_type: '发货', customer_id: p.customer_id, customer_name: p.customer_name,
           unit: p.unit, date: p.date, ship_orders: p.ship_orders,
@@ -1059,6 +1053,18 @@ router.post('/import', upload.single('file'), (req, res) => {
       created++;
       log.push({ line: p.line, action: 'create', work_id: Number(info.lastInsertRowid) });
     }
+    // 边界校验（事务内，失败即整体回滚）：本次写入的每一行必须已归档且带提交时间，
+    // 杜绝「写入成功但状态仍是 pending」造成的数据去向不明。
+    const writtenIds = log
+      .map((l) => l.work_id || l.new_work_id)
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (writtenIds.length) {
+      const holders = writtenIds.map(() => '?').join(',');
+      const bad = db.prepare(
+        `SELECT COUNT(*) c FROM work_hours WHERE work_id IN (${holders}) AND (status<>'archived' OR submit_time IS NULL)`
+      ).get(...writtenIds).c;
+      if (bad > 0) throw new Error(`写入后状态校验失败：${bad} 行未正确归档`);
+    }
     db.exec('COMMIT');
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (_) { /* ignore */ }
@@ -1067,9 +1073,15 @@ router.post('/import', upload.single('file'), (req, res) => {
 
   writeAudit(req, 'import', 0, null, {
     warehouse, file: req.file.originalname, created, overwritten, skip_exact: skippedExact,
+    repaired_duplicates: repairedDuplicates, dates: fileDates,
     lines: log, errors,
   });
-  const resp = { created, overwritten, skip_exact: skippedExact, errors, lines: log };
+  const resp = {
+    created, overwritten, skip_exact: skippedExact,
+    repaired_duplicates: repairedDuplicates,
+    dates: fileDates,
+    errors, lines: log,
+  };
   if (skippedExact > 0) {
     resp.warn = `已跳过 ${skippedExact} 行（与已归档数据完全一致，无需重复导入）`;
   }
