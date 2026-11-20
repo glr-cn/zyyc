@@ -381,6 +381,49 @@ router.delete('/business-data', (req, res) => {
   res.json({ ok: true, before, after });
 });
 
+// ---------- POST /api/admin/backfill-waybill ----------
+// 历史订单「电子面单类型」定向回填（2026-11-20）
+// 安全约束：只 UPDATE、绝不 INSERT；只填空值、绝不覆盖已有值；单次 ≤ 20000 条。
+// body: { items: [{ orderNo, waybillType }] }
+router.post('/backfill-waybill', (req, res) => {
+  const items = Array.isArray((req.body || {}).items) ? req.body.items : null;
+  if (!items) return res.status(400).json({ error: 'items 必须为数组' });
+  if (!items.length) return res.json({ received: 0, updated: 0, skipped: 0 });
+  if (items.length > 20000) return res.status(400).json({ error: '单次最多 20000 条，请分批提交' });
+
+  let stmt;
+  try {
+    stmt = db.prepare(
+      "UPDATE orders SET waybill_type=? WHERE order_no=? AND (waybill_type IS NULL OR TRIM(waybill_type)='')"
+    );
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  let updated = 0, skipped = 0, invalid = 0;
+  db.exec('BEGIN');
+  try {
+    for (const it of items) {
+      const no = String((it && it.orderNo) || '').trim();
+      const type = String((it && it.waybillType) || '').trim().slice(0, 40);
+      if (!no || !type) { invalid++; continue; }
+      const r = stmt.run(type, no);
+      if (r.changes > 0) updated++; else skipped++;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (_) { /* ignore */ }
+    return res.status(500).json({ error: e.message });
+  }
+
+  audit.writeLog(req, {
+    table: 'orders', module: '系统管理', action: 'update',
+    targetId: 'backfill_waybill',
+    content: { op: 'backfill_waybill', received: items.length, updated, skipped, invalid },
+  });
+  res.json({ received: items.length, updated, skipped, invalid });
+});
+
 // ---------- DELETE /api/admin/imported-orders ----------
 // ⚠️ 清空订单导入业务数据：orders 全表 + inventory_transactions 中挂在订单上的自动出库流水。
 //    仅删有 order_id 关联的流水，历史遗留无关联流水不受影响；客户资料/表结构/用户权限全部保留。
