@@ -33,25 +33,31 @@ if [ -f "$BUNDLE_BACKUP" ]; then
     cp "$BUNDLE_BACKUP" "$PERSIST_DB"
     echo "[restore] 持久目录初始化为包内备份（之前从未启动成功过）"
   else
-    # 已经有持久库：判断是否为空库
-    EMPTY=$(node -e "
-      const { openDatabase } = require('./src/db/driver');
-      let db;
-      try { db = openDatabase('$PERSIST_DB', { readOnly: true, fileMustExist: true }); }
-      catch (e) { console.log('YES'); process.exit(0); }
-      const tables = new Set(db.prepare(\"SELECT name FROM sqlite_master WHERE type='table'\").all().map(r=>r.name));
-      const biz = ['customers','orders','inventory_transactions','work_hours','logistics_quotes','smart_quote_batches','smart_quote_records'];
-      let total = 0;
-      for (const t of biz) if (tables.has(t)) try { total += db.prepare('SELECT COUNT(*) c FROM ' + JSON.stringify(t)).get().c; } catch (e) {}
-      db.close();
-      console.log(total === 0 ? 'YES' : 'NO');
-    " 2>/dev/null || echo "UNKNOWN")
-    if [ "$EMPTY" = "YES" ]; then
-      cp "$BUNDLE_BACKUP" "$PERSIST_DB"
-      echo "[restore] 检测到持久库为空，已用包内备份覆盖（业务数据已注入）"
-    else
-      echo "[restore] 持久库已有业务数据（判断=$EMPTY），跳过注入"
-    fi
+    # ★ 2026-11-20 加固：逐业务表行数裁决（src/db/restoreGuard.js）
+    #   OK      → 数据完整，跳过注入
+    #   EMPTY   → 业务表全空 → 注入（空库无需留档）
+    #   STALE   → 任一业务表少于备份（部分丢失）→ 先留档原库再注入
+    #   ERROR   → 保守跳过（宁可少恢复，绝不误覆盖现有数据）
+    VERDICT=$(node src/db/restoreGuard.js "$PERSIST_DB" "$BUNDLE_BACKUP" 2>/dev/null || echo "ERROR:script")
+    case "$VERDICT" in
+      OK)
+        echo "[restore] 持久库数据完整（逐表校验通过），跳过注入"
+        ;;
+      EMPTY)
+        cp "$BUNDLE_BACKUP" "$PERSIST_DB"
+        echo "[restore] 检测到持久库为空，已用包内备份覆盖（业务数据已注入）"
+        ;;
+      STALE*)
+        TS=$(date +%Y%m%d%H%M%S)
+        mkdir -p "$PERSIST_DIR/backups"
+        cp "$PERSIST_DB" "$PERSIST_DIR/backups/erp-PRE-RESTORE-$TS.db"
+        cp "$BUNDLE_BACKUP" "$PERSIST_DB"
+        echo "[restore] 判定=STALE（部分表行数少于备份：疑似部分丢失），已恢复；原库留档 backups/erp-PRE-RESTORE-$TS.db"
+        ;;
+      *)
+        echo "[restore] 校验异常（判定=$VERDICT），保守跳过注入（不覆盖现有持久库）"
+        ;;
+    esac
   fi
 else
   echo "[restore] 持久目录或包内备份缺失（dir=$([ -d "$PERSIST_DIR" ] && echo ok || echo miss), backup=$([ -f "$BUNDLE_BACKUP" ] && echo ok || echo miss)），跳过注入"
