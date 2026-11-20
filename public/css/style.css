@@ -776,9 +776,11 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .wh-gap-row.wh-inline-editing { background:#fffdf5; box-shadow:inset 3px 0 0 #e0a800; }
 .wh-inline-date { white-space:nowrap; }
 /* 行内输入控件：宽度 100% 贴合 colgroup 锁定的列宽，绝不撑破表格；placeholder 用浅灰，绝不看起来像已填数据 */
-.wh-cell-num, .wh-cell-txt, .wh-cell-sel { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:3px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); font-size:13px; }
-/* ★ Bug#5 修复：date input 也必须 width:100%，否则收货行内表格日期列错位 */
-.wh-cell-date { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:2px 3px; font-size:13px; }
+.wh-cell-num, .wh-cell-txt, .wh-cell-sel { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:2px 3px; border:1px solid var(--border); border-radius:3px; background:var(--surface); color:var(--text); font-size:13px; height:28px; }
+/* ★ 2026-11-20 彻底修复：date input padding 压缩到 0 1px 让 yyyy-mm-dd 完整显示，
+   因为 input[type=date] 内部渲染日期数字时还需要空间显示日历图标，
+   外部 padding 越大 → 内部可用空间越小 → 数字被截断 */
+.wh-cell-date { box-sizing:border-box; width:100%; max-width:100%; min-width:0; padding:0 1px; font-size:13px; height:28px; }
 
 /* 行内保存/提交错误提示条（替代 alert 弹窗） */
 .row-inline-error {
@@ -795,7 +797,14 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 .wh-cust-sel { padding:4px 6px; }
 /* 发货行内直编表格：固定列宽布局，输入框不再撑破；操作列 sticky 贴右完整显示 */
 .grid.wh-inline-grid { table-layout:fixed; width:100%; min-width:0; }
-.grid.wh-inline-grid th, .grid.wh-inline-grid td { padding:6px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grid.wh-inline-grid th, .grid.wh-inline-grid td { padding:4px 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* ★ 2026-11-20 紧急修复：input/select 所在的 td 不许 overflow:hidden，
+   否则 input[type=date] 内部的 yyyy-mm-dd 数字被裁切（Chrome/Safari 都有这个问题）
+   td 的 overflow:hidden 原本是为了客户名称长文本省略号显示，但 input/select 本身已经是 width:100% block 元素，
+   不会因 overflow:hidden 而受益，反而会被 clip。 */
+.grid.wh-inline-grid td.wh-input-cell,
+.grid.wh-inline-grid td:has(input),
+.grid.wh-inline-grid td:has(select) { overflow:visible; text-overflow:clip; }
 .grid.wh-inline-grid th.ops-head, .grid.wh-inline-grid td.ops {
   position:sticky; right:0; z-index:3; background:var(--panel);
   box-shadow:-2px 0 5px rgba(0,0,0,.06);
@@ -828,7 +837,9 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 
 /* ===== ★ 问题二：行内编辑布局优化 ===== */
 /* 表格横向滚动容器：列宽加大后超宽可滚动，操作列 sticky 固定右侧 */
-.wh-tbl-scroll { overflow-x:hidden; }
+/* ★ 2026-11-20 修复：原来是 overflow-x:hidden，超宽时右侧列被裁掉且无法滚动。
+   改为 auto：固定列宽（日期 170px）得以保留，超出容器时可横向滚动查看。 */
+.wh-tbl-scroll { overflow-x:auto; }
 /* 输入框 border-less：默认无边框透明底，悬停轻边框提示可编辑，聚焦亮蓝边框 */
 /* （wh-cell-invalid 的 !important 标红仍优先生效） */
 .grid.wh-table .wh-cell-num, .grid.wh-table .wh-cell-txt,
@@ -846,6 +857,19 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 }
 /* 行内编辑行更紧凑：降低单元格上下 padding（行高≈32px），垂直居中 */
 .grid.wh-table td { padding:3px 8px; vertical-align:middle; }
+
+/* ★★★ 2026-11-20 日期完整显示最终兜底（优先级高于上面的通用规则） */
+/* 1) 行内直编表格的 td 水平 padding 压到 2px，把空间留给内部输入框 */
+.grid.wh-table.wh-inline-grid th,
+.grid.wh-table.wh-inline-grid td { padding:3px 2px; }
+/* 2) 日期输入框自身 padding 压到 0 2px，日历图标压缩到 14px 并去掉外边距 */
+.grid.wh-table input[type=date].wh-cell-date { padding:0 2px; min-width:128px; }
+.grid.wh-table input[type=date].wh-cell-date::-webkit-datetime-edit { padding:0; }
+.grid.wh-table input[type=date].wh-cell-date::-webkit-calendar-picker-indicator {
+  margin:0; padding:0; width:14px; height:14px; opacity:.65;
+}
+/* 3) 极端窄屏兜底：日期列永远不参与压缩，保证 yyyy-mm-dd 完整 */
+.grid.wh-table.wh-inline-grid td.wh-input-cell:has(input[type=date]) { min-width:150px; }
 /* 操作列固定右侧（sticky）：白底 + 分隔阴影，宽 120px 由 colgroup 控制 */
 .grid.wh-table th:last-child { position:sticky; right:0; z-index:2; background:#f5f7fa; }
 .grid.wh-table td:last-child { position:sticky; right:0; z-index:1; background:#ffffff;

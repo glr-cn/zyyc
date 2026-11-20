@@ -15,9 +15,14 @@ const {
   WMS_PLATFORMS, UNIFIED_COLUMNS,
   processImport,
 } = require('../services/ordersImport');
+const ordersQuery = require('../services/ordersQuery');
+const auditLog = require('../services/auditLog');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const UNITS = ['件', '箱', '托', '公斤'];
+
+// 订单查询模块：确保 to_district 列存在（幂等，先于任何查询/导入）
+ordersQuery.ensureDistrictColumn(db);
 
 // ---------- 模板字段元数据（前端/后端共享） ----------
 const TEMPLATE_FIELDS = [
@@ -264,6 +269,97 @@ router.get('/', (req, res) => {
     .prepare(`SELECT * FROM orders ${w} ORDER BY order_id DESC LIMIT ? OFFSET ?`)
     .all(...params, pageSize, (page - 1) * pageSize);
   res.json({ data: rows, total, page, pageSize });
+});
+
+// ============================================================================
+// 订单查询模块（原地区看板重构，menu_code 仍为 order_dashboard）
+// ----------------------------------------------------------------------------
+// 分层：参数解析在此（路由层），WHERE 构建/查询/导出全部在 services/ordersQuery.js
+// 核心规则：快递单号 q 非空 → 自动忽略日期条件（服务层 buildWhere 统一保证）
+// ============================================================================
+
+// GET /api/orders/query — 分页查询（快递单号/省/市/区县/平台/日期范围）
+router.get('/query', auth, menuGate('order_dashboard'), (req, res) => {
+  const filters = {
+    q: String(req.query.q || '').trim(),
+    province: String(req.query.province || '').trim(),
+    city: String(req.query.city || '').trim(),
+    district: String(req.query.district || '').trim(),
+    platform: String(req.query.platform || '').trim(),
+    start: String(req.query.start || '').trim(),
+    end: String(req.query.end || '').trim(),
+  };
+  const page = Math.max(1, parseInt(req.query.page || '1', 10));
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
+  // 边界防御：日期倒置自动纠正（start > end 时互换），不报错、不空结果
+  if (filters.start && filters.end && filters.start > filters.end) {
+    const t = filters.start; filters.start = filters.end; filters.end = t;
+  }
+  try {
+    const result = ordersQuery.queryPage(db, filters, page, pageSize, ownerScope(req));
+    res.json({ ...result, date_ignored: !!(filters.q && (filters.start || filters.end)) });
+  } catch (e) {
+    res.status(500).json({ error: '查询失败：' + e.message });
+  }
+});
+
+// GET /api/orders/query/facets — 省/市/区县级联下拉数据源
+router.get('/query/facets', auth, menuGate('order_dashboard'), (req, res) => {
+  const province = String(req.query.province || '').trim();
+  const city = String(req.query.city || '').trim();
+  try {
+    if (city) {
+      return res.json({ districts: ordersQuery.facetDistricts(db, province, city) });
+    }
+    if (province) {
+      return res.json({ cities: ordersQuery.facetCities(db, province) });
+    }
+    return res.json({ provinces: ordersQuery.facetProvinces(db) });
+  } catch (e) {
+    res.status(500).json({ error: '获取下拉数据失败：' + e.message });
+  }
+});
+
+// GET /api/orders/query/export — 按当前筛选导出 xlsx（服务端生成，大数据量稳定）
+router.get('/query/export', auth, menuGate('order_dashboard'), (req, res) => {
+  const filters = {
+    q: String(req.query.q || '').trim(),
+    province: String(req.query.province || '').trim(),
+    city: String(req.query.city || '').trim(),
+    district: String(req.query.district || '').trim(),
+    platform: String(req.query.platform || '').trim(),
+    start: String(req.query.start || '').trim(),
+    end: String(req.query.end || '').trim(),
+  };
+  if (filters.start && filters.end && filters.start > filters.end) {
+    const t = filters.start; filters.start = filters.end; filters.end = t;
+  }
+  try {
+    const rows = ordersQuery.queryAll(db, filters, ownerScope(req), 100000);
+    const EXPORT_HEADERS = ['快递单号', '平台', '客户名称', '货主名称', '发货量', '单位', '订单日期', '付款状态', '收件省', '收件市', '收件区县', '地区分类'];
+    const aoa = [EXPORT_HEADERS].concat(rows.map((r) => [
+      r.order_no, r.wms_platform, r.customer_name || '', r.owner_name,
+      r.ship_quantity, r.unit, r.order_date, r.payment_status,
+      r.to_province || '', r.to_city || '', r.to_district || '', r.region_class,
+    ]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 30 }, { wch: 26 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '订单查询导出');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    auditLog.writeLog(req, {
+      table: 'orders', module: '订单查询', action: 'export',
+      targetId: 'orders_query_export',
+      content: { op: 'orders_query_export', rows: rows.length, filters, operator: req.user?.username },
+    });
+    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="orders-query-${ts}.xlsx"`);
+    res.send(buf);
+  } catch (e) {
+    console.error('[orders-query] 导出失败:', e);
+    res.status(500).json({ error: '导出失败：' + e.message });
+  }
 });
 
 // ---------- GET /api/orders/template ----------

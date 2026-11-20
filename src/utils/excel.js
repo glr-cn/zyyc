@@ -67,25 +67,42 @@ function pick(row, key) {
 }
 
 // 返回 YYYY-MM-DD；无法解析返回 null
+// ★ 2026-11-20 修复根因：xlsx cellDates:true 把 Excel 日期序列号转 JS Date 时，
+//   内部有毫秒级溢出（23:59:59.999 → 跨日前一天），导致 getDate() 比实际小 1 天。
+//   三条分支全部走"字符串拆分 / 整数运算"，**彻底避免 Date 时区/精度陷阱**。
 function parseDate(v) {
   if (v == null || v === '') return null;
-  let d;
-  if (v instanceof Date) d = v;
-  else if (typeof v === 'number') {
+
+  // 分支 1: Excel 日期序列号（xlsx.SSF.parse_date_code 已是整数 y/m/d，无精度问题）
+  if (typeof v === 'number' && !isNaN(v)) {
     const dt = xlsx.SSF.parse_date_code(v);
     if (!dt) return null;
-    d = new Date(dt.y, dt.m - 1, dt.d);
-  } else {
-    const s = String(v).trim();
-    if (!s) return null;
-    const iso = s.includes('/') ? s.replace(/\//g, '-') : s;
-    d = new Date(iso);
+    return `${dt.y}-${String(dt.m).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
   }
-  if (isNaN(d.getTime())) return null;
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+
+  // 分支 2: JS Date 对象（xlsx cellDates:true 返回）
+  // 用 Math.round 把毫秒时间戳四舍五入到最近的 UTC 整天，消除 xlsx 溢出 bug
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return null;
+    const days = Math.round(v.getTime() / 86400000);
+    const fixed = new Date(Date.UTC(1970, 0, 1 + days));
+    const y = fixed.getUTCFullYear();
+    const m = String(fixed.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(fixed.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  // 分支 3: 字符串日期（"2026/11/19" 或 "2026-11-19"）
+  // ★ 绝不走 new Date() —— 在 UTC-X 时区服务器上会把 "2026-11-19" 解析为 UTC 时间，
+  //   getDate() 返回前一天。直接正则拆分，原样补零输出。
+  const s = String(v).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  }
+
+  return null;
 }
 
 module.exports = { ALIASES, readRows, pick, parseDate };

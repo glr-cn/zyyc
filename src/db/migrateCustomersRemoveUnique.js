@@ -80,6 +80,28 @@ function run(db, { verbose = false } = {}) {
     throw new Error('customers 表不存在，请先执行 schema.sql 初始化数据库');
   }
 
+  // ★ 2026-11-20 紧急修复：_bak 表残留自动恢复
+  // 场景：某次迁移执行了 RENAME → customers_bak 有数据，但后续 markApplied 之前进程崩溃，
+  // 或 customers_new 数据拷贝失败就执行了 RENAME，导致 customers（来自 customers_new）是空的。
+  // 下次启动时 fingerprint 已标记迁移"完成"，但 customers 实际是空的！
+  // 解决：只要发现 customers 全空但 customers_bak 有数据，立刻从 bak 恢复。
+  if (tableExists(db, 'customers_bak')) {
+    const curCount = db.prepare('SELECT COUNT(*) c FROM customers').get().c;
+    const bakCount = db.prepare('SELECT COUNT(*) c FROM customers_bak').get().c;
+    if (curCount === 0 && bakCount > 0) {
+      console.warn(`[customers-unique-migrate] ⚠️ 检测到 customers 空但 customers_bak 有 ${bakCount} 行！自动恢复…`);
+      const columns = db.prepare("PRAGMA table_info(customers)").all().map(c => c.name);
+      const colList = columns.join(', ');
+      const placeholders = columns.map(() => '?').join(', ');
+      const stmt = db.prepare(`INSERT INTO customers (${colList}) VALUES (${placeholders})`);
+      const insertMany = db.transaction(rows => rows.forEach(r => stmt.run(...columns.map(c => r[c]))));
+      const bakData = db.prepare(`SELECT ${colList} FROM customers_bak`).all();
+      insertMany(bakData);
+      const after = db.prepare('SELECT COUNT(*) c FROM customers').get().c;
+      console.warn(`[customers-unique-migrate] ✅ 从 customers_bak 恢复 ${bakData.length} → customers 现在 ${after} 行`);
+    }
+  }
+
   if (isApplied(db)) {
     log('已迁移过，跳过');
     return { skipped: true, reason: 'fingerprint' };

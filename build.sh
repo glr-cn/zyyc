@@ -24,9 +24,17 @@ cp -R public dist/public
 cp -R node_modules dist/node_modules
 
 # 恢复备份（若存在）：打进 dist/data/，run.sh 启动时注入持久目录
+# ★ 2026-11-20 数据丢失事故根因：平台每次发布都是全新临时存储，
+#   $HOME/.wbapp-erp-data 不跨发布保留；唯一的数据通道就是这份包内恢复包。
+#   缺少它 → 新实例空库 → 客户资料/工时全部"消失"。
 if [ -f data/erp.restore-from-local.db ]; then
   mkdir -p dist/data
   cp data/erp.restore-from-local.db dist/data/
+  echo "[build] ✅ 已打入线上数据恢复包 data/erp.restore-from-local.db"
+else
+  echo "[build] ⚠️ 警告：发布包内没有 data/erp.restore-from-local.db"
+  echo "[build] ⚠️ 部署后新实例将是空库（平台每次发布都是全新临时存储）"
+  echo "[build] ⚠️ 发布前请先执行：node scripts/prepublish-export.js"
 fi
 
 chmod 755 dist/run.sh

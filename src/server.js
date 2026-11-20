@@ -456,6 +456,18 @@ if (require.main === module) {
     // ★ 异步跑 migration：TraeSite 启动超时 30 秒，同步 migration 在 WASM 驱动下 20+ 秒会超时。
     // 端口先 listen → 健康检查通过 → migration 在后台继续跑（幂等，用户首次请求时表结构已就绪）。
     setImmediate(() => {
+      // ★ 2026-11-20 紧急加固：在跑迁移脚本之前，先检查 _bak 表残留并自动恢复
+      // （迁移 ALTER TABLE RENAME 的中间态残留 → customers 空但 customers_bak 有数据）
+      try {
+        const { restoreFromBakTables } = require('./db/dbPath');
+        const bakResult = restoreFromBakTables(db);
+        if (bakResult.restored.length > 0) {
+          console.warn(`[bak-restore] 启动时自动恢复了 ${bakResult.restored.length} 个表：`, bakResult.restored.join(', '));
+        }
+      } catch (e) {
+        console.warn('[bak-restore] 执行异常（不阻断启动）:', e.message);
+      }
+
       const t0 = Date.now();
       db.runMigrations();
       console.log(`[db-migrate] ✅ 后台迁移完成（耗时 ${Date.now() - t0}ms）`);

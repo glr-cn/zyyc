@@ -75,6 +75,22 @@ function run(db, { verbose = false } = {}) {
   // 前置防御：如果表已不含 FK（上次重建成功但 fingerprint 未写入），
   // 直接标记已应用并跳过。用 PRAGMA foreign_key_list 检测（比正则更准，
   // 因为 FK 指向 customers_bak 时 /REFERENCES\s+customers/ 匹配不到）。
+
+  // ★ 2026-11-20 紧急加固：如果 warehouse_sort_config 主表空但 _bak 有数据，
+  // 说明上次 RENAME 后没数据拷贝就崩了（和 customers_remove_unique 同根因），
+  // 先从 _bak 全量恢复再继续后续逻辑。
+  const _bakExists = tableExists(db, 'warehouse_sort_config_bak');
+  if (_bakExists) {
+    const _curCount = db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c;
+    const _bakCount = db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config_bak').get().c;
+    if (_curCount === 0 && _bakCount > 0) {
+      console.warn(`[wsc-fk-migrate] ⚠️ warehouse_sort_config 空但 _bak 有 ${_bakCount} 行！自动恢复…`);
+      db.exec('INSERT INTO warehouse_sort_config SELECT * FROM warehouse_sort_config_bak');
+      const _after = db.prepare('SELECT COUNT(*) c FROM warehouse_sort_config').get().c;
+      console.warn(`[wsc-fk-migrate] ✅ 从 _bak 恢复 ${_bakCount} → 现在 ${_after} 行`);
+    }
+  }
+
   const currentFKs = db.prepare('PRAGMA foreign_key_list(warehouse_sort_config)').all();
   if (currentFKs.length === 0) {
     log('表已不含 FK（上次重建成功），直接标记');

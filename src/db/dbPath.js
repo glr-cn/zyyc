@@ -279,6 +279,80 @@ function autoRestoreIfEmpty(dbPath, db) {
   }
 }
 
+/**
+ * 通用 _bak 表残留自动恢复（2026-11-20 紧急加固）
+ *
+ * 根因：迁移脚本用 ALTER TABLE ... RENAME TO ..._bak 做原子重建，
+ *       如果迁移执行到 RENAME 后、markApplied 前进程崩溃，
+ *       或 customers_new 数据拷贝是空的（schema 变更丢失了数据），
+ *       会出现「主表空但 _bak 有数据」的悬空状态。
+ *
+ * 本函数在 openDatabase 后、迁移脚本执行前被调用，
+ * 扫描所有 BUSINESS_TABLES，只要发现主表 0 行且 _bak 表有数据，就自动恢复。
+ * 幂等：恢复后 _bak 表保留（留证据 + 下次还能兜底）。
+ *
+ * @param {object} db 已打开的数据库句柄
+ * @returns {{restored:string[], skipped:string[]}}
+ */
+function restoreFromBakTables(db) {
+  const restored = [];
+  const skipped = [];
+
+  // business_tables 里的表，各自对应一个 _bak 备份表（如果迁移执行过的话）
+  const BAK_CANDIDATES = [
+    'customers',
+    'warehouse_sort_config',
+    'orders',
+    'inventory_transactions',
+    'logistics_quotes',
+    'work_hours',
+    'smart_quote_batches',
+    'smart_quote_records',
+  ];
+
+  for (const table of BAK_CANDIDATES) {
+    const bakTable = `${table}_bak`;
+
+    // 两张表都必须存在
+    const tables = new Set(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name)
+    );
+    if (!tables.has(table) || !tables.has(bakTable)) continue;
+
+    const curCount = db.prepare(`SELECT COUNT(*) c FROM "${table}"`).get().c;
+    const bakCount = db.prepare(`SELECT COUNT(*) c FROM "${bakTable}"`).get().c;
+
+    if (curCount > 0 || bakCount === 0) {
+      skipped.push(`${table} (cur=${curCount}, bak=${bakCount})`);
+      continue;
+    }
+
+    // 主表空 + _bak 有数据 → 全量恢复
+    try {
+      const columns = db.prepare(`PRAGMA table_info("${table}")`).all().map(c => c.name);
+      // 确保 bak 表有同样的列
+      const bakCols = new Set(
+        db.prepare(`PRAGMA table_info("${bakTable}")`).all().map(c => c.name)
+      );
+      const usableCols = columns.filter(c => bakCols.has(c));
+      if (usableCols.length === 0) {
+        console.warn(`[bak-restore] ${table} 和 ${bakTable} 无公共列，跳过`);
+        continue;
+      }
+
+      const colList = usableCols.map(c => `"${c}"`).join(', ');
+      const stmt = db.prepare(`INSERT INTO "${table}" (${colList}) SELECT ${colList} FROM "${bakTable}"`);
+      const info = stmt.run();
+      restored.push(`${table} ← ${bakTable} (${info.changes} 行)`);
+      console.warn(`[bak-restore] ✅ 从 ${bakTable} 恢复 ${info.changes} 行 → ${table}`);
+    } catch (e) {
+      console.warn(`[bak-restore] ❌ ${table} 恢复失败: ${e.message}`);
+    }
+  }
+
+  return { restored, skipped };
+}
+
 module.exports = {
   BUSINESS_TABLES,
   BACKUP_SUFFIXES,
@@ -291,4 +365,5 @@ module.exports = {
   isEmptyBusinessDb,
   findRestoreCandidate,
   autoRestoreIfEmpty,
+  restoreFromBakTables,
 };

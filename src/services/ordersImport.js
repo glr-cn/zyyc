@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // ordersImport.js · 订单导入后端核心服务
 // ----------------------------------------------------------------------------
 // 职责：
@@ -14,6 +14,12 @@
 const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
 const auditLog = require('./auditLog');
+
+// ★ 本地今天（不受时区影响）—— 替代 new Date().toISOString().slice(0,10) 取 UTC 日期
+function localToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 // ----------------------------------------------------------------------------
 // 1. 统一 Schema · 8 平台列名映射表
@@ -32,6 +38,7 @@ const UNIFIED_COLUMNS = {
   receiver_phone: '收件电话',
   to_province:    '收件省',
   to_city:        '收件市',
+  to_district:    '收件区县',
   to_address:     '收件详细地址',
 };
 
@@ -48,6 +55,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['出库日期', '订单日期', '发货日期', '创建时间'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收货地址', '详细地址', '收货详细地址', '收件地址'],
     receiver_name:  ['收货人', '收件人', '收货客户'],
     receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
@@ -61,6 +69,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['出库日期', '订单日期', '发货日期'],
     to_province:    ['收货省份', '省', '收货省', '收件省份'],
     to_city:        ['收货城市', '市', '收货市', '收件城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收货地址', '详细地址', '收货详细地址', '收件地址'],
     receiver_name:  ['收货人', '收件人', '收货客户'],
     receiver_phone: ['收货电话', '收件电话', '电话', '联系电话'],
@@ -74,6 +83,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '下单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -87,6 +97,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
     to_province:    ['收件省份', '省', '省份', '收货省份'],
     to_city:        ['收件城市', '市', '城市', '收货城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址', '地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话', '电话'],
@@ -100,6 +111,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期'],
     to_province:    ['收件省份', '省', '收货省份'],
     to_city:        ['收件城市', '市', '收货城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['收件地址', '详细地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -113,6 +125,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['发货日期', '出库日期', '订单日期', '打印时间'],
     to_province:    ['省', '省份', '收件省', '收货省份'],
     to_city:        ['市', '城市', '收件市', '收货城市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址', '收货地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -126,6 +139,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -139,6 +153,7 @@ const PLATFORM_COL_MAP = {
     order_date:     ['打印时间', '发货时间', '下单时间', '订单日期', '获取时间'],
     to_province:    ['省', '省份', '收件省'],
     to_city:        ['市', '城市', '收件市'],
+    to_district:    ['收货区', '收件区', '区县', '县', '镇', '区'],
     to_address:     ['详细地址', '地址', '收件地址'],
     receiver_name:  ['收件人', '收货人'],
     receiver_phone: ['收件电话', '收货电话', '联系电话'],
@@ -216,6 +231,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     // 收件地址（地区分类依据）
     const toProvince = String(pick(row, 'to_province') ?? '').trim();
     const toCity = String(pick(row, 'to_city') ?? '').trim();
+    const toDistrict = String(pick(row, 'to_district') ?? '').trim();
 
     if (!customerName) return failures.push({ row: excelRow, reason: '客户名称为空' });
 
@@ -231,7 +247,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
         try {
           const info = db.prepare(
             'INSERT INTO customers (company_name,short_name,coop_status,created_at) VALUES (?,?,?,?)'
-          ).run(customerName, customerName, '合作中', new Date().toISOString().slice(0, 10));
+          ).run(customerName, customerName, '合作中', localToday());
           customer = { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id };
           autoCustCache.set(customerName, { customer_id: info.lastInsertRowid, owner_user_id: req.user.user_id });
         } catch (e) {
@@ -248,7 +264,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     if (qtyRaw === '' || qtyRaw == null || isNaN(qty) || qty <= 0) { qty = 1; }
     const finalUnit = unit || '件';
     let date = parseDate(dateRaw);
-    if (!date) date = new Date().toISOString().slice(0, 10);
+    if (!date) date = localToday();
 
     // 地区分类（就写 orders.region_class，不上报给前端）
     const regionClass = classifyRegion(db, toProvince, toCity);
@@ -256,7 +272,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     successItems.push({
       excelRow, customerName, ownerName: finalOwner, orderNo,
       qty: round3(qty), unit: finalUnit, date, paymentStatus,
-      toProvince: toProvince || null, toCity: toCity || null,
+      toProvince: toProvince || null, toCity: toCity || null, toDistrict: toDistrict || null,
       regionClass, customer,
     });
   });
@@ -264,7 +280,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   // 批量事务
   let success = 0;
   const orderStmt = db.prepare(
-    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id,wms_platform,to_province,to_city,region_class) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
+    'INSERT INTO orders (order_no,customer_id,owner_name,ship_quantity,unit,order_date,payment_status,owner_user_id,wms_platform,to_province,to_city,to_district,region_class) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
   );
   const invStmt = db.prepare(
     "INSERT INTO inventory_transactions (order_id,owner_name,quantity,direction,reference_type,business_date,remark) VALUES (?,?,?,'out','sale',?,?)"
@@ -276,7 +292,7 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
         it.orderNo || 'ORD' + Date.now() + Math.floor(Math.random() * 1000),
         it.customer.customer_id, it.ownerName, it.qty, it.unit, it.date,
         it.paymentStatus, it.customer.owner_user_id,
-        platform || '未知', it.toProvince, it.toCity, it.regionClass,
+        platform || '未知', it.toProvince, it.toCity, it.toDistrict, it.regionClass,
       );
       invStmt.run(info.lastInsertRowid, it.ownerName, it.qty, it.date, '订单导入自动出库');
       success++;

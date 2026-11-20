@@ -66,7 +66,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=11';  // 2026-11-20 bump → 强制刷新（无感更新：启动重试 + 网络重试 + 401 降级）
+  const BUILD_VERSION = 'v=18';  // 2026-11-20 → 地区看板重构为「订单查询」主模块（快递单号/省市区/日期多维检索 + 服务端导出）
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

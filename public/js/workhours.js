@@ -1,4 +1,4 @@
-// 工时管理页（按仓库拆分）：每个仓库一个独立页面实例
+﻿// 工时管理页（按仓库拆分）：每个仓库一个独立页面实例
 // - 仓库不再由页内 Tabs 切换，而是由左侧菜单「工时 → 录入 → 各仓工时管理」路由锁定
 // - 页面内保留 发货/收货/库内/后勤 四个业务类型 Tabs
 // - 新增一律为表格行内直编（无新增弹窗）；弹窗仅用于已归档记录修改/查看；归属仓库由页面路由锁定
@@ -939,17 +939,21 @@ function createWorkhoursPage(warehouse) {
       }
 
     // 行内直编的列宽（px）：table-layout:fixed + colgroup 锁死，输入框 width:100% 贴合列宽
-    // ★ 问题二（布局）：客户 200 / 备注 150 / 操作 120 —— 输入控件不再拥挤；操作列固定右侧（sticky）
-    // 日期列 124：110px 时日期框最后一位会被日历图标遮挡（2026/11/18 → 2026/11/1□）
-    // 发货：勾选34 / 日期124 / 客户200 / 单位62 / 单量80 / 主工时78 / 时效72 / 其他工时84 / 备注150 / 提交人72 / 操作140
-    // 收货：日期124 / 客户200 / 箱数80 / 吨72 / 方72 / 托盘80 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作140（无勾选列）
-    // 库内：日期124 / 项目200 / 作业量80 / 单位62 / 主工时78 / 其他工时84 / 备注150 / 提交人72 / 操作140
-    // 后勤：日期124 / 项目200 / 主工时78 / 其他工时84 / 备注150 / 总工时96 / 提交人72 / 操作140
+    // ★★★ 2026-11-20 根因修复：本数组 **不含勾选列**，勾选列宽度由 renderHead() 按需前置拼装。
+    //   历史 bug：数组里写死了勾选列（只有发货有），导致超管在所有类型都出现勾选列时
+    //   widths.length !== needCols → 一致性校验失败 → colgroup 被清空 → 退回浏览器自动均分列宽
+    //   → 日期列被压到 ~110px → input[type=date] 的 yyyy-mm-dd 末位被日历图标挤掉（显示 2026/11/2◢）。
+    // 顺序与 COLUMNS 严格一致：日期 → [客户/项目] → 数值 → 备注 → 提交人 → 操作
+    const CK_COL_WIDTH = 34;   // 勾选列固定宽度
     const INLINE_WIDTHS = {
-      发货: [34, 124, 200, 62, 80, 78, 72, 84, 150, 72, 140],
-      收货: [124, 200, 80, 72, 72, 80, 78, 84, 150, 72, 140],
-      库内: [124, 200, 80, 62, 78, 84, 150, 72, 140],
-      后勤: [124, 200, 78, 84, 150, 96, 72, 140],
+      // 日期170 客户190 单位46 单量58 主工时62 时效56 其他62 备注100 提交人46 操作132
+      发货: [170, 190, 46, 58, 62, 56, 62, 100, 46, 132],
+      // 日期170 客户185 箱数56 吨46 方46 托盘52 主工时62 其他62 备注100 提交人46 操作132
+      收货: [170, 185, 56, 46, 46, 52, 62, 62, 100, 46, 132],
+      // 日期170 项目190 作业量62 单位46 主工时62 其他62 备注100 提交人46 操作132
+      库内: [170, 190, 62, 46, 62, 62, 100, 46, 132],
+      // 日期170 项目190 主工时62 其他62 备注100 总工时62 提交人46 操作132
+      后勤: [170, 190, 62, 62, 100, 62, 46, 132],
     };
 
     function renderHead() {
@@ -967,12 +971,17 @@ function createWorkhoursPage(warehouse) {
       if (cg) {
         // ★ 列数一致性保护：colgroup 宽度项必须与「数据列 + 勾选列 + 操作列」完全一致，
         //   否则多出的 <col> 会撑出一个空表头列（历史错位问题的根因）。不一致直接退回自动布局。
+        // ★ 2026-11-20 修复：INLINE_WIDTHS 不含勾选列，这里按 showCkCol 动态前置 CK_COL_WIDTH，
+        //   保证超管（任意类型都有勾选列）也能命中固定列宽，日期列不会被压窄。
         const ckCols = showCkCol ? 1 : 0;
-        const needCols = cols.length + ckCols + 1;
-        const widths = INLINE_WIDTHS[state.workType];
-        cg.innerHTML = (inline && widths && widths.length === needCols)
-          ? widths.map((w) => `<col style="width:${w}px">`).join('')
-          : '';
+        const base = INLINE_WIDTHS[state.workType];
+        const okLen = base && base.length === cols.length + 1; // 数据列 + 操作列
+        if (inline && okLen) {
+          const widths = (ckCols ? [CK_COL_WIDTH] : []).concat(base);
+          cg.innerHTML = widths.map((w) => `<col style="width:${w}px">`).join('');
+        } else {
+          cg.innerHTML = '';
+        }
       }
       // ★ 必填项星号（三个类型各自的必填列）
       const REQ_MAP = {
@@ -1077,7 +1086,7 @@ function createWorkhoursPage(warehouse) {
             const d = r.date || todayStr();
             // 收货/库内/后勤 日期都是必填；发货也用必填提示（发货必填由后端保证：ship/main/remark 至少一项）
             const ph = '* 日期（必填）';
-            return `<td><input data-if="date" type="date" class="wh-cell-date" value="${escapeAttr(d)}" placeholder="${escapeAttr(ph)}" data-ph="${escapeAttr(ph)}"></td>`;
+            return `<td class="wh-input-cell"><input data-if="date" type="date" class="wh-cell-date" value="${escapeAttr(d)}" placeholder="${escapeAttr(ph)}" data-ph="${escapeAttr(ph)}"></td>`;
           }
           // —— 客户名：
           //   发货：缺口行(wid=0)只读显示（系统自动带出的货主，客户关联不可改）；
@@ -1131,30 +1140,30 @@ function createWorkhoursPage(warehouse) {
           // —— 单位（发货/收货/库内）：下拉；后勤没有此列
           if (col.key === 'unit') {
             const defUnit = state.workType === '发货' ? (r.unit || r.default_unit || '单') : (r.unit || '单');
-            return `<td><select data-if="unit" class="wh-cell-sel">${unitOptions(defUnit)}</select></td>`;
+            return `<td class="wh-input-cell"><select data-if="unit" class="wh-cell-sel">${unitOptions(defUnit)}</select></td>`;
           }
           // —— 库内「作业量」：数字输入（可空；填了必须 >= 0，后端同步校验）
           if (col.key === 'workload') {
-            return `<td><input data-if="workload" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.workload)}" placeholder="作业量"></td>`;
+            return `<td class="wh-input-cell"><input data-if="workload" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.workload)}" placeholder="作业量"></td>`;
           }
           // —— 发货/收货/库内/后勤：工时通用数字框；主工时对库内/后勤也是必填（与收货口径一致）
           if (col.key === 'main_hours')  {
             const ph = state.workType === '发货' ? '请输入主工时' : '* 主工时（必填）';
-            return `<td><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="${escapeAttr(ph)}"></td>`;
+            return `<td class="wh-input-cell"><input data-if="main_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.main_hours)}" placeholder="${escapeAttr(ph)}"></td>`;
           }
-          if (col.key === 'other_hours') return `<td><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
+          if (col.key === 'other_hours') return `<td class="wh-input-cell"><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
           // —— 发货专属
-          if (col.key === 'ship_orders') return `<td><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
+          if (col.key === 'ship_orders') return `<td class="wh-input-cell"><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
           // —— 收货专属
           if (col.key === 'cartons')  {
             const ph = state.workType === '收货' ? '* 箱数（必填）' : '箱数';
-            return `<td><input data-if="cartons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cartons)}" placeholder="${escapeAttr(ph)}"></td>`;
+            return `<td class="wh-input-cell"><input data-if="cartons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cartons)}" placeholder="${escapeAttr(ph)}"></td>`;
           }
-          if (col.key === 'tons')     return `<td><input data-if="tons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.tons)}" placeholder="吨"></td>`;
-          if (col.key === 'cubic')    return `<td><input data-if="cubic" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cubic)}" placeholder="方"></td>`;
-          if (col.key === 'pallets')  return `<td><input data-if="pallets" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.pallets)}" placeholder="托盘"></td>`;
+          if (col.key === 'tons')     return `<td class="wh-input-cell"><input data-if="tons" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.tons)}" placeholder="吨"></td>`;
+          if (col.key === 'cubic')    return `<td class="wh-input-cell"><input data-if="cubic" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.cubic)}" placeholder="方"></td>`;
+          if (col.key === 'pallets')  return `<td class="wh-input-cell"><input data-if="pallets" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.pallets)}" placeholder="托盘"></td>`;
           // —— 备注（所有类型通用）
-          if (col.key === 'remark') return `<td><input data-if="remark" class="wh-cell-txt" type="text" value="${escapeAttr(r.remark || '')}" placeholder="请输入备注"></td>`;
+          if (col.key === 'remark') return `<td class="wh-input-cell"><input data-if="remark" class="wh-cell-txt" type="text" value="${escapeAttr(r.remark || '')}" placeholder="请输入备注"></td>`;
           // —— 实时计算列（发货 efficiency / 收货 efficiency / 库内+后勤 total_hours）：留空交给 bindInlineRow.recalc
           if (col.key === 'efficiency') {
             const type = state.workType;
@@ -1249,6 +1258,9 @@ function createWorkhoursPage(warehouse) {
           return true;
         });
         tr && tr.remove();
+        // ★ 修复：取消后必须把"删掉该行"的状态同步到 localStorage drafts！
+        // 否则刷新页面时 _bootDrafts 又把这行拉回来了。
+        _saveDrafts(state.warehouse, state.workType, state.lastRows);
         return;
       }
       // 发货 tab 的非 inline 行（已归档）edit → openModal 编辑
@@ -1553,7 +1565,7 @@ function createWorkhoursPage(warehouse) {
         } finally {
           tr.__saving = null;
         }
-        if (archive) alert('已保存并提交归档');
+        if (archive) toast('✅ 已保存并提交归档', 'success');
         // ★ Bug#2 核心修复：成功后 **不 load() 全量刷新**，只做局部数组更新。
         // 这样用户正在填写的其他 wid=0 虚拟行不会被冲刷掉。
         if (archive) {
@@ -1574,8 +1586,8 @@ function createWorkhoursPage(warehouse) {
             if (idx >= 0) state.lastRows[idx] = { ...state.lastRows[idx], work_id: savedWid };
           }
         }
-        // 重新渲染（DOM 更新），但只替换 tbody，不重拉 API
-        renderRows();
+        // ★ 性能优化：requestAnimationFrame 延后重绘，避免同步 innerHTML 阻塞用户输入
+        requestAnimationFrame(() => renderRows());
         return true;
       }
 

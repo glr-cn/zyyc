@@ -1,8 +1,9 @@
 // ============================================================================
-// 订单导入 + 地区看板 v2 — 支持方案管理 + 省占比三区 + 订单查询
+// 订单查询（主模块）+ 批量导入 + 地区看板
 // ----------------------------------------------------------------------------
-// - order_import      path=order_import      默认落在「导入」Tab
-// - order_dashboard   path=order_dashboard   默认落在「看板」Tab
+// - order_import      path=order_import      默认落在「批量导入」Tab
+// - order_dashboard   path=order_dashboard   默认落在「订单查询」Tab（2026-11-20 模块重构：
+//                       原地区看板页正式命名为「订单查询」，地区看板保留为辅助 Tab）
 // ============================================================================
 (function () {
   const API = window.API;
@@ -15,16 +16,18 @@
   function createPage(host, pageId) {
     host.innerHTML = '';
     host.style.cssText = 'padding:16px;background:#f5f7fa;min-height:100%;box-sizing:border-box;';
-    const defaultTab = pageId === 'order_dashboard' ? 'dashboard' : 'import';
+    const defaultTab = pageId === 'order_dashboard' ? 'query' : 'import';
 
     const wrap = document.createElement('div');
     wrap.style.maxWidth = '1280px'; wrap.style.margin = '0 auto';
     wrap.innerHTML = `
       <div class="od-tabs" style="display:flex;gap:4px;margin-bottom:16px;">
-        <button class="od-tab" data-tab="import"  style="padding:10px 24px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px;">📤 批量导入</button>
+        <button class="od-tab" data-tab="query"     style="padding:10px 24px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px;">🔎 订单查询</button>
+        <button class="od-tab" data-tab="import"    style="padding:10px 24px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px;">📤 批量导入</button>
         <button class="od-tab" data-tab="dashboard" style="padding:10px 24px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px;">📊 地区看板</button>
       </div>
       <div class="od-panels">
+        <div class="od-panel" data-panel="query"     style="display:none;"></div>
         <div class="od-panel" data-panel="import"    style="display:none;"></div>
         <div class="od-panel" data-panel="dashboard" style="display:none;"></div>
       </div>
@@ -33,7 +36,7 @@
 
     const tabs = wrap.querySelectorAll('.od-tab');
     const panels = wrap.querySelectorAll('.od-panel');
-    let p_import_mounted = false, p_dash_mounted = false;
+    let p_import_mounted = false, p_dash_mounted = false, p_query_mounted = false;
     let currentPlanId = null;
 
     function switchTab(tabName) {
@@ -46,6 +49,7 @@
 
       if (tabName === 'import' && !p_import_mounted) { mountImport(wrap.querySelector('[data-panel="import"]')); p_import_mounted = true; }
       if (tabName === 'dashboard' && !p_dash_mounted) { mountDashboard(wrap.querySelector('[data-panel="dashboard"]')); p_dash_mounted = true; }
+      if (tabName === 'query' && !p_query_mounted) { mountOrderQuery(wrap.querySelector('[data-panel="query"]')); p_query_mounted = true; }
       if (tabName === 'dashboard') refreshDashboard();
     }
     tabs.forEach((t) => { t.onclick = () => switchTab(t.dataset.tab); });
@@ -457,7 +461,211 @@
   }
 
   // =========================================================================
-  // Tab 2: 地区看板 v2
+  // Tab: 订单查询（主模块 · 2026-11-20 重构）
+  // ----------------------------------------------------------------------------
+  // 查询规则：
+  //   1. 日期筛选沿用现有交互（月份选择器 → 该月 1 日 ~ 月末，闭区间）
+  //   2. ★ 填写快递单号 → 自动忽略日期条件（前端不传日期 + 后端 buildWhere 双保险）
+  //   3. 省/市/区县三级级联下拉（数据源来自库内去重值）
+  //   4. 多个单号用逗号/空格分隔 → 精确 IN 检索；单个单号 → 模糊检索
+  //   5. 导出走服务端 xlsx（大数据量稳定，上限 10 万行）
+  // =========================================================================
+  const oqState = { page: 1, pageSize: 20, total: 0 };
+
+  function mountOrderQuery(panel) {
+    panel.innerHTML = '';
+    const today = new Date();
+    const ym = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    const thisMonth = ym(today);
+
+    const card = document.createElement('div');
+    card.style.cssText = CARD_CSS;
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:16px;color:#303133;">🔎 订单查询</h3>
+        <span style="color:#909399;font-size:12px;">查询范围：批量导入录入的全部快递单号</span>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:center;">
+        <input id="oqNo" placeholder="快递单号（多个用逗号/空格分隔）"
+          style="padding:6px 10px;border:1px solid #dcdfe6;border-radius:4px;width:280px;font-size:13px;font-family:monospace;">
+        <select id="oqProv" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:120px;font-size:13px;">
+          <option value="">收件省 - 全部</option>
+        </select>
+        <select id="oqCity" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:120px;font-size:13px;">
+          <option value="">收件市 - 全部</option>
+        </select>
+        <select id="oqDist" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:120px;font-size:13px;">
+          <option value="">收件区县 - 全部</option>
+        </select>
+        <select id="oqPlatform" style="padding:6px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:110px;font-size:13px;">
+          <option value="全部">平台 - 全部</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
+          月份 <input id="oqMonth" type="month" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;" value="${thisMonth}">
+        </label>
+        <button id="oqQuery" style="${BTN_PRIMARY}">🔍 查询</button>
+        <button id="oqReset" style="${BTN_GHOST}">🔄 重置</button>
+        <button id="oqExport" style="${BTN_GHOST}">⬇ 导出</button>
+      </div>
+      <div style="font-size:12px;color:#909399;margin-bottom:14px;">
+        💡 填写快递单号时<b style="color:#409eff;">自动忽略日期条件</b>，无需手动清除月份；单号支持批量（逗号/空格分隔，精确匹配）。
+      </div>
+
+      <div id="oqResult"></div>
+    `;
+    panel.appendChild(card);
+
+    const qs = (sel) => card.querySelector(sel);
+
+    // --- 平台下拉 ---
+    API.get('/orders/platforms').then((r) => {
+      const sel = qs('#oqPlatform');
+      (r?.platforms || []).forEach((p) => { const o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); });
+    }).catch(() => {});
+
+    // --- 省级联 ---
+    API.get('/orders/query/facets').then((r) => {
+      const sel = qs('#oqProv');
+      (r?.provinces || []).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+    }).catch(() => {});
+    qs('#oqProv').onchange = () => {
+      const prov = qs('#oqProv').value;
+      qs('#oqCity').innerHTML = '<option value="">收件市 - 全部</option>';
+      qs('#oqDist').innerHTML = '<option value="">收件区县 - 全部</option>';
+      if (!prov) return;
+      API.get('/orders/query/facets?province=' + encodeURIComponent(prov)).then((r) => {
+        const sel = qs('#oqCity');
+        (r?.cities || []).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+      }).catch(() => {});
+    };
+    qs('#oqCity').onchange = () => {
+      const prov = qs('#oqProv').value, city = qs('#oqCity').value;
+      qs('#oqDist').innerHTML = '<option value="">收件区县 - 全部</option>';
+      if (!prov) return;
+      API.get('/orders/query/facets?province=' + encodeURIComponent(prov) + (city ? '&city=' + encodeURIComponent(city) : '')).then((r) => {
+        const sel = qs('#oqDist');
+        (r?.districts || []).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+      }).catch(() => {});
+    };
+
+    // --- 查询参数收集（单号优先：忽略日期） ---
+    function collectFilters() {
+      const no = qs('#oqNo').value.trim();
+      const f = {
+        q: no,
+        province: qs('#oqProv').value,
+        city: qs('#oqCity').value,
+        district: qs('#oqDist').value,
+        platform: qs('#oqPlatform').value,
+      };
+      // ★ 单号非空 → 不带日期参数（后端同样兜底忽略）
+      if (!no) {
+        const month = qs('#oqMonth').value || '';
+        if (month) {
+          f.start = month + '-01';
+          const [y, m] = month.split('-').map(Number);
+          const lastDay = new Date(y, m, 0).getDate();
+          f.end = month + '-' + String(lastDay).padStart(2, '0');
+        }
+      }
+      return f;
+    }
+    function toQs(f, extra = {}) {
+      const p = new URLSearchParams();
+      Object.entries(f).forEach(([k, v]) => { if (v && v !== '全部') p.set(k, v); });
+      Object.entries(extra).forEach(([k, v]) => p.set(k, v));
+      return p.toString();
+    }
+
+    function render(data) {
+      oqState.total = data.total || 0;
+      const wrap = qs('#oqResult');
+      const details = data.data || [];
+      if (!details.length) {
+        wrap.innerHTML = `<div style="color:#909399;padding:32px;text-align:center;border:1px dashed #dcdfe6;border-radius:6px;">📭 当前筛选条件下无订单数据${data.date_ignored ? '<div style="margin-top:6px;font-size:12px;">（已按快递单号检索，日期条件已自动忽略）</div>' : ''}</div>`;
+        return;
+      }
+      const rows = details.map((d) => {
+        const c = CLASS_COLOR_MAP(d.region_class);
+        return `<tr style="border-bottom:1px solid #ebeef5;">
+          <td style="padding:6px;border:1px solid #ebeef5;font-family:monospace;font-size:12px;">${escapeHtml(d.order_no || '')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.wms_platform || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;">${escapeHtml(d.customer_name || d.owner_name || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_province || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_city || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.to_district || '-')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;text-align:right;">${d.ship_quantity} ${escapeHtml(d.unit || '')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${escapeHtml(d.order_date || '')}</td>
+          <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:center;">
+            <span style="padding:2px 8px;border-radius:3px;background:${c.bg};color:${c.text};border:1px solid ${c.border};font-size:12px;">${escapeHtml(d.region_class || '正常')}</span>
+          </td>
+        </tr>`;
+      }).join('');
+      const pages = Math.max(1, Math.ceil(oqState.total / oqState.pageSize));
+      wrap.innerHTML = `
+        ${data.date_ignored ? '<div style="margin-bottom:8px;padding:8px 12px;background:#fdf6ec;border-left:3px solid #e6a23c;border-radius:4px;font-size:12px;color:#e6a23c;">⚡ 已按快递单号检索，日期条件被自动忽略</div>' : ''}
+        <div style="max-height:520px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead style="position:sticky;top:0;background:#f5f7fa;z-index:1;"><tr>
+              <th style="padding:7px;border:1px solid #ebeef5;">快递单号</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">平台</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">客户</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">省</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">市</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">区县</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">数量</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">日期</th>
+              <th style="padding:7px;border:1px solid #ebeef5;">地区分类</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;font-size:13px;color:#606266;justify-content:flex-end;">
+          <span>共 <b>${oqState.total.toLocaleString()}</b> 条</span>
+          <select id="oqPageSize" style="padding:4px 6px;border:1px solid #dcdfe6;border-radius:4px;">
+            ${[20, 50, 100, 200].map((n) => `<option value="${n}" ${n === oqState.pageSize ? 'selected' : ''}>${n} 条/页</option>`).join('')}
+          </select>
+          <button id="oqPrev" style="padding:4px 12px;border:1px solid #dcdfe6;border-radius:4px;background:#fff;cursor:pointer;" ${oqState.page <= 1 ? 'disabled' : ''}>上一页</button>
+          <span>第 ${oqState.page} / ${pages} 页</span>
+          <button id="oqNext" style="padding:4px 12px;border:1px solid #dcdfe6;border-radius:4px;background:#fff;cursor:pointer;" ${oqState.page >= pages ? 'disabled' : ''}>下一页</button>
+        </div>`;
+      wrap.querySelector('#oqPageSize').onchange = (e) => { oqState.pageSize = Number(e.target.value); oqState.page = 1; doQuery(); };
+      wrap.querySelector('#oqPrev').onclick = () => { if (oqState.page > 1) { oqState.page--; doQuery(); } };
+      wrap.querySelector('#oqNext').onclick = () => { const pages2 = Math.ceil(oqState.total / oqState.pageSize); if (oqState.page < pages2) { oqState.page++; doQuery(); } };
+    }
+
+    function doQuery() {
+      const f = collectFilters();
+      qs('#oqResult').innerHTML = '<div style="color:#909399;padding:24px;text-align:center;">⏳ 查询中...</div>';
+      API.get('/orders/query?' + toQs(f, { page: oqState.page, pageSize: oqState.pageSize })).then(render)
+        .catch((e) => { qs('#oqResult').innerHTML = `<div style="color:#f56c6c;padding:24px;text-align:center;">❌ 查询失败: ${escapeHtml(e.message)}</div>`; });
+    }
+
+    qs('#oqQuery').onclick = () => { oqState.page = 1; doQuery(); };
+    qs('#oqMonth').onchange = () => { oqState.page = 1; doQuery(); };
+    qs('#oqReset').onclick = () => {
+      qs('#oqNo').value = '';
+      qs('#oqProv').value = ''; qs('#oqCity').innerHTML = '<option value="">收件市 - 全部</option>';
+      qs('#oqDist').innerHTML = '<option value="">收件区县 - 全部</option>';
+      qs('#oqPlatform').value = '全部'; qs('#oqMonth').value = thisMonth;
+      oqState.page = 1; doQuery();
+    };
+    qs('#oqNo').onkeydown = (e) => { if (e.key === 'Enter') { oqState.page = 1; doQuery(); } };
+
+    qs('#oqExport').onclick = () => {
+      const f = collectFilters();
+      const qstr = toQs(f);
+      const month = qs('#oqMonth').value || '全部';
+      API.download('/orders/query/export' + (qstr ? '?' + qstr : ''), `订单查询-${month}.xlsx`)
+        .catch((e) => { ERP?.toast ? ERP.toast('导出失败：' + e.message, 'error') : alert('导出失败：' + e.message); });
+    };
+
+    doQuery();
+  }
+
+  // =========================================================================
+  // Tab: 地区看板（辅助 · 保留偏远地区分类视图与方案配置）
   // =========================================================================
   let _dashCache = null;
   let _plansCache = [];
@@ -497,23 +705,8 @@
     `;
     panel.appendChild(card);
 
-    // 订单查询面板（独立模块迁入）
-    const orderQueryCard = document.createElement('div');
-    orderQueryCard.style.cssText = CARD_CSS;
-    orderQueryCard.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 style="margin:0;font-size:16px;color:#303133;">🔎 订单查询</h3>
-        <span style="color:#909399;font-size:12px;">按当前筛选条件查询</span>
-      </div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-        <input id="oqOrderNo" placeholder="订单号" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;width:160px;font-size:13px;">
-        <input id="oqCustomer" placeholder="货主/客户名" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;width:180px;font-size:13px;">
-        <button id="oqQuery" style="${BTN_PRIMARY};padding:6px 16px;font-size:13px;">查询明细</button>
-        <button id="oqClear" style="${BTN_GHOST};padding:5px 14px;font-size:13px;">清空</button>
-      </div>
-      <div id="oqList"></div>
-    `;
-    panel.appendChild(orderQueryCard);
+    // ★ 2026-11-20 重构：原内嵌「订单查询」小面板已升级为独立主 Tab（数据此前未接线属死功能），
+    //   完整查询/分页/导出能力见 mountOrderQuery()。
 
     // --- 平台下拉 ---
     API.get('/orders/platforms').then((r) => {
@@ -540,12 +733,6 @@
 
     // 方案切换立即触发查询
     card.querySelector('#dashPlan').onchange = refreshDashboard;
-
-    // 订单查询
-    const oqNo = orderQueryCard.querySelector('#oqOrderNo');
-    const oqCust = orderQueryCard.querySelector('#oqCustomer');
-    orderQueryCard.querySelector('#oqQuery').onclick = () => refreshDashboard();
-    orderQueryCard.querySelector('#oqClear').onclick = () => { oqNo.value = ''; oqCust.value = ''; refreshDashboard(); };
 
     refreshDashboard();
   }
@@ -598,7 +785,6 @@
     API.get('/orders/dashboard?' + params.toString()).then((data) => {
       _dashCache = data;
       renderDashboard(data);
-      renderOrderQueryResults(data);
     }).catch((e) => {
       qs('#dashCards').innerHTML = `<div style="color:#f56c6c;padding:20px;text-align:center;">❌ 加载失败: ${e.message}</div>`;
     });
@@ -672,54 +858,6 @@
       `;
       provinceWrap.appendChild(block);
     });
-  }
-
-  function renderOrderQueryResults(data) {
-    const panel = document.querySelector('.od-panel[data-panel="dashboard"]');
-    if (!panel) return;
-    const qs = (sel) => panel.querySelector(sel);
-    const details = data.details || [];
-
-    if (!details.length) {
-      qs('#oqList').innerHTML = `<div style="color:#909399;padding:20px;text-align:center;border:1px dashed #dcdfe6;border-radius:6px;">📭 当前筛选条件下无订单数据</div>`;
-      return;
-    }
-
-    const rows = details.map((d) => {
-      const clsColor = CLASS_COLOR_MAP(d.effective_class);
-      return `<tr style="border-bottom:1px solid #ebeef5;">
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;color:#909399;text-align:center;">#${d.order_id}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-family:monospace;font-size:12px;">${d.order_no}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;">${d.owner_name||''}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;">${d.customer_name||'-'}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${d.to_province||'-'} / ${d.to_city||'-'}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:center;">
-          <span style="padding:2px 8px;border-radius:3px;background:${clsColor.bg};color:${clsColor.text};border:1px solid ${clsColor.border};font-size:12px;">${d.effective_class||'正常'}</span>
-        </td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:13px;text-align:right;">${d.ship_quantity} ${d.unit||''}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${d.wms_platform||'-'}</td>
-        <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${d.order_date}</td>
-      </tr>`;
-    }).join('');
-
-    qs('#oqList').innerHTML = `
-      <div style="max-height:420px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;">
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead style="position:sticky;top:0;background:#f5f7fa;z-index:1;"><tr>
-            <th style="padding:6px;border:1px solid #ebeef5;">#</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">订单号</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">货主</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">客户</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">收件省/市</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">地区分类</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">件数</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">来源平台</th>
-            <th style="padding:6px;border:1px solid #ebeef5;">订单日期</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-      <div style="margin-top:6px;font-size:12px;color:#909399;text-align:right;">共 ${details.length} 条（limit 500）</div>`;
   }
 
   function CLASS_COLOR_MAP(cls) {
