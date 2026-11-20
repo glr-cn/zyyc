@@ -709,20 +709,26 @@ function createWorkhoursPage(warehouse) {
       const stats = preview.stats || { create: 0, skip_exact: 0, overwrite: 0 };
 
       const rowsHtml = rows.map((r) => {
-        const act = r.action; // 'create' | 'skip_exact' | 'overwrite'
+        const act = r.action; // 'create' | 'promote_pending' | 'skip_exact' | 'overwrite'
         const ex = r.existing;
         let tag, cls;
         if (act === 'skip_exact') { tag = '完全相同·跳过'; cls = 'imp-skip-exact'; }
+        else if (act === 'skip_batch_dup') { tag = '文件内重复·跳过'; cls = 'imp-skip-exact'; }
         else if (act === 'overwrite') { tag = '有差异·覆盖'; cls = 'imp-overwrite'; }
+        else if (act === 'promote_pending') { tag = '提交草稿'; cls = 'imp-create'; }
         else { tag = '新增'; cls = 'imp-create'; }
-        const existTxt = ex ? `已有：${ex.ship_orders || 0} 单 / ${ex.main_hours || 0}h（已归档）` : '';
+        const exTxt = ex
+          ? (act === 'promote_pending'
+            ? `已有未归档草稿：${ex.ship_orders || 0} 单 / ${ex.main_hours || 0}h`
+            : `已有：${ex.ship_orders || 0} 单 / ${ex.main_hours || 0}h（已归档）`)
+          : '';
         return `<tr class="imp-${act}">
           <td>${r.line}</td>
           <td>${escapeHtml(r.date)}</td>
           <td>${escapeHtml(r.customer_name)}</td>
           <td>${r.ship_orders}</td>
           <td>${r.main_hours}</td>
-          <td>${existTxt ? '<span class="cust-tag cust-tag-warn">归档</span> ' + escapeHtml(existTxt) : '—'}</td>
+          <td>${exTxt ? '<span class="cust-tag cust-tag-warn">' + (act === 'promote_pending' ? '未归档' : '归档') + '</span> ' + escapeHtml(exTxt) : '—'}</td>
           <td><span class="imp-action-tag ${cls}">${tag}</span></td>
         </tr>`;
       }).join('');
@@ -746,7 +752,9 @@ function createWorkhoursPage(warehouse) {
             <div class="imp-summary">
               <span>共 <span class="cnt">${rows.length}</span> 行</span>
               ${stats.create ? `<span>新增 <span class="cnt cnt-new">${stats.create}</span> 行</span>` : ''}
+              ${stats.promote_pending ? `<span>提交草稿 <span class="cnt cnt-new">${stats.promote_pending}</span> 行</span>` : ''}
               ${stats.skip_exact ? `<span>完全相同 <span class="cnt cnt-skipexact">${stats.skip_exact}</span> 行</span>` : ''}
+              ${stats.skip_batch_dup ? `<span>文件内重复 <span class="cnt cnt-skipexact">${stats.skip_batch_dup}</span> 行</span>` : ''}
               ${stats.overwrite ? `<span>有差异需覆盖 <span class="cnt cnt-overwrite">${stats.overwrite}</span> 行</span>` : ''}
             </div>
             <div class="imp-grid-wrap">
@@ -778,31 +786,51 @@ function createWorkhoursPage(warehouse) {
       overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
 
       // 导入按钮 — 二次确认逻辑：
-      //   rule=1 全 create       → 直接发请求（静默执行，不弹窗）
-      //   rule=2 全 skip_exact   → 弹 confirmOnly（"跳过"按钮），不发请求（零写入）
+      //   rule=1 全部新增/提交草稿 → 直接发请求（静默执行，不弹窗）
+      //   rule=2 全部完全相同       → 幂等提示（不写库、不报错），可选跳转已归档查看
       //   rule=3 全 overwrite / rule=4 混合 → 弹标准 confirmDialog（取消+确认），用户确认后才发请求
+      // 统一：把用户带到「已归档」视图对应日期（避免「导入成功却查不到」的误解）
+      const gotoArchived = async (dates) => {
+        const covered = !!(state.dateFrom && state.dateTo && dates.length)
+          && dates.every((d) => d >= state.dateFrom && d <= state.dateTo);
+        if (!dates.length || (covered && state.status === 'archived')) {
+          state.page = 1; load(); return;
+        }
+        const go = await confirmDialog({
+          title: '导入完成',
+          message: `本次数据已归档在 <b>${dates.join('、')}</b>。<br><br>是否切换到「已归档」视图查看？`,
+          okText: '查看已归档',
+          cancelText: '留在当前页',
+        });
+        if (go) {
+          state.status = 'archived';
+          const sf = $('statusFilter'); if (sf) sf.value = 'archived';
+          state.dateMode = 'day';
+          state.dateFrom = dates[0];
+          state.dateTo = dates[dates.length - 1];
+          if (drp) drp.setValue({ mode: 'day', startDate: state.dateFrom, endDate: state.dateTo }, true);
+          syncTabUI();
+        }
+        state.page = 1; load();
+      };
+
       overlay.querySelector('.imp-ok').onclick = async () => {
-        const s = preview.stats; // { create, skip_exact, overwrite, rule }
+        const s = preview.stats; // { create, promote_pending, skip_exact, overwrite, rule }
         const fmtMsg = () => {
           const parts = [];
           if (s.create) parts.push(`<span style="color:#67c23a"><b>新增 ${s.create}</b> 条</span>`);
+          if (s.promote_pending) parts.push(`<span style="color:#67c23a"><b>提交草稿 ${s.promote_pending}</b> 条（替换未归档草稿）</span>`);
           if (s.skip_exact) parts.push(`<span style="color:#909399"><b>跳过 ${s.skip_exact}</b> 条（与归档完全一致）</span>`);
           if (s.overwrite) parts.push(`<span style="color:#e6a23c"><b>覆盖 ${s.overwrite}</b> 条（字段有差异）</span>`);
           return parts.join('<br>') || '无数据';
         };
 
-        // 规则 2：全部是完全相同的重复，后端会返回 409，前端直接弹 confirmOnly 不发请求
+        // 规则 2：全部与已归档完全一致 → 幂等成功提示（不是报错，也不写库）
         if (s.rule === 2) {
           close();
           const dupDates = [...new Set(rows.map((r) => r.date))].sort();
-          confirmDialog({
-            title: '所有数据均与已归档完全一致',
-            message: fmtMsg()
-              + `<br><br>数据已归档在 <b>${dupDates.join('、')}</b>，请切换到「已归档」状态并按上述日期筛选查看。`
-              + '<br><br>本次导入未写入任何新数据，请调整 Excel 后重新导入。',
-            okText: '知道了',
-            confirmOnly: true,
-          });
+          toast(`无需重复导入：${s.skip_exact} 行数据已在 ${dupDates.join('、')} 归档`);
+          await gotoArchived(dupDates);
           return;
         }
 
@@ -818,47 +846,28 @@ function createWorkhoursPage(warehouse) {
           if (!ok) return; // 用户取消 → 留在预览弹窗，允许改 Excel 重传
         }
 
-        // 规则 1（全 create）或规则 3/4 用户已确认 → 发请求
+        // 规则 1（全新增/提交草稿）或规则 3/4 用户已确认 → 发请求
         close();
         try {
           const fd = new FormData();
           fd.append('file', ctx.file);
           const res = await API.upload('/workhours/import?warehouse=' + encodeURIComponent(state.warehouse), fd);
           const dates = Array.isArray(res.dates) ? res.dates : [];
+          // 后端幂等分支（并发/重试导致 preview 与 import 判定不一致时的兜底）
+          if (res.noop) {
+            toast(res.message || '数据已是最新，无需重复导入');
+            await gotoArchived(dates);
+            return;
+          }
           let msg = `已归档 ${res.created || 0} 行`;
+          if (res.promoted) msg += `，提交草稿 ${res.promoted} 行`;
           if (res.overwritten) msg += `，覆盖 ${res.overwritten} 行`;
           if (res.skip_exact) msg += `，跳过 ${res.skip_exact} 行（与归档完全一致）`;
-          if (res.repaired_duplicates) msg += `，修复重复归档 ${res.repaired_duplicates} 条`;
+          if (res.repaired_duplicates) msg += `，修复重复记录 ${res.repaired_duplicates} 条`;
           if (dates.length) msg += `（日期 ${dates.join('、')}）`;
           if (res.errors && res.errors.length) msg += `，忽略 ${res.errors.length} 行格式不匹配`;
           toast(msg);
-
-          // ★ 导入成功后引导到「已归档」视图的对应日期：
-          //   导入数据一律落 archived + 文件内日期；若当前筛选的日期/状态不覆盖它，
-          //   用户会误以为「导入的数据跑到未归档/查不到」，因此主动询问是否跳转。
-          const covered = !!(state.dateFrom && state.dateTo && dates.length)
-            && dates.every((d) => d >= state.dateFrom && d <= state.dateTo);
-          if (dates.length && (!covered || state.status !== 'archived')) {
-            const go = await confirmDialog({
-              title: '导入完成',
-              message: `本次数据已归档在 <b>${dates.join('、')}</b>。<br><br>是否切换到「已归档」视图查看？`,
-              okText: '查看已归档',
-              cancelText: '留在当前页',
-            });
-            if (go) {
-              state.status = 'archived';
-              const sf = $('statusFilter'); if (sf) sf.value = 'archived';
-              state.dateMode = 'day';
-              state.dateFrom = dates[0];
-              state.dateTo = dates[dates.length - 1];
-              if (drp) drp.setValue({ mode: 'day', startDate: state.dateFrom, endDate: state.dateTo }, true);
-              syncTabUI();
-              state.page = 1;
-              load();
-              return;
-            }
-          }
-          state.page = 1; load();
+          await gotoArchived(dates);
         } catch (ex) {
           errAlert('导入失败', friendlyErrMsg(ex));
         }

@@ -886,11 +886,18 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
   // 对比函数：比较导入行 vs 归档行，返回 true 表示完全一致（共用 svc 实现，数值按 Number 比较）
   const isExactMatch = svc.isSameHoursRow;
 
+  const seenBatch = new Set();
   const rows = parsed.map((p) => {
+    const batchKey = `${p.customer_id}|${p.date}`;
+    if (seenBatch.has(batchKey)) return { ...p, action: 'skip_batch_dup', existing: null };
+    seenBatch.add(batchKey);
     const existingAll = findAll.all(warehouse, p.customer_id, p.date);
     // 只看 archived（pending 草稿不参与三态判定，规则只针对已归档）
     const archived = existingAll.filter((r) => r.status === 'archived');
+    const pending = existingAll.filter((r) => r.status !== 'archived');
     if (archived.length === 0) {
+      // 与 /import 判定保持一致：同日同客户有未归档草稿 → 提交该草稿（不新增行）
+      if (pending.length) return { ...p, action: 'promote_pending', existing: pending[0] };
       return { ...p, action: 'create', existing: null };
     }
     // 取第一条 archived（ORDER BY work_id，通常只有一条）
@@ -903,19 +910,25 @@ router.post('/import/preview', upload.single('file'), (req, res) => {
   });
 
   const createCnt = rows.filter((r) => r.action === 'create').length;
+  const promoteCnt = rows.filter((r) => r.action === 'promote_pending').length;
   const skipCnt = rows.filter((r) => r.action === 'skip_exact').length;
   const overwriteCnt = rows.filter((r) => r.action === 'overwrite').length;
+  const batchDupCnt = rows.filter((r) => r.action === 'skip_batch_dup').length;
 
   // 汇总规则判定（与 import PRECHECK 完全一致的三态语义）
   let rule;
-  if (createCnt === rows.length) rule = 1;
-  else if (skipCnt === rows.length) rule = 2;                // 全 skip_exact（零写入）
-  else if (overwriteCnt === rows.length) rule = 3;           // 全 overwrite
-  else rule = 4;                                              // 混合
+  if (createCnt + promoteCnt === rows.length) rule = 1;   // 全新增/全提交草稿（零冲突）
+  else if (skipCnt + batchDupCnt === rows.length) rule = 2; // 全跳过（零写入，幂等）
+  else if (overwriteCnt === rows.length) rule = 3;        // 全 overwrite
+  else rule = 4;                                          // 混合
 
   res.json({
     data: rows, errors, warehouse,
-    stats: { create: createCnt, skip_exact: skipCnt, overwrite: overwriteCnt, rule },
+    stats: {
+      create: createCnt, promote_pending: promoteCnt,
+      skip_exact: skipCnt, skip_batch_dup: batchDupCnt,
+      overwrite: overwriteCnt, rule,
+    },
   });
 });
 
@@ -942,12 +955,33 @@ router.post('/import', upload.single('file'), (req, res) => {
   );
   const isExactMatch = svc.isSameHoursRow;   // 与 /import/preview 共用同一实现
 
-  const ACTIONS = new Map(); // line → 'create' | 'overwrite' | 'skip_exact'
+  const ACTIONS = new Map(); // line → 'create' | 'promote_pending' | 'overwrite' | 'skip_exact' | 'skip_batch_dup'
+  const seenBatch = new Set(); // 文件内同维度去重键（同客户+同日期）
   for (const p of parsed) {
+    const batchKey = `${p.customer_id}|${p.date}`;
+    // ★ 同一文件内重复行（同客户+同日期）→ 只认第一条，后续行跳过并计数，
+    //   否则同一维度会被写两次（覆盖分支重复插行），造成数据翻倍。
+    if (seenBatch.has(batchKey)) {
+      ACTIONS.set(p.line, { action: 'skip_batch_dup', existing: null });
+      continue;
+    }
+    seenBatch.add(batchKey);
+
     const existingAll = findAll.all(warehouse, p.customer_id, p.date);
     const archived = existingAll.filter((r) => r.status === 'archived');
+    const pending = existingAll.filter((r) => r.status !== 'archived');
     if (archived.length === 0) {
-      ACTIONS.set(p.line, { action: 'create', existing: null });
+      // ★ 同日同客户已有「未归档草稿」→ 直接提交该草稿（原地转 archived 并写入导入值），
+      //   绝不能再插一条 archived，否则同一条业务数据会同时出现在未归档与已归档两个列表。
+      if (pending.length) {
+        ACTIONS.set(p.line, {
+          action: 'promote_pending',
+          existing: pending[0],
+          extras: pending.slice(1).map((r) => r.work_id),
+        });
+      } else {
+        ACTIONS.set(p.line, { action: 'create', existing: null });
+      }
     } else {
       const arch = archived[0];
       const exact = isExactMatch(p, arch);
@@ -956,6 +990,8 @@ router.post('/import', upload.single('file'), (req, res) => {
         existing: arch,
         // 同维度多条 archived（历史脏数据）→ 覆盖时一并清理，恢复「同日同客户唯一」不变量
         extras: archived.slice(1).map((r) => r.work_id),
+        // 同维度残留的 pending 草稿一并清理（已归档优先，草稿作废）
+        pendingExtras: pending.map((r) => r.work_id),
       });
     }
   }
@@ -963,39 +999,89 @@ router.post('/import', upload.single('file'), (req, res) => {
   const createCnt = [...ACTIONS.values()].filter((v) => v.action === 'create').length;
   const skipCnt = [...ACTIONS.values()].filter((v) => v.action === 'skip_exact').length;
   const overwriteCnt = [...ACTIONS.values()].filter((v) => v.action === 'overwrite').length;
+  const promoteCnt = [...ACTIONS.values()].filter((v) => v.action === 'promote_pending').length;
+  const batchDupCnt = [...ACTIONS.values()].filter((v) => v.action === 'skip_batch_dup').length;
 
   // 本次文件覆盖的日期集合（升序）：用于前端把用户带到「已归档」视图对应日期，
   // 避免出现「导入成功但当前筛选日期看不到数据」的误解。
   const fileDates = [...new Set(parsed.map((p) => p.date))].sort();
 
-  // ---------- 规则 2：全 skip_exact → 终止导入，不启动事务 ----------
-  if (overwriteCnt === 0 && createCnt === 0 && skipCnt > 0) {
-    const sampleRows = parsed.map((p) => {
+  // ---------- 规则 2：全 skip_exact → 幂等成功（不写库、不报错） ----------
+  // 重复导入同一份文件是正常操作（如网络重试、误点两次），返回 200 + noop 语义，
+  // 由前端展示「已是最新，无需重复导入」的普通提示，而不是红色报错。
+  if (overwriteCnt === 0 && createCnt === 0 && promoteCnt === 0 && (skipCnt > 0 || batchDupCnt > 0)) {
+    const detail = parsed.map((p) => {
       const v = ACTIONS.get(p.line);
-      return `第 ${p.line} 行：${p.date} / ${p.customer_name}（已归档 work_id=${v.existing.work_id}，所有字段完全一致）`;
+      if (v.action === 'skip_batch_dup') return `第 ${p.line} 行：${p.date} / ${p.customer_name}（文件内重复行）`;
+      return `第 ${p.line} 行：${p.date} / ${p.customer_name}（已归档 work_id=${v.existing.work_id}，字段完全一致）`;
     }).join('\n');
-    return res.status(409).json({
-      error: `全部 ${skipCnt} 行均与已归档数据完全一致，无需重复导入。`,
+    return res.json({
+      created: 0, overwritten: 0, promoted: 0, skip_exact: skipCnt,
+      skipped_batch_dup: batchDupCnt,
+      noop: true,
       code: 'IMPORT_ALL_EXACT_MATCH',
-      skipCount: skipCnt,
-      detail: sampleRows,
+      message: `本次无需写入（${skipCnt} 行与已归档一致${batchDupCnt ? `，${batchDupCnt} 行文件内重复` : ''}）。`,
+      hint: `数据已归档在 ${fileDates.join('、')}，可在「状态=已归档」按该日期查看。`,
       dates: fileDates,
-      hint: `这些数据已归档在 ${fileDates.join('、')}，请在「状态=已归档」并按上述日期筛选查看。`,
+      detail,
+      errors,
+      lines: [],
     });
   }
 
   // ---------- 规则 1/3/4：启动事务执行 ----------
   const submitter = operatorName(req);
-  let created = 0, overwritten = 0, skippedExact = 0, repairedDuplicates = 0;
+  let created = 0, overwritten = 0, promoted = 0, skippedExact = 0, skippedBatchDup = 0, repairedDuplicates = 0;
   const log = [];
   db.exec('BEGIN');
   try {
     for (const p of parsed) {
-      const { action, existing, extras } = ACTIONS.get(p.line);
+      const { action, existing, extras, pendingExtras } = ACTIONS.get(p.line);
+
+      if (action === 'skip_batch_dup') {
+        skippedBatchDup++;
+        log.push({ line: p.line, action: 'skip_batch_dup' });
+        continue;
+      }
 
       if (action === 'skip_exact') {
         skippedExact++;
         log.push({ line: p.line, action: 'skip_exact', existing_work_id: existing.work_id });
+        continue;
+      }
+
+      if (action === 'promote_pending') {
+        // 未归档草稿 → 原地提交归档并写入导入值（不新增行，保证同维度唯一）
+        const oldRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(existing.work_id);
+        const r = {
+          warehouse, work_type: '发货', customer_id: p.customer_id, customer_name: p.customer_name,
+          unit: p.unit, date: p.date, ship_orders: p.ship_orders,
+          main_hours: p.main_hours, other_hours: p.other_hours, shared_hours: 0,
+        };
+        svc.calcRow('发货', r);
+        db.prepare(
+          `UPDATE work_hours SET
+             unit=?, ship_orders=?, main_hours=?, other_hours=?, shared_hours=?,
+             total_hours=?, efficiency=?, unit_cost=?, remark=?, owner_user_id=?,
+             status='archived', submitter=?, submit_time=datetime('now','localtime')
+           WHERE work_id=?`
+        ).run(r.unit, r.ship_orders, r.main_hours, r.other_hours, r.shared_hours,
+          r.total_hours, r.efficiency, r.unit_cost, p.remark || null, req.user.user_id,
+          submitter, existing.work_id);
+        // 同维度多余草稿清理（只保留被提交的这一条）
+        for (const dupId of (extras || [])) {
+          const dupRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(dupId);
+          if (!dupRow) continue;
+          db.prepare('DELETE FROM work_hours WHERE work_id=?').run(dupId);
+          writeAudit(req, 'force_delete', dupId, dupRow, JSON.stringify({
+            note: '同维度多余未归档草稿清理（导入提交归档时修复）', kept_work_id: existing.work_id,
+          }));
+          repairedDuplicates++;
+        }
+        writeAudit(req, 'submit', existing.work_id, oldRow,
+          db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(existing.work_id));
+        promoted++;
+        log.push({ line: p.line, action: 'promote_pending', work_id: existing.work_id });
         continue;
       }
 
@@ -1010,6 +1096,16 @@ router.post('/import', upload.single('file'), (req, res) => {
           db.prepare('DELETE FROM work_hours WHERE work_id=?').run(dupId);
           writeAudit(req, 'force_archive_overwrite', dupId, dupRow, JSON.stringify({
             note: '同维度重复归档清理（导入覆盖时修复）', kept_work_id: existing.work_id,
+          }));
+          repairedDuplicates++;
+        }
+        // 同维度残留的 pending 草稿一并清理：已归档为准，避免同一数据同时出现在两个列表
+        for (const dupId of (pendingExtras || [])) {
+          const dupRow = db.prepare('SELECT * FROM work_hours WHERE work_id=?').get(dupId);
+          if (!dupRow) continue;
+          db.prepare('DELETE FROM work_hours WHERE work_id=?').run(dupId);
+          writeAudit(req, 'force_delete', dupId, dupRow, JSON.stringify({
+            note: '同维度未归档草稿清理（覆盖归档时修复）', kept_work_id: existing.work_id,
           }));
           repairedDuplicates++;
         }
@@ -1072,18 +1168,23 @@ router.post('/import', upload.single('file'), (req, res) => {
   }
 
   writeAudit(req, 'import', 0, null, {
-    warehouse, file: req.file.originalname, created, overwritten, skip_exact: skippedExact,
+    warehouse, file: req.file.originalname, created, overwritten, promoted,
+    skip_exact: skippedExact, skipped_batch_dup: skippedBatchDup,
     repaired_duplicates: repairedDuplicates, dates: fileDates,
     lines: log, errors,
   });
   const resp = {
-    created, overwritten, skip_exact: skippedExact,
+    created, overwritten, promoted, skip_exact: skippedExact,
+    skipped_batch_dup: skippedBatchDup,
     repaired_duplicates: repairedDuplicates,
     dates: fileDates,
     errors, lines: log,
   };
   if (skippedExact > 0) {
     resp.warn = `已跳过 ${skippedExact} 行（与已归档数据完全一致，无需重复导入）`;
+  }
+  if (skippedBatchDup > 0) {
+    resp.warn = (resp.warn ? resp.warn + '；' : '') + `已忽略 ${skippedBatchDup} 行文件内重复（同客户同日期只保留首条）`;
   }
   res.json(resp);
 });
