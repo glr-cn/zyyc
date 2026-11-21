@@ -190,14 +190,16 @@ function dashboardPage(host) {
     return `<span class="db-cust-ellipsis" title="${t}">${t}</span>`;
   }
   function dbTableHTML(cols, rows, emptyMsg, summary) {
-    const head = cols.map(c => `<th class="${colCls(c)}">${c.label}</th>`).join('');
+    // ★ 序号列：固定为首列，按当前客户/项目顺序 1..N 编号（只读，不参与汇总）
+    const withSeq = [{ label: '序号', cls: 'seq' }, ...cols];
+    const head = withSeq.map(c => `<th class="${colCls(c)}">${c.label}</th>`).join('');
     const body = rows.length
-      ? rows.map(row => `<tr>${row}</tr>`).join('')
-      : `<tr><td colspan="${cols.length}" class="empty">${emptyMsg}</td></tr>`;
-    // 汇总行：第一格为分组标题（加粗+底色），其余按列居中；无数据时不渲染全 0 的汇总
-    // summary[i+1] 与 cols[i+1] 一一对应，「本期」列同样加 hi
+      ? rows.map((row, i) => `<tr><td class="seq">${i + 1}</td>${row}</tr>`).join('')
+      : `<tr><td colspan="${withSeq.length}" class="empty">${emptyMsg}</td></tr>`;
+    // 汇总行：前两格合并为分组标题（跨「序号+名称」两列，加粗+底色），其余按列居中；
+    // 无数据时不渲染全 0 的汇总。summary[i] 与 cols[i] 一一对应，「本期」列同样加 hi。
     const foot = (summary && rows.length)
-      ? `<tfoot><tr class="db-summary"><td class="db-summary-title">${summary[0]}</td>${summary.slice(1).map((x, i) => `<td class="${colCls(cols[i + 1] || {})}">${x}</td>`).join('')}</tr></tfoot>`
+      ? `<tfoot><tr class="db-summary"><td class="db-summary-title" colspan="2">${summary[0]}</td>${summary.slice(1).map((x, i) => `<td class="${colCls(cols[i + 1] || {})}">${x}</td>`).join('')}</tr></tfoot>`
       : '';
     return `<table class="grid db-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
   }
@@ -455,10 +457,11 @@ function dashboardPage(host) {
     btn.disabled = true; btn.textContent = '导出中…';
 
     const d = state.data;
-    const shipHeader = ['客户名称','本期单量','上期单量','单量环比','本期发货工时','上期发货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单均成本(元)'];
-    const recvHeader = ['客户名称','本期箱数','上期箱数','箱数环比','本期收货工时','上期收货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单箱成本(元)'];
-    const intHeader  = ['项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
-    const logHeader  = ['项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','发货总单量','后勤单均成本(元/单)'];
+    // ★ 序号列：与看板四表一致，固定首列，按当前顺序 1..N 编号
+    const shipHeader = ['序号','客户名称','本期单量','上期单量','单量环比','本期发货工时','上期发货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单均成本(元)'];
+    const recvHeader = ['序号','客户名称','本期箱数','上期箱数','箱数环比','本期收货工时','上期收货工时','工时环比','本期时效','上期时效','时效环比','其他工时','公摊工时','单箱成本(元)'];
+    const intHeader  = ['序号','项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
+    const logHeader  = ['序号','项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','发货总单量','后勤单均成本(元/单)'];
 
     const aoaSheet = (header, rows) => [
       [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${d.periodLabel}）`],
@@ -466,24 +469,24 @@ function dashboardPage(host) {
       ...rows,
     ];
 
-    const aoaShip = aoaSheet(shipHeader, d.shippingList.map(o => [
-      o.customer_name || '', num0(o.cur_ship_qty), num0(o.prev_ship_qty), wowStr(o.ship_qty_wow),
+    const aoaShip = aoaSheet(shipHeader, d.shippingList.map((o, i) => [
+      i + 1, o.customer_name || '', num0(o.cur_ship_qty), num0(o.prev_ship_qty), wowStr(o.ship_qty_wow),
       num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
       o.cur_efficiency ? num2(o.cur_efficiency) : '-',
       o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
       num2(o.cur_other_hours), num2(o.cur_shared_hours),
       o.cur_unit_cost ? num3(o.cur_unit_cost) : '-',
     ]));
-    const aoaRecv = aoaSheet(recvHeader, d.receivingList.map(o => [
-      o.customer_name || '', num0(o.cur_cartons), num0(o.prev_cartons), wowStr(o.cartons_wow),
+    const aoaRecv = aoaSheet(recvHeader, d.receivingList.map((o, i) => [
+      i + 1, o.customer_name || '', num0(o.cur_cartons), num0(o.prev_cartons), wowStr(o.cartons_wow),
       num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
       o.cur_efficiency ? num2(o.cur_efficiency) : '-',
       o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
       num2(o.cur_other_hours), num2(o.cur_shared_hours),
       o.cur_doc_cost ? num3(o.cur_doc_cost) : '-',
     ]));
-    const aoaInt = aoaSheet(intHeader, d.internalList.map(o => [
-      o.project || '', num0(o.cur_qty), num0(o.prev_qty), wowStr(o.qty_wow),
+    const aoaInt = aoaSheet(intHeader, d.internalList.map((o, i) => [
+      i + 1, o.project || '', num0(o.cur_qty), num0(o.prev_qty), wowStr(o.qty_wow),
       num2(o.cur_main_hours), num2(o.prev_main_hours), wowStr(o.main_hours_wow),
       o.cur_efficiency ? num2(o.cur_efficiency) : '-',
       o.prev_efficiency ? num2(o.prev_efficiency) : '-', wowStr(o.efficiency_wow),
@@ -493,8 +496,8 @@ function dashboardPage(host) {
     // 后勤组：单均成本 = 行金额(单价×工时) / 发货组本期总单量（与页面同口径；总单量为 0 → '-'）
     const logShipQty = d.shippingList.reduce((s, o) => s + (Number(o.cur_ship_qty) || 0), 0);
     const logAmt = (o) => (Number(o.cost_rate) || 0) * (Number(o.cur_total_hours) || 0);
-    const aoaLog = aoaSheet(logHeader, d.logisticsList.map(o => [
-      o.project || '', num2(o.cost_rate),
+    const aoaLog = aoaSheet(logHeader, d.logisticsList.map((o, i) => [
+      i + 1, o.project || '', num2(o.cost_rate),
       num2(o.cur_total_hours), num2(o.prev_total_hours), wowStr(o.total_hours_wow),
       num0(logShipQty),
       logShipQty > 0 ? num3(logAmt(o) / logShipQty) : '-',
@@ -505,7 +508,8 @@ function dashboardPage(host) {
     // ★ 列宽/行高配置：客户/项目名完整展示(wch=25)，数值列紧凑(wch=12)
     // XLSX 社区版不支持字体/底色/对齐，仅 !cols / !rows 可用
     const fmtSheet = (aoa, name, nameColW, numColW) => {
-      const cols = aoa[1].map((_, i) => ({ wch: i === 0 ? nameColW : numColW }));
+      // 第 1 列为序号(窄)，第 2 列为客户/项目名(宽)，其余数值列紧凑
+      const cols = aoa[1].map((_, i) => ({ wch: i === 0 ? 6 : i === 1 ? nameColW : numColW }));
       const rows = [];
       rows[0] = { hpt: 28 };  // 标题行（第 1 行）稍大
       rows[1] = { hpt: 22 };  // 表头行紧凑

@@ -1230,6 +1230,8 @@ select option:disabled { color: #aab2bf; background: #f4f6f9; font-style: italic
 /* 覆盖 .grid 的左对齐/右对齐 */
 .db-table th.num, .db-table th.cust { text-align:center; }
 .db-table td.num { text-align:center; }
+/* 序号列：窄列居中，弱化为次要信息 */
+.db-table td.seq, .db-table th.seq { width:44px; color:var(--muted); font-variant-numeric:tabular-nums; }
 /* 客户/项目名称列：完整单行无省略、靠左阅读友好；悬浮 title 保留全名（原生） */
 .db-table td.cust { text-align:left; font-weight:600; white-space:nowrap; overflow:visible; }
 .db-table th.cust { font-weight:700; }
