@@ -71,6 +71,18 @@ function resolvePeriod(dateFrom, dateTo) {
   return { from: `${y}-${m}-01`, to: `${y}-${m}-${String(last).padStart(2, '0')}` };
 }
 
+// 真实日历日期校验（YYYY-MM-DD）：缺口展开要把日期内联进 SQL 常量列，必须先证伪非法/不存在日期
+function isRealDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const t = new Date(s + 'T00:00:00Z');
+  return Number.isFinite(+t) && t.toISOString().slice(0, 10) === s;
+}
+function nextDateStr(s) {
+  const t = new Date(s + 'T00:00:00Z');
+  t.setUTCDate(t.getUTCDate() + 1);
+  return t.toISOString().slice(0, 10);
+}
+
 // ========== 唯一性校验（发货/库内/后勤 禁止同日同维度重复） ==========
 // 收货允许同日多客户多行（不校验）；其他三种 work_type 用 (warehouse, date, key) 联合唯一
 // key 规则：发货/收货用 customer_id，库内/后勤用 project
@@ -177,7 +189,6 @@ router.get('/', (req, res) => {
     // 本仓货主：warehouse 精确边界匹配多仓串；排除已删除（软删 is_deleted=1）与停用货主（仅合作中展示缺口）
     const ownerWhere = ["',' || c.warehouse || ',' LIKE ? ESCAPE '\\'", 'c.is_deleted=0', "c.coop_status='合作中'"];
     const ownerParams = [warehouseExactLikeValue(warehouse)];
-    const gap = svc.resolveGapScope(dateFrom, dateTo); // ★ 缺口判定日与展示日统一（单日=该日，多日=昨天）
     if (custScope.sql) { ownerWhere.push(custScope.sql); ownerParams.push(...custScope.params); }
     if (q) { ownerWhere.push('(COALESCE(NULLIF(c.short_name,\'\'),c.company_name) LIKE ? OR c.company_name LIKE ?)'); const like = `%${q}%`; ownerParams.push(like, like); }
     const ownerWhereSql = ownerWhere.join(' AND ');
@@ -185,26 +196,45 @@ router.get('/', (req, res) => {
     // filled：当前筛选下的 pending 发货记录（沿用上面的 whereSql）
     const filledWhere = whereSql === 'WHERE ' ? '' : whereSql;
     const CUST_STATUS = `CASE WHEN c.is_deleted=1 THEN '已删除' WHEN c.coop_status<>'合作中' THEN '停用' ELSE '启用' END`;
-    // 缺口判定：与缺口行展示的日期严格一致（gap.date 是单日筛选日或多日下的补报建议日）。
-    // 之前用 period 判定、却展示「昨天」，导致 11-19 已归档的货主仍在未归档列表以 11-19 出现。
-    const periodWhere = 'w.date = ?';
+    // ★ 多日缺口展开（2026-11-21）：所选日期范围内「每一天」都生成待补行（此前多日只显示昨天一天）。
+    // 判定日与展示日仍严格一致：待补行展示哪一天，就用哪一天判定是否已填（归档/草稿任一存在即抑制）。
+    // need_backfill = 该日早于今天；未来日期不生成；范围上限 62 天（超出取最近 62 天，防单次查询行数失控）。
+    const todayStr = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+    const gapDates = [];
+    {
+      let from = isRealDate(dateFrom) ? dateFrom : period.from;
+      let to = isRealDate(dateTo) ? dateTo : period.to;
+      if (!isRealDate(from)) from = todayStr.slice(0, 8) + '01';
+      if (!isRealDate(to)) to = todayStr;
+      if (to > todayStr) to = todayStr;
+      const MAX_GAP_DAYS = 62;
+      const floor = new Date(to + 'T00:00:00Z');
+      floor.setUTCDate(floor.getUTCDate() - (MAX_GAP_DAYS - 1));
+      const floorStr = floor.toISOString().slice(0, 10);
+      if (from < floorStr) from = floorStr;
+      for (let d = from; d <= to; d = nextDateStr(d)) gapDates.push(d);
+    }
+    // gapDates 全部由 isRealDate 校验后逐日推进生成，可安全内联为 SQL 常量列
+    const gapDatesSql = gapDates.length
+      ? "SELECT '" + gapDates.join("' AS d UNION ALL SELECT '") + "' AS d"
+      : 'SELECT NULL AS d WHERE 1=0';
 
     const countSql = `
       SELECT (
         SELECT COUNT(*) FROM work_hours w ${JOIN} ${filledWhere}
       ) + (
-        SELECT COUNT(*) FROM customers c
+        SELECT COUNT(*) FROM customers c JOIN (${gapDatesSql}) gd
          WHERE ${ownerWhereSql}
            AND NOT EXISTS (
              SELECT 1 FROM work_hours w
               WHERE w.warehouse=? AND w.work_type='发货'
-                AND w.customer_id=c.customer_id AND ${periodWhere}
+                AND w.customer_id=c.customer_id AND w.date=gd.d
            )
       ) AS c`;
     const total = db.prepare(countSql).get(
       ...params,                        // filled 计数参数
       ...ownerParams,                   // owners 计数参数
-      warehouse, gap.date               // NOT EXISTS 参数
+      warehouse                         // NOT EXISTS 仓库参数
     ).c;
 
     const rows = db.prepare(`
@@ -222,33 +252,31 @@ router.get('/', (req, res) => {
         UNION ALL
         SELECT 0 AS work_id, ? AS warehouse, '发货' AS work_type, c.customer_id,
                c.company_name AS customer_name,   -- 与已填行 COALESCE(cl.company_name,...) 口径一致：填前填后名字不变
-               COALESCE(c.default_unit, '单') AS unit, ? AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, NULL AS workload, '' AS project,
+               COALESCE(c.default_unit, '单') AS unit, gd.d AS date, 0 AS ship_orders, 0 AS cartons, 0 AS tons, 0 AS cubic, 0 AS pallets, NULL AS workload, '' AS project,
                0 AS main_hours, 0 AS other_hours, 0 AS shared_hours, 0 AS total_hours,
                0 AS efficiency, 0 AS unit_cost, 0 AS doc_cost, '' AS remark, c.owner_user_id,
                'pending' AS status, NULL AS submitter, NULL AS submit_time,
                COALESCE(c.sort_order, 9999) AS sort_order,
                COALESCE(c.default_unit, '单') AS default_unit,
                ${CUST_STATUS} AS customer_status, 0 AS filled,
-               ? AS suggest_date, ? AS need_backfill
-          FROM customers c
+               gd.d AS suggest_date, CASE WHEN gd.d < ? THEN 1 ELSE 0 END AS need_backfill
+          FROM customers c JOIN (${gapDatesSql}) gd
          WHERE ${ownerWhereSql}
            AND NOT EXISTS (
              SELECT 1 FROM work_hours w
               WHERE w.warehouse=? AND w.work_type='发货'
-                AND w.customer_id=c.customer_id AND ${periodWhere}
+                AND w.customer_id=c.customer_id AND w.date=gd.d
            )
       ) t
-      ORDER BY filled DESC, sort_order ASC, date DESC, customer_name
+      ORDER BY filled DESC, date DESC, sort_order ASC, customer_name
       LIMIT ? OFFSET ?`
     ).all(
       ...params,                       // ① filled 分支 WHERE 参数（SQL 文本中最先出现）
       warehouse,                       // ② UNION ALL 下半部 SELECT 常量 ? AS warehouse
-      gap.date,                        // ③ 缺口行 ? AS date（判定日即展示日）
-      gap.date,                        // ④ 缺口行 ? AS suggest_date
-      gap.need_backfill ? 1 : 0,       // ⑤ 缺口行 ? AS need_backfill
-      ...ownerParams,                  // ⑥ owners 分支 WHERE 参数
-      warehouse, gap.date,             // ⑦ NOT EXISTS 参数（与展示日一致）
-      pageSize, (page - 1) * pageSize  // ⑧ LIMIT / OFFSET
+      todayStr,                        // ③ 缺口行 need_backfill 判定基准（该日早于今天=待补）
+      ...ownerParams,                  // ④ owners 分支 WHERE 参数
+      warehouse,                       // ⑤ NOT EXISTS 仓库参数（日期用 gd.d，无需参数）
+      pageSize, (page - 1) * pageSize  // ⑥ LIMIT / OFFSET
     );
 
     const filledRows = rows.filter((r) => r.filled === 1);

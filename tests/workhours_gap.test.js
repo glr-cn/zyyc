@@ -9,7 +9,8 @@
 //
 // 修复口径：缺口行展示哪一天，就用哪一天判定「是否已填」。
 //   单日筛选 → 该日（need_backfill = 该日早于今天）
-//   多日范围 → 昨天（补报建议日，need_backfill = 昨天落在范围内）
+//   多日范围（v35+ 再升级）→ 范围内逐日生成待补行（上限取最近 62 天，未来日不生成），
+//     方便直接在未归档页查找「哪些天哪些客户没有归档」，无需逐日切换筛选。
 // ============================================================================
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -94,31 +95,50 @@ function callList(handler, query) {
   return { body, statusCode: res.statusCode };
 }
 
-// ---------- 2. 纯函数口径 ----------
+// ---------- 2. 多日范围逐日展开（v35+ 行为） ----------
 
-test('resolveGapScope：单日=今天 → 判定/展示都是今天，不标待补', () => {
-  const svc = require('../src/services/workhours');
-  const r = svc.resolveGapScope('2026-11-20', '2026-11-20', '2026-11-20');
-  assert.equal(r.date, '2026-11-20');
-  assert.equal(r.need_backfill, false);
+test('多日范围：范围内逐日生成待补行，某日已有归档/草稿则该日抑制', () => {
+  reset(); seed();
+  const h = freshListHandler();
+  const { body } = callList(h, {
+    warehouse: '龙湖仓', work_type: '发货', status: 'pending',
+    dateFrom: '2026-11-18', dateTo: '2026-11-20', page: '1', pageSize: '500',
+  });
+  const gaps = body.data.filter((r) => r.filled === 0);
+  // 货主A/B 在 11-19 均有记录（归档/草稿）→ 该日无缺口；11-18 与 11-20 各 2 条
+  assert.equal(gaps.length, 4, '11-18 与 11-20 应各有 2 条待补行');
+  assert.deepEqual([...new Set(gaps.map((r) => r.date))].sort(), ['2026-11-18', '2026-11-20']);
+  for (const g of gaps) {
+    assert.equal(g.suggest_date, g.date, '建议补报日 = 展示日');
+    assert.equal(g.need_backfill, 1, '两日均早于今天 → 标待补');
+  }
+  assert.equal(body.data.filter((r) => r.filled === 1).length, 1, '货主B 11-19 草稿照常展示');
+  assert.equal(body.total, 5);
+  // 排序：已填行在前，其后待补行按日期倒序
+  assert.equal(body.data[0].filled, 1);
+  assert.equal(body.data[1].date, '2026-11-20');
 });
 
-test('resolveGapScope：单日=历史日期 → 该日 + 待补', () => {
-  const svc = require('../src/services/workhours');
-  const r = svc.resolveGapScope('2026-11-19', '2026-11-19', '2026-11-20');
-  assert.equal(r.date, '2026-11-19');
-  assert.equal(r.need_backfill, true);
-});
-
-test('resolveGapScope：多日范围 → 昨天（补报建议日），范围内标待补', () => {
-  const svc = require('../src/services/workhours');
-  const r = svc.resolveGapScope('2026-11-01', '2026-11-30', '2026-11-20');
-  assert.equal(r.date, '2026-11-19');
-  assert.equal(r.need_backfill, true);
-  // 范围不含昨天 → 不标待补
-  const r2 = svc.resolveGapScope('2026-11-01', '2026-11-10', '2026-11-20');
-  assert.equal(r2.date, '2026-11-19');
-  assert.equal(r2.need_backfill, false);
+test('范围上限 62 天：超长范围只展开最近 62 天，今天不标待补', () => {
+  reset(); seed();
+  const h = freshListHandler();
+  const now = new Date();
+  const todayStr = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  const floor = new Date(todayStr + 'T00:00:00Z');
+  floor.setUTCDate(floor.getUTCDate() - 61);
+  const floorStr = floor.toISOString().slice(0, 10);
+  const { body } = callList(h, {
+    warehouse: '龙湖仓', work_type: '发货', status: 'pending',
+    dateFrom: '2020-01-01', dateTo: todayStr, page: '1', pageSize: '2000',
+  });
+  const gaps = body.data.filter((r) => r.filled === 0);
+  const dates = [...new Set(gaps.map((r) => r.date))].sort();
+  assert.equal(dates[0], floorStr, '最早待补日 = 今天 - 61 天');
+  const seeded = '2026-11-19' >= floorStr && '2026-11-19' <= todayStr;
+  assert.equal(dates.length, seeded ? 61 : 62, '62 天窗口内扣除预置记录日');
+  assert.ok(gaps.every((g) => g.date >= floorStr && g.date <= todayStr), '窗口外不生成行');
+  const todayGaps = gaps.filter((g) => g.date === todayStr);
+  if (todayGaps.length) assert.equal(todayGaps[0].need_backfill, 0, '今天尚未结束 → 不标待补');
 });
 
 test('isSameHoursRow：数值 161 / 161.0 / "161" 视为一致（避免误判覆盖）', () => {
