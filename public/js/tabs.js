@@ -40,6 +40,8 @@ ERP.PAGE_META = {
   // 订单导入 + 数据看板（2026-11-19 新增 · docs/单据 子菜单）
   order_import:   { title: '订单导入', icon: '📤' },
   order_dashboard: { title: '数据看板', icon: '📊' },
+  // 独立订单导入分析模块（数据与其他业务完全隔离）
+  oih_import: { title: '订单导入(新)', icon: '📥' },
   // 快捷工具（parent 为容器，不注册；子页 path 与 menus.path 一致）
   tool_split_no: { title: '分列单号', icon: '✂️' },
   tool_barcode: { title: '条码设计', icon: '🏷️' },

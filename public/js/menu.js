@@ -124,7 +124,7 @@ ERP._MENU_RUNTIME = null; // 登录后由后端权限菜单树驱动（RBAC 动�
 // ---------- 菜单结构版本 / 缓存治理 ----------
 // 每次改菜单种子或渲染结构必须 +1；版本变化会清掉历史菜单缓存 + 强制刷新 /auth/me，
 // 避免「后端已加菜单、前端仍拿旧数据」导致主菜单静默消失。
-ERP.MENU_SCHEMA_VERSION = 8;   // v8 = 看板从直达变容器，新增「工时汇总」+「快递分析」子菜单
+ERP.MENU_SCHEMA_VERSION = 9;   // v9 = 新增「订单导入(新)」oih_import 独立模块
 ERP.MENU_CACHE_PREFIX = /^erp_menu/i;
 
 ERP.clearMenuCache = function () {

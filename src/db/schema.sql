@@ -278,3 +278,92 @@ CREATE TABLE IF NOT EXISTS express_region_rules (
 );
 
 CREATE INDEX IF NOT EXISTS idx_express_region_carrier ON express_region_rules(carrier, region_class);
+
+-- ============================================================
+-- 独立「订单导入」模块（order_import_hub）
+-- ------------------------------------------------------------
+-- 设计约束（用户需求 2026-11-21）：本模块数据与系统其他业务表**完全无关联**，
+-- 仅用于「导入 + 对这批数据的分析」，不写 orders / customers / work_hours。
+-- 一个工作簿可含多个平台 Sheet，导入后按 Sheet 分流到同一张统一表。
+-- region_class 在导入时按申通偏远规则算好（大偏远/小偏远/正常/其他），
+-- 查询看板直接读列，保证大数据量下仍然快。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS oih_batches (
+  batch_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name     TEXT,
+  platform_count INTEGER NOT NULL DEFAULT 0,
+  total_rows    INTEGER NOT NULL DEFAULT 0,
+  inserted_rows INTEGER NOT NULL DEFAULT 0,
+  skipped_rows  INTEGER NOT NULL DEFAULT 0,
+  failed_rows   INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'processing',  -- processing / done / failed
+  message       TEXT,
+  operator      TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  finished_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS oih_rows (
+  row_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id        INTEGER NOT NULL,
+  platform        TEXT,                       -- 来源平台（按 Sheet 分流）
+  sheet_name      TEXT,                       -- 原始 Sheet 名
+  waybill_no      TEXT,                       -- 快递单号（查询主键）
+  owner_name      TEXT,                       -- 货主
+  shop_name       TEXT,                       -- 店铺 / 渠道
+  express_company TEXT,                       -- 快递公司（原值）
+  carrier         TEXT,                       -- 规范化快递公司（申通快递等）
+  is_shentong     INTEGER NOT NULL DEFAULT 0, -- 是否申通（分析范围默认只看申通）
+  order_date      TEXT,                       -- YYYY-MM-DD
+  to_province     TEXT,
+  to_city         TEXT,
+  to_district     TEXT,
+  region_class    TEXT NOT NULL DEFAULT '其他', -- 大偏远/小偏远/正常/其他
+  quantity        REAL NOT NULL DEFAULT 1,
+  receiver_name   TEXT,
+  receiver_address TEXT,
+  raw_json        TEXT,                       -- 原始行快照（JSON，截断长文本）
+  created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_oih_waybill  ON oih_rows(waybill_no);
+CREATE INDEX IF NOT EXISTS idx_oih_batch    ON oih_rows(batch_id);
+CREATE INDEX IF NOT EXISTS idx_oih_region   ON oih_rows(is_shentong, region_class, order_date);
+CREATE INDEX IF NOT EXISTS idx_oih_platform ON oih_rows(platform);
+CREATE INDEX IF NOT EXISTS idx_oih_owner    ON oih_rows(owner_name);
+
+-- 导入异常明细：记录每条「跳过/失败」的行及原因，供用户查看/下载（用户 2026-11-21 需求）
+--   reason_type: duplicate(批次内重复) / empty(单号与货主均为空) / write_error(写入异常)
+--   raw_json: 原始行快照（截断），用于还原该行为什么不合格
+CREATE TABLE IF NOT EXISTS oih_rejects (
+  reject_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id    INTEGER NOT NULL,
+  platform    TEXT,
+  sheet_name  TEXT,
+  excel_row   INTEGER,          -- Excel 中的行号（表头为第1行）
+  reason_type TEXT NOT NULL,
+  reason      TEXT NOT NULL,    -- 中文可读原因
+  waybill_no  TEXT,
+  owner_name  TEXT,
+  raw_json    TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_oih_rejects_batch ON oih_rejects(batch_id, reason_type);
+
+-- 大文件分片上传暂存（线上网关限制单请求体大小，33MB 文件需切片上传后再合并）
+-- 用 DB BLOB 而非本地文件：多实例部署时各请求可能落到不同实例，DB 是唯一共享存储。
+CREATE TABLE IF NOT EXISTS oih_upload_chunks (
+  upload_id  TEXT NOT NULL,
+  idx        INTEGER NOT NULL,
+  data       BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY (upload_id, idx)
+);
+CREATE TABLE IF NOT EXISTS oih_upload_sessions (
+  upload_id    TEXT PRIMARY KEY,
+  file_name    TEXT NOT NULL,
+  file_size    INTEGER NOT NULL DEFAULT 0,
+  total_chunks INTEGER NOT NULL DEFAULT 0,
+  received     INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'uploading',  -- uploading / merging / done / failed
+  created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);

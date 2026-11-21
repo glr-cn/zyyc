@@ -50,7 +50,8 @@ INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,gro
 INSERT OR IGNORE INTO menus (menu_id,menu_code,parent_id,menu_name,path,icon,group_name,sort,is_built) VALUES
  (701,'smart_quote',   7,'智能测算', 'smart_quote',   '🧮','测算',10,1),
  (702,'order_import',  7,'订单导入', 'order_import',  '📤','导入',20,1),
- (703,'order_dashboard',7,'数据看板','order_dashboard','📊','分析',30,1);
+ (703,'order_dashboard',7,'数据看板','order_dashboard','📊','分析',30,1),
+ (704,'oih_import',     7,'订单导入(新)','oih_import','📥','导入分析',40,1);
 
 -- 日志中心（父级为纯容器，path=NULL 不放行路由；权限只看子菜单 path）
 -- 前 5 个子菜单与业务模块一一对应，各页只查 module=对应值；

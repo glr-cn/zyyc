@@ -37,7 +37,7 @@ function authPayload(u) {
     role_id: u.role_id,
     menus: menuService.getMenuTree(role),
     permissions: menuService.permissionsOf(role),
-    menu_version: 7,   // 与 public/js/menu.js 的 ERP.MENU_SCHEMA_VERSION 保持一致
+    menu_version: 9,   // 与 public/js/menu.js 的 ERP.MENU_SCHEMA_VERSION 保持一致（新增 oih_import 菜单 → +1）
   };
 }
 
@@ -91,6 +91,27 @@ router.get('/me', auth, (req, res) => {
     .get(req.user.user_id);
   if (!u) return res.status(401).json({ error: '用户不存在' });
   res.json(authPayload(u));
+});
+
+// 自助修改密码：当前登录用户凭旧密码修改自己的密码（无需管理员介入）
+router.put('/change-password', auth, (req, res) => {
+  const b = req.body || {};
+  const oldPassword = String(b.old_password || '');
+  const newPassword = String(b.new_password || '');
+  if (!oldPassword || !newPassword) return res.status(400).json({ error: '旧密码和新密码必填' });
+  if (newPassword.length < 6) return res.status(400).json({ error: '新密码至少 6 位' });
+  const u = db.prepare('SELECT user_id, password_hash FROM users WHERE user_id=?').get(req.user.user_id);
+  if (!u) return res.status(401).json({ error: '用户不存在' });
+  if (!bcrypt.compareSync(oldPassword, u.password_hash)) {
+    return res.status(400).json({ error: '旧密码不正确' });
+  }
+  db.prepare('UPDATE users SET password_hash=? WHERE user_id=?').run(bcrypt.hashSync(newPassword, 10), req.user.user_id);
+  // 审计只记「改过密码」，绝不记录明文或哈希（与管理员重置密码一致）
+  require('../services/auditLog').writeLog(req, {
+    table: 'users', module: '系统/权限', action: 'update', targetId: req.user.user_id,
+    content: { before: { password_hash: '***' }, after: { password_hash: '***' }, note: '用户自助修改密码' },
+  });
+  res.json({ ok: true });
 });
 
 module.exports = router;

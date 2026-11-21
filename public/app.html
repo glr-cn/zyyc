@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231b2a4a'/%3E%3Ctext x='32' y='45' font-size='36' font-family='Microsoft YaHei,sans-serif' font-weight='700' fill='%23ffffff' text-anchor='middle'%3E%E4%BD%90%3C/text%3E%3C/svg%3E">
   <!-- 统一版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable -->
   <!-- 版本升级时改 ?v=N → URL 变化 → 浏览器自动下载新版本（完美 cache-busting） -->
-  <link rel="stylesheet" href="css/style.css?v=9">
+  <link rel="stylesheet" href="css/style.css?v=11">
 </head>
 <body>
   <div id="app" class="layout" style="display:none">
@@ -23,7 +23,7 @@
       <!-- 单行顶部 Header：左 Tab 标签栏 | 右 用户信息 + 退出（品牌区已移除，避免与首个 Tab 混淆） -->
       <header class="app-header">
         <div class="tabbar" id="tabbar"></div>
-        <div class="user"><span id="cloudState" class="cloud-state" title="云空间状态">云空间检测中…</span><span id="uname"></span><button id="logout">退出</button></div>
+        <div class="user"><span id="cloudState" class="cloud-state" title="云空间状态">云空间检测中…</span><button id="uname" class="uname-btn" type="button" title="点击修改密码"></button><button id="logout">退出</button></div>
       </header>
       <section class="content" id="content"></section>
     </div>
@@ -39,11 +39,11 @@
   <script defer src="js/api.js?v=8"></script>
   <script defer src="js/date-range-picker.js?v=7"></script>
   <script defer src="js/auth.js?v=7"></script>           <!-- 认证逻辑（tabs/app 都依赖） -->
-  <script defer src="js/menu.js?v=7"></script>           <!-- 菜单渲染（sidebar/nav） -->
+  <script defer src="js/menu.js?v=9"></script>           <!-- 菜单渲染（sidebar/nav）· v9 新增 oih_import -->
   <script defer src="js/_lib-lazy.js?v=7"></script>      <!-- 第三方库懒加载（xlsx/html-to-image） -->
-  <script defer src="js/_page_loader.js?v=10"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
-  <script defer src="js/tabs.js?v=7"></script>           <!-- PAGE_META 定义 + tabs 实例 -->
-  <script defer src="js/app.js?v=7"></script>            <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
+  <script defer src="js/_page_loader.js?v=11"></script>   <!-- 重页面脚本懒加载（新增 oih_import → js/order-import-hub.js） -->
+  <script defer src="js/tabs.js?v=9"></script>           <!-- PAGE_META 定义 + tabs 实例 · v9 新增 oih_import -->
+  <script defer src="js/app.js?v=8"></script>             <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
 
   <!-- ============================================================ -->
   <!-- 【重页面脚本】首次点开对应页面时才由 _page_loader.js 动态注入 -->

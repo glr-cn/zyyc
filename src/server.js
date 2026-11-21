@@ -25,6 +25,7 @@ const logisticsQuotesRouter = require('./routes/logistics-quotes');
 const smartQuoteRouter = require('./routes/smart-quote');
 const logsRouter = require('./routes/logs');
 const adminRouter = require('./routes/admin');
+const orderImportHubRouter = require('./routes/order-import-hub');
 const { getBuildInfo, injectToJson, getBuildVersion } = require('./version');
 
 const app = express();
@@ -336,6 +337,7 @@ app.use('/api/logistics-quotes', logisticsQuotesRouter);
 app.use('/api/smart-quote', smartQuoteRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/order-import-hub', orderImportHubRouter);   // 独立订单导入分析模块（与其他业务数据隔离）
 
 // 数据库运行诊断（供 /api/health 返回）
 // 用途：一眼看出「当前实例连的是哪个库、有没有业务数据、有没有可回滚的快照」，
