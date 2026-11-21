@@ -14,6 +14,9 @@
  *
  * 安全阀：
  *   - 线上业务表全空（0 行）时**拒绝覆盖**已有非空恢复包（否则会把好数据替换成空库）。
+ *   - **逐表归零保护**：某张表在恢复包中非空、线上却变成 0 行 → 默认拒绝覆盖
+ *     （2026-11-21 教训：工时被批量误删后，导出把恢复包里的 33 行覆盖成 0 行）。
+ *     确属人工清空时用 --allow-empty=work_hours 显式放行。
  *   - 线上数据行数比现有恢复包少时给出明显告警（不阻断，但需要人工确认）。
  *
  * 用法：
@@ -94,6 +97,19 @@ function countBiz(file) {
     console.log('[export] ⚠️ 线上与恢复包都是空库，仍写入（保持空状态一致）');
   } else if (online.total < local.total) {
     console.warn(`[export] ⚠️ 线上业务行数(${online.total}) 少于现有恢复包(${local.total})，请人工确认是否继续`);
+  }
+
+  // ★ 逐表归零保护：恢复包非空、线上变 0 行 → 拒绝覆盖（避免把最后一份完整数据替换为空表）
+  const allowEmpty = (arg('allow-empty', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const zeroed = BIZ_TABLES.filter((t) => (local.rows[t] || 0) > 0 && (online.rows[t] || 0) === 0);
+  const blocked = zeroed.filter((t) => !allowEmpty.includes(t));
+  if (blocked.length) {
+    fs.unlinkSync(tmp);
+    console.error(`[export] ❌ 以下业务表在恢复包中有数据、线上却为 0 行：${blocked.join('、')}`);
+    console.error('[export]    恢复包：' + JSON.stringify(local.rows));
+    console.error('[export]    线上  ：' + JSON.stringify(online.rows));
+    console.error('[export]    已拒绝覆盖（保护最后一份完整数据）。确属人工清空请加 --allow-empty=' + blocked.join(','));
+    process.exit(1);
   }
 
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
