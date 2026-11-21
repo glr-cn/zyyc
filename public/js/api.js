@@ -191,10 +191,13 @@ const API = {
         throw new Error('网络异常，无法连接服务器：' + e.message);
       }
       if (res.status >= 500 && attempt < 2) {
-        // 5xx → 服务端临时故障，重试
-        lastErr = new Error('HTTP ' + res.status);
-        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-        continue;
+        // ★ 修复 S-L2：仅对幂等的 GET 重试。POST/PUT/DELETE 若服务端已写入但返回 5xx，
+        //   重试会造成重复提交（重复订单/重复工时）。写操作失败直接抛出，由业务层决定。
+        if (method === 'GET') {
+          lastErr = new Error('HTTP ' + res.status);
+          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+          continue;
+        }
       }
       if (res.status === 401) this._handle401();
       if (!res.ok) await this._fail(res);

@@ -1468,7 +1468,9 @@ function createWorkhoursPage(warehouse) {
           const date = row && row.dataset.rowDate;
           const gapRow = state.lastRows.find((x) => String(x.customer_id) === String(cid) && (x.suggest_date || x.date) === date && x.filled === 0);
           if (gapRow) addGapBlock(state.warehouse, gapKeyOf(gapRow));
-          const tr = btn.closest('tr');
+          // ★ 修复 F2：原这里引用了尚未声明的 btn（const btn 在 1481 行）→ 暂时性死区崩溃。
+          //   直接复用本分支开头 1456 行已声明的 row（即 e.target.closest('tr')）。
+          const tr = row;
           if (tr) tr.remove();
           toast('已屏蔽该虚拟行（' + (gapRow && gapRow.customer_name ? gapRow.customer_name : '') + '）');
           return;

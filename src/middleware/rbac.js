@@ -33,17 +33,20 @@ function ownerScope(req) {
   return { sql: '', params: [] };
 }
 
-// 只读角色：非 GET 一律拒绝
+// 只读角色：仅安全方法放行（★ 修复 S-M5：HEAD/OPTIONS 也属只读，原 `!== 'GET'` 会误拒）
 function readonlyGate(req, res, next) {
-  if (req.user && req.user.is_readonly && req.method !== 'GET') {
+  const safe = req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
+  if (req.user && req.user.is_readonly && !safe) {
     return res.status(403).json({ error: '只读角色仅可查看，无操作权限' });
   }
   next();
 }
 
 // 行级隔离的单条记录归属校验（get/put/delete 用）
+// ★ 修复 S-L5：统一 Number 归一后比较，避免 int vs string 误判（SQL 占位符绑定不受影响，此处是 JS 层比较）。
+//   保持原安全语义：owner 缺失（null/undefined）时归一后与真实 user_id 不等 → 仍拒绝。
 function ensureOwn(req, row) {
-  if (req.user && req.user.data_scope === 'self' && row && row.owner_user_id !== req.user.user_id) {
+  if (req.user && req.user.data_scope === 'self' && row && Number(row.owner_user_id) !== Number(req.user.user_id)) {
     return false;
   }
   return true;

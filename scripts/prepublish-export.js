@@ -26,7 +26,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const Database = require('better-sqlite3');
+const { openDatabase } = require('../src/db/driver');
 
 const BIZ_TABLES = ['customers', 'warehouse_sort_config', 'work_hours', 'orders',
   'inventory_transactions', 'logistics_quotes', 'smart_quote_batches', 'smart_quote_records'];
@@ -46,7 +46,7 @@ const bundle = path.join(root, 'data', 'erp.restore-from-local.db');
 function countBiz(file) {
   const out = {};
   let total = 0;
-  const db = new Database(file, { readonly: true });
+  const db = openDatabase(file, { readOnly: true });
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
   for (const t of BIZ_TABLES) {
     if (!tables.has(t)) continue;

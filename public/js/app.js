@@ -43,12 +43,15 @@
     const name = meta ? meta.title : page || '该页面';
     const el = document.createElement('div');
     el.className = 'page-403';
+    // ★ 修复 F6：page 来自 location.hash，原 innerHTML 直接拼接 → 反射型 XSS。
+    //   结构用 innerHTML（静态），动态 name 用 textContent 注入，杜绝脚本执行。
     el.innerHTML =
       '<div class="err403">' +
       '<div class="code403">403</div>' +
-      '<div class="msg403">无权访问「' + name + '」：该菜单未授权给当前角色，请联系管理员在「基础资料 → 权限 → 角色权限」中配置。</div>' +
+      '<div class="msg403">无权访问「<span class="page403-name"></span>」：该菜单未授权给当前角色，请联系管理员在「基础资料 → 权限 → 角色权限」中配置。</div>' +
       '<button id="backHomeBtn" class="primary">返回首页</button>' +
       '</div>';
+    el.querySelector('.page403-name').textContent = name;
     content.appendChild(el);
     document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
     document.title = '403 无权访问 · 佐雍云仓数据中心';
