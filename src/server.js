@@ -148,7 +148,7 @@ if (IS_DEV) {
 }
 
 // 请求体上限：上传 Excel 另有 multer limit，JSON/URL 表单 20MB 足够
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '25mb' }));   // 订单导入分批上传：单批约 1-2MB，留足余量
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // ===========================================================

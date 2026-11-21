@@ -303,6 +303,162 @@ router.post('/upload/abort', auth, gate, (req, res) => {
   res.json({ ok: true });
 });
 
+// ============================================================================
+// 分批流式导入（FaaS 环境根治方案）
+//   浏览器端用 SheetJS 解析 xlsx → 按 1000 行/批传 JSON → 服务端每批一个小事务。
+//   服务端不再整体解析 33MB 文件，单请求内存/时长可控，避免 FaaS 实例被回收。
+//   会话状态全部落 DB（oih_batches / oih_dedup），重启/多实例都能续传。
+//   POST /stream/init   {fileName,totalRows} → {batchId}
+//   POST /stream/rows   {batchId,sheet,platform,headers,rows,startRow} → 本批计数
+//   POST /stream/finish {batchId} → 汇总结果
+//   POST /stream/abort  {batchId} → 删除该批次全部数据
+// ============================================================================
+router.post('/stream/init', auth, gate, (req, res) => {
+  try {
+    const fileName = String(req.body.fileName || 'upload.xlsx').slice(0, 255);
+    const totalRows = Number(req.body.totalRows) || 0;
+    const operator = req.user?.display_name || req.user?.username || '未知';
+    const info = db.prepare(
+      "INSERT INTO oih_batches (file_name,platform_count,total_rows,operator,status) VALUES (?,?,?,?,'streaming')"
+    ).run(fileName, 0, totalRows, operator);
+    res.json({ batchId: Number(info.lastInsertRowid) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/stream/rows', auth, gate, (req, res) => {
+  const t0 = Date.now();
+  const batchId = Number(req.body.batchId);
+  const sheet = String(req.body.sheet || '');
+  const platform = String(req.body.platform || sheet || '未知');
+  const headers = Array.isArray(req.body.headers) ? req.body.headers.map((h) => String(h == null ? '' : h)) : [];
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  const startRow = Number(req.body.startRow) || 2;
+  if (!batchId || !headers.length || !rows.length) return res.status(400).json({ error: '批次或行数据无效' });
+  const sess = db.prepare("SELECT * FROM oih_batches WHERE batch_id=? AND status='streaming'").get(batchId);
+  if (!sess) return res.status(400).json({ error: '导入批次不存在或已结束，请重新上传' });
+
+  const resolveRule = expressRegion.createResolver(db);
+  const legacy = makeLegacy();
+  const col = hub.buildColumnMap(headers, platform);
+  const rule = hub.PLATFORM_RULES[platform] || {};
+  let sIns = 0, sSkip = 0, sFail = 0, sFilter = 0;
+
+  const insRow = db.prepare(`
+    INSERT INTO oih_rows (batch_id,platform,sheet_name,waybill_no,owner_name,shop_name,
+      express_company,carrier,is_shentong,order_date,to_province,to_city,to_district,
+      region_class,quantity,receiver_name,receiver_address,raw_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const insDedup = db.prepare('INSERT OR IGNORE INTO oih_dedup (batch_id,dedup_key,sheet_name,excel_row) VALUES (?,?,?,?)');
+  const insReject = db.prepare(`
+    INSERT INTO oih_rejects (batch_id,platform,sheet_name,excel_row,reason_type,reason,waybill_no,owner_name,raw_json)
+    VALUES (?,?,?,?,?,?,?,?,?)
+  `);
+  // 查询重复行首次出现位置
+  const findFirst = db.prepare('SELECT sheet_name,excel_row FROM oih_dedup WHERE batch_id=? AND dedup_key=?');
+
+  try {
+    db.exec('BEGIN');
+    for (let i = 0; i < rows.length; i++) {
+      const arr = rows[i];
+      const excelRow = startRow + i;
+      const get = (field) => hub.getField(col, arr, field);
+      const waybill = get('waybill_no');
+      const ownerName = get('owner_name');
+      const rawCarrier = get('express_company');
+      const carrier = hub.normalizeCarrier(rawCarrier || platform);
+      const region = hub.resolveRegion(get('to_province'), get('to_city'), get('to_district'), get('receiver_address'));
+      const cls = hub.classify(region, carrier, resolveRule, legacy);
+      const sample = {};
+      headers.forEach((h, j) => { if (j < 30 && arr[j] != null && String(arr[j]).trim()) sample[h] = String(arr[j]).slice(0, 120); });
+      let rawJson = '';
+      try { rawJson = JSON.stringify(sample); } catch (e2) { rawJson = ''; }
+      const rejectRow = (type, reason) => {
+        try { insReject.run(batchId, platform, sheet, excelRow, type, reason, waybill || null, ownerName || null, rawJson); } catch (e2) {}
+      };
+
+      // ① 状态过滤
+      if (rule.filter) {
+        const f = rule.filter;
+        const val = hub.rawByHeader(headers, arr, f.field);
+        if (!f.allow.includes(val)) {
+          sFilter++; rejectRow('filtered', `${f.field}为「${val || '空'}」，仅统计 ${f.allow.join('/')}`); continue;
+        }
+      }
+      if (!waybill && !ownerName) {
+        sFail++; rejectRow('empty', '快递单号与货主名称均为空，无法定位订单'); continue;
+      }
+      // ② 去重（落 DB，跨批共享）
+      const extra = rule.dedupKeyExtra ? hub.rawByHeader(headers, arr, rule.dedupKeyExtra) : '';
+      const dedupKey = waybill ? 'W:' + waybill + '|' + extra
+        : `R:${platform}|${ownerName}|${get('receiver_address')}|${get('order_date')}`;
+      const dup = insDedup.run(batchId, dedupKey, sheet, excelRow);
+      if (dup.changes === 0) {
+        sSkip++;
+        const first = findFirst.get(batchId, dedupKey) || {};
+        const reason = waybill
+          ? `快递单号「${waybill}」${extra ? `（${rule.dedupKeyExtra}=${extra}）` : ''}重复，首次出现于 ${first.sheet_name || '?'} 第 ${first.excel_row || '?'} 行`
+          : `同平台/货主/地址/日期组合重复`;
+        rejectRow('duplicate', reason);
+        continue;
+      }
+      try {
+        insRow.run(
+          batchId, platform, sheet, waybill || null, ownerName || null, get('shop_name') || null,
+          rawCarrier || null, carrier || null, hub.isShentong(carrier) ? 1 : 0,
+          hub.cellDate(get('order_date')) || null, region.province || null, region.city || null,
+          region.district || null, cls, hub.cellNumber(get('quantity')),
+          get('receiver_name') || null, get('receiver_address') || null, rawJson,
+        );
+        sIns++;
+      } catch (e2) {
+        sFail++; rejectRow('write_error', '写入失败：' + e2.message);
+      }
+    }
+    // 累加批次计数
+    db.prepare(`UPDATE oih_batches SET inserted_rows=inserted_rows+?,skipped_rows=skipped_rows+?,
+      failed_rows=failed_rows+?,platform_count=(SELECT COUNT(DISTINCT platform) FROM oih_rows WHERE batch_id=?)
+      WHERE batch_id=?`).run(sIns, sSkip, sFail, batchId, batchId);
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    return res.status(500).json({ error: '分批写入失败：' + e.message });
+  }
+  res.json({ inserted: sIns, skipped: sSkip, failed: sFail, filtered: sFilter, elapsedMs: Date.now() - t0 });
+});
+
+router.post('/stream/finish', auth, gate, (req, res) => {
+  const batchId = Number(req.body.batchId);
+  if (!batchId) return res.status(400).json({ error: '缺少 batchId' });
+  const sess = db.prepare("SELECT * FROM oih_batches WHERE batch_id=? AND status='streaming'").get(batchId);
+  if (!sess) return res.status(400).json({ error: '导入批次不存在或已完成' });
+  const rej = db.prepare("SELECT reason_type,COUNT(*) c FROM oih_rejects WHERE batch_id=? GROUP BY reason_type").all(batchId);
+  const filtered = (rej.find((r) => r.reason_type === 'filtered') || {}).c || 0;
+  db.prepare("UPDATE oih_batches SET status='done',finished_at=datetime('now','localtime') WHERE batch_id=?").run(batchId);
+  // 清理去重表（数据已入库，释放空间）
+  db.prepare('DELETE FROM oih_dedup WHERE batch_id=?').run(batchId);
+  res.json({
+    batchId,
+    fileName: sess.file_name,
+    platformCount: sess.platform_count,
+    inserted: sess.inserted_rows, skipped: sess.skipped_rows,
+    failed: sess.failed_rows, filtered,
+    total: sess.inserted_rows + sess.skipped_rows + sess.failed_rows + filtered,
+  });
+});
+
+router.post('/stream/abort', auth, gate, (req, res) => {
+  const batchId = Number(req.body.batchId);
+  if (!batchId) return res.status(400).json({ error: '缺少 batchId' });
+  db.exec('BEGIN');
+  db.prepare('DELETE FROM oih_rows WHERE batch_id=?').run(batchId);
+  db.prepare('DELETE FROM oih_rejects WHERE batch_id=?').run(batchId);
+  db.prepare('DELETE FROM oih_dedup WHERE batch_id=?').run(batchId);
+  db.prepare('DELETE FROM oih_batches WHERE batch_id=?').run(batchId);
+  db.exec('COMMIT');
+  res.json({ ok: true });
+});
+
 // ----------------------------------------------------------------------------
 // GET /api/order-import-hub/query — 快递单号/货主查询（单号优先忽略日期）
 // ----------------------------------------------------------------------------

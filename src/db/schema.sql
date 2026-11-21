@@ -349,6 +349,16 @@ CREATE TABLE IF NOT EXISTS oih_rejects (
 );
 CREATE INDEX IF NOT EXISTS idx_oih_rejects_batch ON oih_rejects(batch_id, reason_type);
 
+-- 分批流式导入去重表：跨批共享（落 DB，不依赖进程内存，适配 FaaS 多实例/重启）
+CREATE TABLE IF NOT EXISTS oih_dedup (
+  batch_id   INTEGER NOT NULL,
+  dedup_key  TEXT NOT NULL,
+  sheet_name TEXT,
+  excel_row  INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY (batch_id, dedup_key)
+);
+
 -- 大文件分片上传暂存（线上网关限制单请求体大小，33MB 文件需切片上传后再合并）
 -- 用 DB BLOB 而非本地文件：多实例部署时各请求可能落到不同实例，DB 是唯一共享存储。
 CREATE TABLE IF NOT EXISTS oih_upload_chunks (

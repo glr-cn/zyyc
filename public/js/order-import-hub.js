@@ -276,54 +276,83 @@
         </div>`;
     }
 
-    // 分片上传：每片单独请求，绕过网关请求体大小限制
-    async function uploadChunked(file) {
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-      const init = await API.post(API_BASE + '/upload/init', {
-        fileName: file.name, fileSize: file.size, totalChunks: totalChunks,
+    // ★ 流式导入（FaaS 根治方案）：浏览器端解析 Excel → 每 1000 行一批上传 → 服务端小事务写入。
+    //   服务端不再整体解析 33MB 文件，单请求内存/时长可控，避免 FaaS 实例被回收导致掉线。
+    const ROWS_PER_BATCH = 1000;
+    async function uploadStream(file) {
+      if (!window.ERP || !ERP.ensureXlsx) throw new Error('Excel 解析组件未就绪，请刷新页面重试');
+      showProgress(1, '📖 正在浏览器端解析 Excel（大文件可能需要十几秒，页面不会退出）…');
+      const XLSX = await ERP.ensureXlsx();
+      if (!XLSX) throw new Error('Excel 解析组件加载失败，请检查网络后刷新重试');
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try { resolve(XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true, dense: true })); }
+          catch (err) { reject(err); }
+        };
+        reader.onerror = () => reject(new Error('读取文件失败'));
+        reader.readAsArrayBuffer(file);
       });
-      const uploadId = init.uploadId;
-      let uploaded = 0;
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const blob = file.slice(start, end);
-        const fd = new FormData();
-        fd.append('uploadId', uploadId);
-        fd.append('idx', String(i));
-        fd.append('chunk', blob, 'chunk-' + i);
-        // 单片上传失败时重试 2 次（网络抖动/网关瞬断）
-        let ok = false, lastErr;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try { await API.upload(API_BASE + '/upload/chunk', fd); ok = true; break; }
-          catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); }
+
+      // 逐 Sheet 转二维数组
+      const sheets = data.SheetNames.map((name) => {
+        const aoa = XLSX.utils.sheet_to_json(data.Sheets[name], { header: 1, defval: '', blankrows: false, raw: true });
+        if (!aoa.length) return null;
+        return { sheet: name, headers: aoa[0].map((h) => String(h == null ? '' : h)), rows: aoa.slice(1) };
+      }).filter((s) => s && s.headers.length && s.rows.length);
+      if (!sheets.length) throw new Error('工作簿中没有可导入的数据行（请保留首行表头）');
+
+      const platformOf = (s) => {
+        // 复用后端识别：Sheet 名 / 表头特征
+        const keys = ['百世', '旺店通', '吉客云', '快麦', '多多打单', '聚水潭', '店管家', '风速'];
+        for (const k of keys) if (s.sheet.includes(k)) return k;
+        return s.sheet;
+      };
+      const totalRows = sheets.reduce((n, s) => n + s.rows.length, 0);
+      const init = await API.post(API_BASE + '/stream/init', { fileName: file.name, totalRows });
+      const batchId = init.batchId;
+      let sent = 0;
+      try {
+        for (const s of sheets) {
+          const platform = platformOf(s);
+          for (let i = 0; i < s.rows.length; i += ROWS_PER_BATCH) {
+            const chunk = s.rows.slice(i, i + ROWS_PER_BATCH);
+            let ok = false, lastErr;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await API.post(API_BASE + '/stream/rows', {
+                  batchId, sheet: s.sheet, platform, headers: s.headers,
+                  rows: chunk, startRow: i + 2,
+                });
+                ok = true; break;
+              } catch (e2) { lastErr = e2; await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); }
+            }
+            if (!ok) throw new Error(`第 ${sent} 批上传失败：${lastErr.message}`);
+            sent += chunk.length;
+            showProgress(2 + (sent / totalRows) * 92,
+              `📤 已导入 ${sent.toLocaleString()}/${totalRows.toLocaleString()} 行（${s.sheet}）`);
+          }
         }
-        if (!ok) throw new Error(`第 ${i + 1}/${totalChunks} 片上传失败：${lastErr.message}`);
-        uploaded++;
-        showProgress((uploaded / totalChunks) * 90,
-          `📤 已上传 ${uploaded}/${totalChunks} 片（${(end / 1048576).toFixed(1)}/${(file.size / 1048576).toFixed(1)}MB）`);
+        showProgress(96, '⏳ 正在汇总导入结果…');
+        return await API.post(API_BASE + '/stream/finish', { batchId });
+      } catch (e) {
+        try { await API.post(API_BASE + '/stream/abort', { batchId }); } catch (e2) {}
+        throw e;
       }
-      showProgress(92, '⏳ 分片已全部上传，服务端正在合并并解析导入…');
-      const r = await API.post(API_BASE + '/upload/finish', { uploadId: uploadId });
-      return r;
     }
 
     function doUpload(file) {
       if (!/\.(xlsx|xls)$/i.test(file.name)) { toast('请选择 .xlsx 或 .xls 文件', 'error'); return; }
-      const isLarge = file.size > CHUNK_SIZE;
-      showProgress(2, isLarge
-        ? `📦 文件 ${(file.size / 1048576).toFixed(1)}MB 较大，启用分片上传以保护连接…`
-        : `⏳ 正在上传并解析 ${esc(file.name)}…`);
+      showProgress(2, `📦 准备导入 ${esc(file.name)}（${(file.size / 1048576).toFixed(1)}MB）…`);
 
-      // ★ 进入关键操作保护期：导入期间禁止 401 强制跳登录 / 版本更新强制刷新，
-      //   避免点页面其他位置误触确认框导致强制退出、导入中断。
+      // ★ 进入关键操作保护期：导入期间禁止 401 强制跳登录 / 版本更新强制刷新。
       API.setBusy(true);
-      const task = isLarge ? uploadChunked(file)
-        : API.upload(API_BASE + '/import', (() => { const fd = new FormData(); fd.append('file', file); return fd; })());
+      // 统一走流式导入：浏览器解析 + 分批上传，服务端不再整体解析大文件。
+      const task = uploadStream(file);
 
       task.then((r) => { renderImportResult(r); })
         .catch((e) => {
-          $('#oihImportResult').innerHTML = `<div style="padding:16px;color:#f56c6c;background:#fef0f0;border-radius:6px;">❌ 导入失败：${esc(e.message)}<br><span style="font-size:12px;color:#909399;">大文件走分片上传；若仍失败，请检查网络或把文件拆成多个小文件重试。</span></div>`;
+          $('#oihImportResult').innerHTML = `<div style="padding:16px;color:#f56c6c;background:#fef0f0;border-radius:6px;">❌ 导入失败：${esc(e.message)}<br><span style="font-size:12px;color:#909399;">已自动回滚本次批次，未产生部分数据。请检查网络或文件后重试。</span></div>`;
         })
         .finally(() => { API.setBusy(false); });
     }
