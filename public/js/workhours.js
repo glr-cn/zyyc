@@ -311,24 +311,27 @@ function createWorkhoursPage(warehouse) {
     // localStorage.erp_user 可能是过期快照（角色迁移/换号未重登），直接读它会造成
     // 「真超管看不到删除按钮」或「假超管看到删除按钮」两种事故。故以 /api/auth/me
     // 返回的库内最新 role_code 为准（每次页面加载刷新一次，结果缓存于 state.isSuper）。
+    let verifiedSuper = false;
     async function refreshRole() {
       try {
         const me = await API.get('/auth/me');
         const u = (me && me.user) || {};
         const code = u.role_code;
-        state.isSuper = code === 'super_admin';
+        verifiedSuper = state.isSuper = code === 'super_admin';
         state.isAdmin = code === 'super_admin' || code === 'admin';
         state.meName = u.display_name || u.username || '';
         // 顺手把最新用户快照写回，其他页面读 localStorage 也能拿到新角色
         localStorage.setItem('erp_user', JSON.stringify(me.user));
       } catch (e) {
         // /me 不可达时回退本地快照：宁可少显示按钮（后端仍强校验），不可越权显示
+        verifiedSuper = false;
         state.isSuper = isSuperAdmin();
         state.isAdmin = state.isSuper || (function () {
           try { return JSON.parse(localStorage.getItem('erp_user') || '{}').role === '管理员'; } catch (x) { return false; }
         })();
         try { const u = JSON.parse(localStorage.getItem('erp_user') || '{}'); state.meName = u.display_name || u.username || ''; } catch (x) { state.meName = ''; }
       }
+      syncImportTools();
       // 批量删除按钮：仅超管可见（checked.size=0 时自动 disabled）
       const delBtn = $('batchDelBtn');
       if (delBtn) delBtn.style.display = state.isSuper ? '' : 'none';
@@ -370,15 +373,12 @@ function createWorkhoursPage(warehouse) {
         <span id="drpSlot"></span>
         <button id="qryBtn" class="primary">查询</button>
         <button id="resetBtn">重置</button>
-        <span id="shipTools" style="display:none">
-          <button id="templateBtn" title="下载带本仓货主的 Excel 模板">下载模板</button>
-          <button id="importBtn" title="导入工时（重复项可确认覆盖/跳过）">导入工时</button>
-        </span>
-        <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
+        <span id="importTools"></span>
         <button id="archiveBtn" title="批量提交勾选的工时（未填写行自动跳过）">批量提交</button>
         <button id="batchDelBtn" class="danger" style="display:none" title="批量删除勾选的记录（仅超级管理员可用，物理删除不可恢复）">批量删除</button>
         <button id="addBtn" class="primary">+ 新增工时</button>
       </div>
+      <div id="threeResultSlot"></div>
       <div class="wh-archive-tip" id="archiveTip" style="display:none"></div>
       <div class="wh-tbl-scroll">
       <table class="grid wh-table" id="whTable">
@@ -422,9 +422,7 @@ function createWorkhoursPage(warehouse) {
       if (title) title.textContent = state.workType + '工时录入';
       const q = $('q');
       if (q) q.placeholder = (state.workType === '发货' || state.workType === '收货') ? '搜索客户名称' : '搜索项目名称';
-      // 导入导出仅发货 tab 可见；归档按钮仅未归档视图可见；已归档视图显示动态权限提示
-      const ship = $('shipTools');
-      if (ship) ship.style.display = state.workType === '发货' ? 'inline' : 'none';
+      syncImportTools();
       const addBtn = $('addBtn');
       // 发货 Tab 隐藏"新增工时"按钮——发货有缺口行机制，不需要手动新增
       if (addBtn) addBtn.style.display = state.workType === '发货' ? 'none' : '';
@@ -479,9 +477,6 @@ function createWorkhoursPage(warehouse) {
         }
         addVirtualRow();
       };
-      $('templateBtn').onclick = onDownloadTemplate;
-      $('importBtn').onclick = () => $('importFile').click();
-      $('importFile').onchange = onImportFile;
       $('archiveBtn').onclick = onBatchSubmit;
       $('batchDelBtn').onclick = onBatchDelete;
       // 点「批量提交」时 pointerdown 先于 blur：有勾选时跳过聚焦行的失焦自动保存，
@@ -494,6 +489,112 @@ function createWorkhoursPage(warehouse) {
       }, true);
       ['q'].forEach((id) => ($(id).onkeydown = (e) => { if (e.key === 'Enter') { syncDates(); readFilters(); state.page = 1; load(); } }));
       syncTabUI();
+    }
+
+    let threeBusy = false;
+    function syncImportTools() {
+      const slot = $('importTools');
+      const mode = state.workType === '发货' ? 'ship' : verifiedSuper ? 'three' : 'none';
+      if (!slot || slot.dataset.mode === mode) return;
+      slot.dataset.mode = mode;
+      slot.replaceChildren();
+      $('threeResultSlot').replaceChildren();
+      if (mode === 'ship') {
+        slot.innerHTML = `<span id="shipTools"><button id="templateBtn" title="下载带本仓货主的 Excel 模板">下载模板</button>
+          <button id="importBtn" title="导入工时（重复项可确认覆盖/跳过）">导入工时</button></span>
+          <input type="file" id="importFile" accept=".xlsx,.xls" hidden>`;
+        $('templateBtn').onclick = onDownloadTemplate;
+        $('importBtn').onclick = () => $('importFile').click();
+        $('importFile').onchange = onImportFile;
+        return;
+      }
+      if (mode !== 'three') return;
+      slot.innerHTML = `<button type="button" id="threeTemplate">下载三表模板</button>
+        <button type="button" id="threePreview">上传并预览</button>
+        <input type="file" id="threeFile" accept=".xlsx" hidden>
+        <button type="button" id="threeConfirm" disabled>确认归档</button>`;
+      const preview = $('threePreview'), confirm = $('threeConfirm'), input = $('threeFile');
+      const result = $('threeResultSlot');
+      const url = (step) => '/workhours/three/' + step + '?warehouse=' + encodeURIComponent(warehouse);
+      let pending = null;
+      const active = () => verifiedSuper && $('threeConfirm') === confirm;
+      $('threeTemplate').onclick = () => API.download(url('template'), warehouse + '_三表工时模板.xlsx').catch(ex => errAlert('下载失败', ex.message));
+      preview.disabled = threeBusy;
+      preview.onclick = () => { if (active() && !threeBusy) input.click(); };
+      async function upload(file, token) {
+        if (!active() || threeBusy) return;
+        threeBusy = preview.disabled = confirm.disabled = true;
+        pending = null;
+        result.textContent = token ? '正在归档，请勿重复提交…' : '正在预览，尚未写入…';
+        let refresh = false;
+        try {
+          const form = new FormData();
+          form.append('file', file);
+          if (token) form.append('previewToken', token);
+          const res = await API.upload(url(token ? 'import' : 'preview'), form);
+          const rows = res.rows;
+          if (!Array.isArray(rows)) throw new Error('服务器未返回分表明细');
+          const invalid = rows.some(r => !['create', 'skip', 'created', 'skipped'].includes(r.action));
+          const failed = invalid || Number(res.failed) > 0;
+          refresh = !!token && !failed;
+          if (active()) {
+            const summary = token
+              ? `${failed ? '归档失败，整批未写入' : '归档完成'}。批次：${res.batchId || '—'}；新增 ${res.created}，跳过 ${res.skipped}，失败 ${res.failed}。`
+              : `预览 ${file.name}，共 ${res.total} 行。` + (failed ? '存在错误，整批不写入。请修正后重新上传。' : '尚未写入；确认后整批归档。');
+            showThreeRows(result, summary, rows, !!token && !failed);
+            if (!token && !failed && rows.length && typeof res.previewToken === 'string' && res.previewToken) {
+              pending = { file, token: res.previewToken };
+              confirm.disabled = false;
+            } else if (!token && !failed) result.append(' 无可确认的预览，请检查文件后重新上传。');
+          }
+        } catch (ex) {
+          if (active()) showThreeRows(result, (token ? (ex.status && ex.status < 500 ? '归档失败，整批未写入。' : '归档结果未确认，请先刷新核对，勿重复提交。') : '预览失败，未写入。') + ex.message,
+            Array.isArray(ex.detail?.rows) ? ex.detail.rows : [], false);
+        } finally {
+          threeBusy = false;
+          if ($('threePreview')) $('threePreview').disabled = false;
+        }
+        if (refresh) {
+          try { await load(); } catch (ex) { errAlert('已归档，但列表刷新失败', ex.message); }
+        }
+      }
+      input.onchange = () => {
+        const file = input.files[0];
+        input.value = '';
+        if (file) return upload(file);
+      };
+      confirm.onclick = () => { if (pending) return upload(pending.file, pending.token); };
+    }
+
+    function showThreeRows(result, message, rows, committed) {
+      result.textContent = message;
+      const groups = new Map();
+      for (const row of rows) {
+        if (!groups.has(row.sheet)) groups.set(row.sheet, []);
+        groups.get(row.sheet).push(row);
+      }
+      for (const [sheet, entries] of groups) {
+        const section = document.createElement('details');
+        const heading = document.createElement('summary');
+        const errors = entries.filter(r => ['error', 'failed'].includes(r.action)).length;
+        const skips = entries.filter(r => ['skip', 'skipped'].includes(r.action)).length;
+        const notWritten = entries.filter(r => r.action === 'notWritten').length;
+        const creates = entries.filter(r => ['create', 'created'].includes(r.action)).length;
+        heading.textContent = `${sheet}：${committed ? '已新增' : '拟新增'} ${creates}，跳过 ${skips}，错误 ${errors}` + (notWritten ? `，未写入 ${notWritten}` : '');
+        section.open = errors > 0;
+        section.append(heading);
+        const list = document.createElement('div');
+        list.style.cssText = 'max-height:18rem;overflow:auto;overflow-wrap:anywhere';
+        for (const row of entries) {
+          const line = document.createElement('div');
+          const action = ['create','created'].includes(row.action) ? (committed ? '已新增' : '拟新增') : ['skip','skipped'].includes(row.action) ? '跳过' : row.action === 'notWritten' ? '未写入' : '错误';
+          const data = Object.entries(row.data || {}).map(([k,v]) => `${k}：${v ?? ''}`).join('，');
+          line.textContent = [`第 ${row.line} 行`, action, row.reason, data].filter(Boolean).join(' · ');
+          list.append(line);
+        }
+        section.append(list);
+        result.append(section);
+      }
     }
 
     // 下载发货模板（带本仓货主）

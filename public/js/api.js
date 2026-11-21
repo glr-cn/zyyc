@@ -110,7 +110,7 @@ const API = {
       const j = JSON.parse(text);
       msg = j.error || j.message || '';
       code = j.code || '';
-      detail = j.detail || null;
+      detail = j.detail || (Array.isArray(j.rows) && j.batchId ? { rows: j.rows } : null);
       conflicts = j.conflicts || null;
     } catch (e) { /* 响应不是 JSON */ }
     if (!msg) {

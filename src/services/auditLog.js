@@ -94,11 +94,13 @@ function writeLog(req, opts = {}) {
       stringify(before), stringify(after),
       userId, username, module, targetId, stringify(contentObj), ip
     );
+    if (opts.strict && info.changes !== 1) throw new Error('审计记录未写入');
     // 双保险：即使触发器被外部移除，也保证 id 与 log_id 严格对齐
     if (info && info.lastInsertRowid != null) {
       db.prepare('UPDATE audit_logs SET id = log_id WHERE log_id = ? AND id IS NULL').run(info.lastInsertRowid);
     }
   } catch (e) {
+    if (opts.strict) throw e;
     console.error('[audit] 日志写入失败（不影响业务）：', e.message);
   }
 }

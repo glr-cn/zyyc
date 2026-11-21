@@ -21,6 +21,8 @@ cp package.json dist/
 cp package-lock.json dist/
 cp -R src dist/src
 cp -R public dist/public
+mkdir -p dist/templates
+cp 'templates/三类工时导入模板.xlsx' dist/templates/
 cp -R node_modules dist/node_modules
 
 # 恢复备份（若存在）：打进 dist/data/，run.sh 启动时注入持久目录

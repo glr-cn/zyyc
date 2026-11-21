@@ -23,6 +23,7 @@ function cell(row, ...names) {
 }
 
 router.use(auth); // 本模块全部接口需登录
+router.use('/three', require('./threeHours'));
 router.use(readonlyGate); // 查看者仅可查看，禁止写
 
 // RBAC 菜单门禁：一个后端模块服务四个仓库页面，按 warehouse 精确映射到

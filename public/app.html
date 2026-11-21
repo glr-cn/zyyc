@@ -34,14 +34,14 @@
   <!-- ============================================================ -->
   <!-- 【核心脚本】首屏必须的——加 defer 让浏览器并行下载 + 不阻塞 HTML 解析 -->
   <!-- defer 脚本保证按 DOM 出现顺序执行，async 不保证，故核心脚本用 defer -->
-  <!-- 统一 ?v=7：版本不变 → 浏览器 24h disk cache → 首屏 ~100ms；版本变 → 强制下载 -->
+  <!-- 统一 ?v=8：版本不变 → 浏览器 24h disk cache → 首屏 ~100ms；版本变 → 强制下载 -->
   <!-- ============================================================ -->
-  <script defer src="js/api.js?v=7"></script>
+  <script defer src="js/api.js?v=8"></script>
   <script defer src="js/date-range-picker.js?v=7"></script>
   <script defer src="js/auth.js?v=7"></script>           <!-- 认证逻辑（tabs/app 都依赖） -->
   <script defer src="js/menu.js?v=7"></script>           <!-- 菜单渲染（sidebar/nav） -->
   <script defer src="js/_lib-lazy.js?v=7"></script>      <!-- 第三方库懒加载（xlsx/html-to-image） -->
-  <script defer src="js/_page_loader.js?v=9"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
+  <script defer src="js/_page_loader.js?v=10"></script>   <!-- 重页面脚本懒加载（20+ 个 pageId 映射） -->
   <script defer src="js/tabs.js?v=7"></script>           <!-- PAGE_META 定义 + tabs 实例 -->
   <script defer src="js/app.js?v=7"></script>            <!-- 入口（登录态检查 + 初始化 tabs + 渲染菜单） -->
 
