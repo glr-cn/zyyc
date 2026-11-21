@@ -15,6 +15,20 @@ const API = {
   _lastVer: null,           // 最近一次看到的 build_version
   _noticeShownFor: null,    // 当前已经提示过的版本（防止同一个版本反复弹）
   _pendingReload: false,    // 用户点了"稍后"后，下一次请求继续检测但不弹
+  // ★ 关键操作保护期（大文件导入/批量写入）：期间禁止全局弹窗强制跳转
+  //   导入会连续发几十个请求，任一偶发 401 都会触发 _handle401 的阻塞式 confirm
+  //   → 用户点页面其他位置误触"确定"→ 强制跳登录页/刷新，导入被中断。
+  //   保护期内：401 只抛可捕获错误（不弹窗不跳转）；版本更新浮层延后到保护结束再提示。
+  _busy: false,
+  _deferredVersion: null,   // busy 期间暂存的待提示版本
+  setBusy(on) {
+    this._busy = !!on;
+    if (!on && this._deferredVersion) {
+      const v = this._deferredVersion; this._deferredVersion = null;
+      this._noticeShownFor = null;
+      this._showUpdateNoticeFor(v);
+    }
+  },
   // 页面加载时立即问一次服务器当前版本（快速感知部署）
   async _checkVersionSilent() {
     try {
@@ -25,14 +39,16 @@ const API = {
           this._lastVer = j._build_version;
           const prev = localStorage.getItem('erp_build_version');
           if (prev && prev !== j._build_version && this._noticeShownFor !== j._build_version) {
-            this._showUpdateNotice();
+            if (this._busy) this._deferredVersion = j._build_version;  // 导入中：延后提示
+            else this._showUpdateNoticeFor(j._build_version);
           }
         }
       }
     } catch (e) { /* 网络异常不打断用户 */ }
   },
-  _showUpdateNotice() {
-    this._noticeShownFor = this._lastVer;
+  _showUpdateNoticeFor(ver) {
+    const version = ver || this._lastVer;
+    this._noticeShownFor = version;
     // 单例：只出现一个提示
     if (document.getElementById('__erp_update_notice')) return;
     const box = document.createElement('div');
@@ -61,13 +77,16 @@ const API = {
       localStorage.setItem('erp_build_version', ver);
       return;
     }
-    // 版本变了 → 弹提示
+    // 版本变了 → 弹提示（导入保护期内延后，避免刷新中断导入）
     if (ver !== this._lastVer && this._noticeShownFor !== ver) {
       this._lastVer = ver;
       localStorage.setItem('erp_build_version', ver);
-      this._showUpdateNotice();
+      if (this._busy) this._deferredVersion = ver;
+      else this._showUpdateNoticeFor(ver);
     }
   },
+  // 兼容旧调用名
+  _showUpdateNotice() { this._showUpdateNoticeFor(this._lastVer); },
   headers() {
     const h = {};
     if (this.token) {
@@ -134,6 +153,12 @@ const API = {
     if (this._booting) {
       // 启动期间 401 → 可能是部署期间临时波动，不清 token，交给 app.js 的启动重试逻辑处理
       throw new Error('服务暂不可用，请稍后刷新页面');
+    }
+    // ★ 关键操作保护期（大文件导入等）：绝不弹阻塞式 confirm、绝不跳登录。
+    //   否则连续分片请求中任一偶发 401 都会弹确认框，用户点页面别处易误触"确定"被强制退出，
+    //   且导入中断。这里只抛可捕获错误，由业务层（导入弹窗）展示失败信息。
+    if (this._busy) {
+      throw new Error('登录状态校验失败，但导入正在进行，已保护当前操作不中断');
     }
     // 运行中 401 → 真的过期了，清 token + 弹提示 + 给"稍后"选项
     if (confirm('登录已过期，需要重新登录。\n\n点击"确定"立即重新登录，点击"取消"稍后再试（当前页面数据不会丢失）。')) {

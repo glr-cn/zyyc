@@ -315,13 +315,17 @@
         ? `📦 文件 ${(file.size / 1048576).toFixed(1)}MB 较大，启用分片上传以保护连接…`
         : `⏳ 正在上传并解析 ${esc(file.name)}…`);
 
+      // ★ 进入关键操作保护期：导入期间禁止 401 强制跳登录 / 版本更新强制刷新，
+      //   避免点页面其他位置误触确认框导致强制退出、导入中断。
+      API.setBusy(true);
       const task = isLarge ? uploadChunked(file)
         : API.upload(API_BASE + '/import', (() => { const fd = new FormData(); fd.append('file', file); return fd; })());
 
       task.then((r) => { renderImportResult(r); })
         .catch((e) => {
           $('#oihImportResult').innerHTML = `<div style="padding:16px;color:#f56c6c;background:#fef0f0;border-radius:6px;">❌ 导入失败：${esc(e.message)}<br><span style="font-size:12px;color:#909399;">大文件走分片上传；若仍失败，请检查网络或把文件拆成多个小文件重试。</span></div>`;
-        });
+        })
+        .finally(() => { API.setBusy(false); });
     }
 
     function loadBatches() {
