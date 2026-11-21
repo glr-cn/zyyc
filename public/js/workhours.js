@@ -1,4 +1,4 @@
-﻿// 工时管理页（按仓库拆分）：每个仓库一个独立页面实例
+// 工时管理页（按仓库拆分）：每个仓库一个独立页面实例
 // - 仓库不再由页内 Tabs 切换，而是由左侧菜单「工时 → 录入 → 各仓工时管理」路由锁定
 // - 页面内保留 发货/收货/库内/后勤 四个业务类型 Tabs
 // - 新增一律为表格行内直编（无新增弹窗）；弹窗仅用于已归档记录修改/查看；归属仓库由页面路由锁定
@@ -1065,9 +1065,12 @@ function createWorkhoursPage(warehouse) {
         state._shownRows = rows;
         const _showCkCol = (state.workType === '发货' && state.status === 'pending') || state.isSuper;
         const span = COLUMNS[state.workType].length + (_showCkCol ? 2 : 1);
-        // 传 idx 给 rowHtml，rowHtml 在 inline 分支加 data-row-idx 属性
+        // ★ 修复 S8：data-row-idx 必须是 state.lastRows 中的真实下标，而不是过滤后下标。
+        //   原先写入 _shownRows（已过滤缺口行）的下标，bindInlineRow(:1562) 却用
+        //   state.lastRows[idx]（未过滤）回写 → 屏蔽任意缺口行后，其后所有行的编辑
+        //   串写到相邻记录。改用 lastRows.indexOf(r)，与 findDupGroups/dupKeyOf 口径一致。
         $('whBody').innerHTML = rows.length
-          ? rows.map((r) => rowHtml(r, state._shownRows.indexOf(r))).join('')
+          ? rows.map((r) => rowHtml(r, state.lastRows.indexOf(r))).join('')
           : `<tr><td colspan="${span}" class="empty">${state.status === 'archived' ? '暂无已归档记录' : '暂无工时记录，点击右上角「新增工时」开始录入'}</td></tr>`;
         // 所有 pending 行都行内直编（含收货/库内/后勤）；已归档行只读
         if (state.status === 'pending') {
@@ -1451,7 +1454,10 @@ function createWorkhoursPage(warehouse) {
       // 已归档记录用更严厉的提示；pending 保持原文案；虚拟缺口行（wid=0）走前端屏蔽，绝不调后端
       if (act === 'delAdmin') {
         const row = e.target.closest && e.target.closest('tr');
-        const wid = row && Number(row.dataset.rowId);
+        // ★ 修复 S7：rowAttrs 只写了 data-row-wid（没有 data-row-id），原先读 rowId 得
+        //   NaN → isVirtual 恒 false → 缺口行误发 DELETE /workhours/0/force，删除失效。
+        //   改读 rowWid，使 wid===0 的虚拟缺口行正确走前端屏蔽分支。
+        const wid = row && Number(row.dataset.rowWid);
         const r = state.lastRows.find((x) => x.work_id === wid);
         const isVirtual = (wid === 0 || wid == null) && !!e.target.dataset.gap;
         if (isVirtual) {
@@ -1886,7 +1892,9 @@ function createWorkhoursPage(warehouse) {
           fields.push(`<label>单位<select id="f_unit">${unitOpts}</select></label>`);
         }
       }
-      fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
+      // ★ 修复 S6：原 preset.date 引用了不存在的变量（只有 presetName），cur.date 为空时抛
+      //   ReferenceError 导致已归档记录「查看/修改」弹窗崩溃。改为直接回落今天。
+      fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || todayStr())}"></label>`);
       if (workType === '发货') fields.push(`<label>发货单量<input id="f_ship" type="number" step="1" min="0" max="1000000" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
       if (workType === '收货') {
         fields.push(`<label>箱数<input id="f_cartons" type="number" step="0.001" min="0" value="${cur.cartons != null ? cur.cartons : 0}"></label>`);

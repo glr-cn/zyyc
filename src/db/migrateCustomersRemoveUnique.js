@@ -94,9 +94,19 @@ function run(db, { verbose = false } = {}) {
       const colList = columns.join(', ');
       const placeholders = columns.map(() => '?').join(', ');
       const stmt = db.prepare(`INSERT INTO customers (${colList}) VALUES (${placeholders})`);
-      const insertMany = db.transaction(rows => rows.forEach(r => stmt.run(...columns.map(c => r[c]))));
       const bakData = db.prepare(`SELECT ${colList} FROM customers_bak`).all();
-      insertMany(bakData);
+      // ★ 修复 S11：db 是 src/db/index.js:228 的包装对象，只有 exec/prepare/runMigrations，
+      //   没有 .transaction 方法，原写法在崩溃恢复场景必抛 "db.transaction is not a function"。
+      //   改用通用 BEGIN/COMMIT 手动事务（better-sqlite3 与 node-sqlite3-wasm 均支持），
+      //   失败时 ROLLBACK，保证恢复要么全成要么不留半套数据。
+      db.exec('BEGIN');
+      try {
+        for (const r of bakData) stmt.run(...columns.map(c => r[c]));
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
       const after = db.prepare('SELECT COUNT(*) c FROM customers').get().c;
       console.warn(`[customers-unique-migrate] ✅ 从 customers_bak 恢复 ${bakData.length} → customers 现在 ${after} 行`);
     }

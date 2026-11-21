@@ -86,10 +86,15 @@ router.put('/:id', menuGate('roles'), (req, res) => {
     if (!role_name) return res.status(400).json({ error: '角色名称必填' });
     const dup = db.prepare('SELECT 1 FROM roles WHERE role_name=? AND role_id!=?').get(role_name, old.role_id);
     if (dup) return res.status(409).json({ error: '角色名称已存在' });
+    // ★ 修复 S9：编辑时若前端未提交 data_scope / is_readonly，必须保留原值。
+    //   原逻辑无条件写默认 'all'/0，导致编辑任意自定义角色的名称或描述后，
+    //   「仅本人数据」隔离与「只读」属性被静默清空，是权限配置丢失。
+    const data_scope = b.data_scope === undefined ? old.data_scope : (b.data_scope === 'self' ? 'self' : 'all');
+    const is_readonly = b.is_readonly === undefined ? old.is_readonly : (b.is_readonly ? 1 : 0);
     db.prepare(`UPDATE roles SET role_name=?, description=?, data_scope=?, is_readonly=?,
                 updated_at=datetime('now','localtime') WHERE role_id=?`)
-      .run(role_name, String(b.description || '').trim() || null,
-        b.data_scope === 'self' ? 'self' : 'all', b.is_readonly ? 1 : 0, old.role_id);
+      .run(role_name, String(b.description == null ? old.description : b.description).trim() || null,
+        data_scope, is_readonly, old.role_id);
   }
   const row = db.prepare('SELECT * FROM roles WHERE role_id=?').get(old.role_id);
   writeAudit(req, 'update', old.role_id, old, row);

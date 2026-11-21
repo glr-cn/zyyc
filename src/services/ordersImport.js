@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // ordersImport.js · 订单导入后端核心服务
 // ----------------------------------------------------------------------------
 // 职责：
@@ -244,10 +244,14 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
   const failures = [];
   const successItems = [];
 
-  // ★ 幂等加列：极旧库尚未跑迁移时，导入前先保证 waybill_type 存在（只加不删）
+  // ★ 修复 M6：幂等加列。导入 INSERT 引用 waybill_type/wms_platform/to_province/
+  //   to_city/to_district/region_class，这些列由 migrateOrdersRegion/ordersQuery 添加。
+  //   极旧库未跑迁移时缺列会导致 "no such column" 导入全失败，故导入前一次性补齐（只加不删）。
   try {
     const cols = db.prepare('PRAGMA table_info(orders)').all().map((r) => r.name);
-    if (!cols.includes('waybill_type')) db.exec('ALTER TABLE orders ADD COLUMN waybill_type TEXT');
+    for (const col of ['waybill_type', 'wms_platform', 'to_province', 'to_city', 'to_district', 'region_class']) {
+      if (!cols.includes(col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} TEXT`);
+    }
   } catch (e) { /* ignore */ }
 
   // ★ 边界校验（2026-11-20）：导入查重——库内已有同号订单或本批次内重复 → 跳过不插入，
@@ -305,7 +309,12 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
 
     // 客户查找 / 自动创建
     let customer = null;
-    const findCust = db.prepare('SELECT * FROM customers WHERE company_name=? OR short_name=?');
+    // ★ 修复 M5：排除软删除客户，避免新订单绑定到 is_deleted=1 的记录。
+    //   兼容极旧库：customers 尚无 is_deleted 列时（如单表 migration 未跑）退化为不过滤。
+    const custCols = db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name);
+    const findCust = custCols.includes('is_deleted')
+      ? db.prepare('SELECT * FROM customers WHERE is_deleted=0 AND (company_name=? OR short_name=?)')
+      : db.prepare('SELECT * FROM customers WHERE company_name=? OR short_name=?');
     customer = findCust.get(customerName, customerName);
     if (!customer) {
       if (autoCustCache.has(customerName)) {

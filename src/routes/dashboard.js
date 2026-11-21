@@ -32,9 +32,11 @@ function ymd(d) {
 
 /**
  * 根据 startDate / endDate / periodType 推导本期和上期。
- * periodType 为 day/week/month；当 periodType 与实际 start~end 跨度不一致时，
- * 以传入的 startDate/endDate 作为本期边界（允许自定义区间），
- * 然后按「同跨度」向前平移得到上期。
+ * ★ 修复 M24：明确各模式口径并与前端日期选择器契约对齐——
+ *   · day  ：以传入 startDate/endDate 为本期边界，上期按「同跨度」向前平移（单日即前一日）；
+ *   · week ：前端选择器只产出完整自然周（周一~周日），本期/上期均按自然周计算；
+ *   · month：前端选择器只产出完整自然月（1号~月末），本期/上期均按自然月计算。
+ *   前端不存在「部分周 / 部分月」入参，故 week/month 按自然周期计算与本期边界并不矛盾。
  */
 function computePeriods(startDate, endDate, periodType) {
   const s = new Date(startDate + 'T00:00:00');

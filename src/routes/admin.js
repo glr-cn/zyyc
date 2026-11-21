@@ -377,7 +377,8 @@ router.delete('/business-data', (req, res) => {
     customers: db.prepare('SELECT COUNT(*) c FROM customers').get().c,
     work_hours: db.prepare('SELECT COUNT(*) c FROM work_hours').get().c,
   };
-  audit.writeLog(req, { table: 'customers,work_hours', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ before, after }) });
+  // ★ 修复 M18：writeLog 只认 action/content，原 operation/details 被忽略 → 日志显示"历史未知操作"且无内容。
+  audit.writeLog(req, { table: 'customers,work_hours', module: '系统/数据清理', action: 'delete', content: { before, after } });
   res.json({ ok: true, before, after });
 });
 
@@ -450,7 +451,8 @@ router.delete('/imported-orders', (req, res) => {
     orders: db.prepare('SELECT COUNT(*) c FROM orders').get().c,
     inventory_transactions: db.prepare('SELECT COUNT(*) c FROM inventory_transactions').get().c,
   };
-  audit.writeLog(req, { table: 'orders,inventory_transactions', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ before, after }) });
+  // ★ 修复 M18：改 action/content（原 operation/details 被忽略，日志失真）。
+  audit.writeLog(req, { table: 'orders,inventory_transactions', module: '系统/数据清理', action: 'delete', content: { before, after } });
   res.json({ ok: true, before, after });
 });
 
@@ -471,7 +473,8 @@ router.delete('/backups', (req, res) => {
   for (const f of files) {
     try { fs.unlinkSync(path.join(bakDir, f)); cleared++; } catch (e) {}
   }
-  audit.writeLog(req, { table: 'backups', module: '系统/数据清理', operation: 'DELETE', details: JSON.stringify({ cleared, dir: bakDir }) });
+  // ★ 修复 M18：改 action/content（原 operation/details 被忽略，日志失真）。
+  audit.writeLog(req, { table: 'backups', module: '系统/数据清理', action: 'delete', content: { cleared, dir: bakDir } });
   res.json({ ok: true, cleared, dir: bakDir });
 });
 

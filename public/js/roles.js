@@ -216,9 +216,13 @@ window.ERP_PAGES.roles = function (host) {
       const errEl = modal.querySelector('#r_err');
       try {
         if (isEdit) {
+          // ★ 修复 S9：编辑只提交名称/描述时，带上原 data_scope/is_readonly，
+          //   配合后端保留原值逻辑，避免自定义角色的隔离/只读属性被清空。
           await API.put('/roles/' + role.role_id, {
             role_name: modal.querySelector('#r_name').value.trim(),
             description: modal.querySelector('#r_desc').value.trim(),
+            data_scope: role.data_scope,
+            is_readonly: role.is_readonly,
           });
         } else {
           await API.post('/roles', {

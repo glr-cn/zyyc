@@ -172,7 +172,8 @@ router.put('/region', roleGate('管理员', '超级管理员'), (req, res) => {
     return res.status(500).json({ error: '保存失败：' + e.message });
   }
   const after = db.prepare('SELECT * FROM logistics_quotes WHERE id=?').get(before.id);
-  writeAudit(req, 'update_region', before.id, before, after);
+  // ★ 修复 M20：action 改用标准枚举 'update'，细粒度语义「修改区域报价」放入 note
+  writeAudit(req, 'update', before.id, before, after, '修改区域报价');
   res.json({ success: true, data: after });
 });
 
@@ -219,7 +220,8 @@ router.put('/by-code', roleGate('管理员', '超级管理员'), (req, res) => {
     return res.status(500).json({ error: '保存失败：' + e.message });
   }
   const after = db.prepare('SELECT * FROM logistics_quotes WHERE express_code=?').all(code);
-  writeAudit(req, 'update_batch', code, before, after);
+  // ★ 修复 M20：action 改用标准枚举 'update'，细粒度语义「按编码整编码批量替换」放入 note
+  writeAudit(req, 'update', code, before, after, '按编码整编码批量替换区域报价');
   res.json({ success: true, count: after.length });
 });
 
@@ -230,7 +232,8 @@ router.delete('/by-code', roleGate('管理员', '超级管理员'), (req, res) =
   const before = db.prepare('SELECT * FROM logistics_quotes WHERE express_code=?').all(code);
   if (!before.length) return res.status(404).json({ error: '该编码下无报价数据' });
   db.prepare('DELETE FROM logistics_quotes WHERE express_code=?').run(code);
-  writeAudit(req, 'delete_batch', code, before, { deleted: before.length });
+  // ★ 修复 M20：action 改用标准枚举 'delete'，细粒度语义「按编码批量删除全部区域报价」放入 note
+  writeAudit(req, 'delete', code, before, { deleted: before.length }, '按编码批量删除全部区域报价');
   res.json({ success: true, deleted: before.length });
 });
 
@@ -382,8 +385,11 @@ router.post('/', roleGate('管理员', '超级管理员'), (req, res) => {
   const b = req.body || {};
   const { errs, network, code, ratio, rules, remark } = validateBody(b);
   if (errs.length) return res.status(400).json({ error: errs.join('；') });
-  if (db.prepare('SELECT 1 FROM logistics_quotes WHERE express_code=?').get(code))
-    return res.status(400).json({ error: '快递编码已存在（一网点一编码）' });
+  // ★ 修复 M19：原判重只看 express_code 全局唯一，但表 UNIQUE 键是 (express_code, 省/市/区)，
+  //   同编码按区域可有多行（by-code 导入即如此）→ 给已有编码再建"整编码"行被误拒。
+  //   改为按 UNIQUE 键（此处 POST 不带区域，落空串）判重，与表约束口径一致。
+  if (db.prepare("SELECT 1 FROM logistics_quotes WHERE express_code=? AND province='' AND city='' AND district=''").get(code))
+    return res.status(400).json({ error: '该快递编码的全国（整编码）报价已存在' });
   const info = db.prepare(
     'INSERT INTO logistics_quotes (network_name, express_code, volume_ratio, price_rules, remark) VALUES (?,?,?,?,?)'
   ).run(network, code, ratio, JSON.stringify(rules), remark);
@@ -399,9 +405,11 @@ router.put('/:id', roleGate('管理员', '超级管理员'), (req, res) => {
   if (!old) return res.status(404).json({ error: '报价记录不存在' });
   const { errs, network, code, ratio, rules, remark } = validateBody(b);
   if (errs.length) return res.status(400).json({ error: errs.join('；') });
+  // ★ 修复 M19：改编码时按「编码 + 该行原有省市区」唯一键判重（全局只看编码会误拒同编码多区域行）。
   if (code !== old.express_code &&
-      db.prepare('SELECT 1 FROM logistics_quotes WHERE express_code=? AND id!=?').get(code, old.id))
-    return res.status(400).json({ error: '快递编码已存在（一网点一编码）' });
+      db.prepare('SELECT 1 FROM logistics_quotes WHERE express_code=? AND province=? AND city=? AND district=? AND id!=?')
+        .get(code, old.province, old.city, old.district, old.id))
+    return res.status(400).json({ error: '该快递编码下已存在相同「省/市/区」的报价行' });
   db.prepare(
     `UPDATE logistics_quotes
         SET network_name=?, express_code=?, volume_ratio=?, price_rules=?, remark=?,
@@ -423,10 +431,13 @@ router.delete('/:id', roleGate('管理员', '超级管理员'), (req, res) => {
 });
 
 // 审计：统一走全局日志服务（新旧字段双写，模块=物流报价）
-function writeAudit(req, action, recordId, before, after) {
+// ★ 修复 M20：新增 note 参数，把细粒度操作语义写进 content.note；action 统一用标准枚举，
+//   避免 update_region/update_batch/delete_batch 等自定义值被 toEnum 判为 unknown。
+function writeAudit(req, action, recordId, before, after, note) {
   require('../services/auditLog').writeLog(req, {
     table: 'logistics_quotes', module: '物流报价', action,
     targetId: recordId, before, after,
+    ...(note ? { content: { note, before, after } } : {}),
   });
 }
 

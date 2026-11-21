@@ -31,7 +31,8 @@ const rules = {
   login: [
     body('username').trim().notEmpty().withMessage('账号不能为空')
       .isLength({ min: 2, max: 32 }).withMessage('账号长度 2-32 字符')
-      .matches(/^[a-zA-Z0-9_\-\.]+$/).withMessage('账号只能包含字母、数字、下划线、短横线、点号'),
+      // 方案A：允许中文等 Unicode 字母/数字账号，与「新增用户不限制账号格式」的现状对齐
+      .matches(/^[\p{L}\p{N}_\-\.]+$/u).withMessage('账号只能包含字母（含中文）、数字、下划线、短横线、点号'),
     body('password').notEmpty().withMessage('密码不能为空')
       .isLength({ min: 6, max: 128 }).withMessage('密码长度 6-128 字符'),
   ],
