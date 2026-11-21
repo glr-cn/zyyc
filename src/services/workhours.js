@@ -67,9 +67,10 @@ function configOf(name) { return TYPE_CONFIG[TYPE_KEY[name]]; }
 // ---------------------------------------------------------------------------
 // 发货单量（ship_orders）整数化
 // ---------------------------------------------------------------------------
-// 业务约束：单位为「单」，不允许小数；有效范围为 1 ~ 1,000,000 的整数。
-// 空值（null/''）保留「无单量仅备注」场景，但一旦填值必须是合法正整数。
-const SHIP_MIN = 1;
+// 业务约束：单位为「单」，不允许小数；有效范围为 0 ~ 1,000,000 的整数。
+// 单量 0 允许（如当日无单量但产生工时/需要备注说明），但整行必须还有其他有效内容
+// （主工时/其他工时/备注）；空值（null/''）同样保留「无单量仅备注」场景。
+const SHIP_MIN = 0;
 const SHIP_MAX = 1000000;
 
 // 表单/接口入参校验：不合法返回 error，合法返回值（不做四舍五入——非整数直接拒绝）
@@ -78,7 +79,7 @@ function normalizeShipOrders(input) {
   const n = Number(String(input).trim());
   if (!Number.isFinite(n)) return { value: null, error: '发货单量必须为数字' };
   if (!Number.isInteger(n)) return { value: null, error: '发货单量必须为整数，不支持小数' };
-  if (n < SHIP_MIN) return { value: null, error: '发货单量必须大于 0（无单量请留空）' };
+  if (n < SHIP_MIN) return { value: null, error: '发货单量不能为负数' };
   if (n > SHIP_MAX) return { value: null, error: `发货单量不能超过 ${SHIP_MAX}` };
   return { value: n, error: null };
 }
@@ -169,13 +170,17 @@ function validateByType(name, b, db, opts = {}) {
       return '客户「' + cust.customer_name + '」不属于' + b.warehouse + '，禁止跨仓录入';
     // 放宽校验：ship_orders / main_hours / remark 三者任意有值即允许保存（支持"无单量仅备注"场景）；
     // 只有三者全空/全0 才算脏数据并拦截。
-    // 发货单量：填了就必须是合法正整数（1 ~ SHIP_MAX），空值允许（仅备注场景）
+    // 发货单量：填了必须是 0 ~ SHIP_MAX 的整数（0 允许）；空值允许（仅备注场景）
     const shipCheck = normalizeShipOrders(b.ship_orders);
     if (shipCheck.error) return shipCheck.error;
     const ship = shipCheck.value || 0;
     const mh = Number(b.main_hours) || 0;
+    const oh = Number(b.other_hours) || 0;
     const rk = (b.remark || '').trim();
-    if (!(ship > 0) && !(mh > 0) && !rk) return '发货单量、主工时、备注至少填写一项';
+    // 任意有效内容项即可提交：单量>0 / 主工时 / 其他工时 / 备注。
+    // 单量为 0 或留空时，必须至少还有工时或备注，否则判为脏数据。
+    if (!(ship > 0) && !(mh > 0) && !(oh > 0) && !rk)
+      return '发货单量、工时、备注至少填写一项（单量为 0 时需填写工时或备注）';
   } else if (name === '收货') {
     if (!b.customer_name && (b.customer_id == null || b.customer_id === '')) return '客户名称必填';
     const cust = resolveCustomer(db, b);

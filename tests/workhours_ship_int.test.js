@@ -28,10 +28,10 @@ test('normalizeShipOrders：小数必须拒绝（不允许四舍五入绕过）'
   }
 });
 
-test('normalizeShipOrders：0 / 负数 / 超上限 / 非数字 → 拒绝', () => {
-  assert.match(svc.normalizeShipOrders(0).error, /必须大于 0/);
-  assert.match(svc.normalizeShipOrders('0.4').error, /必须为整数|必须大于 0/);
-  assert.match(svc.normalizeShipOrders(-5).error, /必须大于 0|必须为整数/);
+test('normalizeShipOrders：0 允许（新规则）；负数 / 超上限 / 非数字 → 拒绝', () => {
+  assert.deepEqual(svc.normalizeShipOrders(0), { value: 0, error: null }, '0 单量必须允许');
+  assert.deepEqual(svc.normalizeShipOrders('0'), { value: 0, error: null });
+  assert.match(svc.normalizeShipOrders(-5).error, /不能为负数/);
   assert.match(svc.normalizeShipOrders(1000001).error, /不能超过/);
   assert.match(svc.normalizeShipOrders('abc').error, /必须为数字/);
   assert.match(svc.normalizeShipOrders(Infinity).error, /必须为数字/);
@@ -82,11 +82,10 @@ function dbWithCustomer() {
 
 const base = { warehouse: '龙湖仓', customer_id: 1, customer_name: '货主A', date: '2026-11-21', main_hours: 0, remark: '' };
 
-test('validateByType(发货)：小数 / 0 / 负数 / 超上限 → 返回明确错误', () => {
+test('validateByType(发货)：小数 / 负数 / 超上限 → 返回明确错误', () => {
   const db = dbWithCustomer();
   assert.match(svc.validateByType('发货', { ...base, ship_orders: '12.5' }, db), /必须为整数/);
-  assert.match(svc.validateByType('发货', { ...base, ship_orders: 0 }, db), /必须大于 0/);
-  assert.match(svc.validateByType('发货', { ...base, ship_orders: -3 }, db), /必须大于 0|必须为整数/);
+  assert.match(svc.validateByType('发货', { ...base, ship_orders: -3 }, db), /不能为负数/);
   assert.match(svc.validateByType('发货', { ...base, ship_orders: 1000001 }, db), /不能超过/);
 });
 
@@ -97,4 +96,13 @@ test('validateByType(发货)：合法整数放行；空值 + 主工时/备注 �
   assert.equal(svc.validateByType('发货', { ...base, ship_orders: '', remark: '无单量' }, db), null);
   // 三者全空 → 仍拦截
   assert.match(svc.validateByType('发货', { ...base, ship_orders: '' }, db), /至少填写一项/);
+});
+
+test('validateByType(发货)：单量为 0 时，有工时/其他工时/备注即可提交', () => {
+  const db = dbWithCustomer();
+  assert.equal(svc.validateByType('发货', { ...base, ship_orders: 0, main_hours: 8 }, db), null);
+  assert.equal(svc.validateByType('发货', { ...base, ship_orders: 0, other_hours: 2 }, db), null);
+  assert.equal(svc.validateByType('发货', { ...base, ship_orders: 0, remark: '当日无单量' }, db), null);
+  // 0 且无任何其他有效内容 → 拦截
+  assert.match(svc.validateByType('发货', { ...base, ship_orders: 0 }, db), /至少填写一项/);
 });

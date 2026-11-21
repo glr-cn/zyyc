@@ -1201,7 +1201,7 @@ function createWorkhoursPage(warehouse) {
           }
           if (col.key === 'other_hours') return `<td class="wh-input-cell"><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
           // —— 发货专属
-          if (col.key === 'ship_orders') return `<td class="wh-input-cell"><input data-if="ship_orders" class="wh-cell-num" type="number" step="1" min="1" max="1000000" value="${numVal(r.ship_orders)}" placeholder="请输入单量（整数）"></td>`;
+          if (col.key === 'ship_orders') return `<td class="wh-input-cell"><input data-if="ship_orders" class="wh-cell-num" type="number" step="1" min="0" max="1000000" value="${numVal(r.ship_orders)}" placeholder="单量（整数，可 0）"></td>`;
           // —— 收货专属
           if (col.key === 'cartons')  {
             const ph = state.workType === '收货' ? '* 箱数（必填）' : '箱数';
@@ -1565,13 +1565,14 @@ function createWorkhoursPage(warehouse) {
           let shipInvalid = '';
           if (shipRaw !== '') {
             if (!Number.isFinite(ship) || !Number.isInteger(ship)) shipInvalid = '发货单量必须为整数，不支持小数';
-            else if (ship < 1) shipInvalid = '发货单量必须大于 0（无单量请留空）';
+            else if (ship < 0) shipInvalid = '发货单量不能为负数';
             else if (ship > 1000000) shipInvalid = '发货单量不能超过 1,000,000';
           }
           if (shipInvalid) { ok = false; hint = shipInvalid; }
           else {
-            ok = (ship > 0) || (main > 0) || !!remark;
-            if (!ok) hint = '请至少填写发货单量、主工时或备注中的一项';
+            // 任意有效内容项即可提交（单量为 0 时需有工时或备注）
+            ok = (ship > 0) || (main > 0) || (other > 0) || !!remark;
+            if (!ok) hint = '单量为 0 或为空时，需至少填写主工时、其他工时或备注';
           }
         }
         if (!ok) {
@@ -1674,7 +1675,7 @@ function createWorkhoursPage(warehouse) {
             if (raw !== '') {
               const n = Number(raw);
               if (!Number.isFinite(n) || !Number.isInteger(n)) msg = '发货单量必须为整数，不支持小数';
-              else if (n < 1) msg = '发货单量必须大于 0（无单量请留空）';
+              else if (n < 0) msg = '发货单量不能为负数';
               else if (n > 1000000) msg = '发货单量不能超过 1,000,000';
             }
             setCustomerInvalid(e, !!msg);
@@ -1785,7 +1786,7 @@ function createWorkhoursPage(warehouse) {
         }
       }
       fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
-      if (workType === '发货') fields.push(`<label>发货单量*<input id="f_ship" type="number" step="1" min="1" max="1000000" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
+      if (workType === '发货') fields.push(`<label>发货单量<input id="f_ship" type="number" step="1" min="0" max="1000000" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
       if (workType === '收货') {
         fields.push(`<label>箱数<input id="f_cartons" type="number" step="0.001" min="0" value="${cur.cartons != null ? cur.cartons : 0}"></label>`);
         fields.push(`<label>吨<input id="f_tons" type="number" step="0.001" min="0" value="${cur.tons != null ? cur.tons : 0}"></label>`);
@@ -1866,7 +1867,7 @@ function createWorkhoursPage(warehouse) {
         if (raw === '') return '';
         const n = Number(raw);
         if (!Number.isFinite(n) || !Number.isInteger(n)) return '发货单量必须为整数，不支持小数';
-        if (n < 1) return '发货单量必须大于 0（无单量请留空）';
+        if (n < 0) return '发货单量不能为负数';
         if (n > 1000000) return '发货单量不能超过 1,000,000';
         return '';
       };

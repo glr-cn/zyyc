@@ -176,26 +176,59 @@ test('发货单量整数化：导入小数按四舍五入入库（1260.6 → 126
   assert.ok(Number.isInteger(row.ship_orders), '入库值必须是整数');
 });
 
-test('发货单量整数化：0 / 负数 / 超上限 → 全部拦截并计入 errors，不写库', () => {
+test('发货单量整数化：0（无任何其他内容）/ 负数 / 超上限 → 拦截，不写库', () => {
   reset();
   const r = runImport(makeXlsx([
-    ['2026-11-20', '货主A', '单', 0, 0, 0, ''],          // 0 → 非法
+    ['2026-11-20', '货主A', '单', 0, 0, 0, ''],          // 0 且无工时/备注 → 无有效内容
     ['2026-11-20', '货主A', '单', -5, 0, 0, ''],         // 负数 → 非法
     ['2026-11-20', '货主A', '单', 1000001, 0, 0, ''],    // 超上限 → 非法
   ]));
   assert.equal(r.body.created, 0);
   assert.equal(rowsOf().length, 0, '非法行不得写入');
   assert.equal(r.body.errors.length, 3);
-  assert.match(r.body.errors[0].error, /必须大于 0/);
+  assert.match(r.body.errors[0].error, /单量为 0 或为空时/);
+  assert.match(r.body.errors[1].error, /不能为负数/);
   assert.match(r.body.errors[2].error, /不能超过/);
 });
 
-test('发货单量整数化：留空 + 仅备注 → 存 null（不存 0）', () => {
+// ---------- 新规则：只要存在任意有效内容项即可提交 ----------
+
+test('导入允许单量为 0：0 + 主工时 → 写入，单量存 0', () => {
   reset();
-  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', '', 0, 0, '无单量，仅备注']]));
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', 0, 8, 0, '']]));
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.result, 'imported');
   assert.equal(r.body.created, 1);
   const row = rowsOf()[0];
-  assert.equal(row.ship_orders, null, '空单量必须为 null，不能落库为 0');
+  assert.equal(row.ship_orders, 0);
+  assert.equal(row.main_hours, 8);
+  assert.equal(row.status, 'archived');
+});
+
+test('导入允许单量为 0：0 + 其他工时 → 写入', () => {
+  reset();
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', 0, 0, 2.5, '']]));
+  assert.equal(r.body.created, 1);
+  assert.equal(rowsOf()[0].ship_orders, 0);
+  assert.equal(rowsOf()[0].other_hours, 2.5);
+});
+
+test('导入允许单量为 0：0 + 备注 → 写入', () => {
+  reset();
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', 0, 0, 0, '当日无单量，设备检修']]));
+  assert.equal(r.body.created, 1);
+  const row = rowsOf()[0];
+  assert.equal(row.ship_orders, 0);
+  assert.equal(row.remark, '当日无单量，设备检修');
+});
+
+test('导入允许仅备注：单量留空 + 备注 → 写入，单量存 null', () => {
+  reset();
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', '', 0, 0, '仅备注说明']]));
+  assert.equal(r.body.created, 1);
+  const row = rowsOf()[0];
+  assert.equal(row.ship_orders, null);
+  assert.equal(row.remark, '仅备注说明');
 });
 
 test('多行混合：新增 + 提交草稿 + 跳过 + 覆盖 在同一事务内完成', () => {

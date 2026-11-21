@@ -518,7 +518,7 @@ router.get('/template', (req, res) => {
   const tips = xlsx.utils.aoa_to_sheet([
     ['发货工时导入说明'],
     ['1. 每行一条发货工时；日期默认今天（补报历史请改为实际日期，格式 YYYY-MM-DD）；客户名称必须是本仓货主（模板已预填，请勿改动为其他仓客户）。'],
-    ['2. 单位默认「单」（可选 单/件/箱）；发货单量必须为 1~1000000 的整数（小数按四舍五入入库；0/负数/超上限会被拦截）；无单量请留空并填写备注；主/其他工时为数字；空行自动跳过。'],
+    ['2. 单位默认「单」（可选 单/件/箱）；发货单量必须为 0~1000000 的整数（小数按四舍五入入库；负数/超上限会被拦截）；单量为 0 或留空时，需至少填写主工时、其他工时或备注，否则该行会被跳过；空行自动跳过。'],
     ['3. 导入时若「同日 + 同客户 + 同仓 + 发货 + 未归档」记录已存在，会标为重复，由你逐条选择覆盖或跳过。'],
     ['4. 停用货主可补报历史工时，但不可用已删除货主新增。'],
   ]);
@@ -841,27 +841,32 @@ function parseImportRows(buf, warehouse, req) {
     if (!name) { errors.push({ line, error: '客户名称为空' }); return; }
     const owner = byName.get(name);
     if (!owner) { errors.push({ line, error: `客户「${name}」不属于本仓或已删除` }); return; }
-    // 放宽导入校验：ship_orders / main_hours / remark 三者任意有值即允许导入（支持"无单量仅备注"场景）；
-    // 三者全空才判为无效行。
-    // 发货单量：空值允许；填了必须能转数字，四舍五入取整后必须在 1 ~ SHIP_MAX（禁止 0/负数/超上限）
+    // 发货单量：空值允许；填了必须能转数字并四舍五入取整，范围 0 ~ SHIP_MAX（0 允许，负数/超上限拦截）
     let shipValue = null;
     if (shipOrders !== '' && shipOrders != null) {
       const n = Number(shipOrders);
       if (!Number.isFinite(n)) { errors.push({ line, error: '发货单量为非法数字' }); return; }
       shipValue = Math.round(n); // 四舍五入，禁止截断
-      if (shipValue < svc.SHIP_MIN) { errors.push({ line, error: '发货单量必须大于 0（无单量请留空）' }); return; }
+      if (shipValue < 0) { errors.push({ line, error: '发货单量不能为负数' }); return; }
       if (shipValue > svc.SHIP_MAX) { errors.push({ line, error: `发货单量不能超过 ${svc.SHIP_MAX}` }); return; }
     }
     const mh = Number(mainHours) || 0;
-    const remarkOK = !!String(cell(r, '备注', 'remark') || '').trim();
-    if (shipValue == null && !(mh > 0) && !remarkOK) { errors.push({ line, error: '发货单量、主工时、备注至少填写一项' }); return; }
+    const oh = Number(cell(r, '其他工时', 'other_hours') || 0) || 0;
     if (mh < 0) { errors.push({ line, error: '主工时不得为负' }); return; }
+    if (oh < 0) { errors.push({ line, error: '其他工时不得为负' }); return; }
+    const remarkOK = !!String(cell(r, '备注', 'remark') || '').trim();
+    // ★ 任意有效内容项即可提交：单量>0 / 主工时 / 其他工时 / 备注。
+    //   单量为 0 或留空时，必须至少还有工时或备注（支持「0 单 + 工时/备注」「仅备注」场景）。
+    if (!(shipValue > 0) && !(mh > 0) && !(oh > 0) && !remarkOK) {
+      errors.push({ line, error: '单量为 0 或为空时，需至少填写主工时、其他工时或备注' });
+      return;
+    }
     parsed.push({
       line, date, customer_name: owner.company_name, customer_id: owner.customer_id,
       owner_name: owner.owner_name, coop_status: owner.coop_status,
       unit: String(cell(r, '单位', 'unit') || '单').trim(),
       ship_orders: shipValue, main_hours: mh,
-      other_hours: Number(cell(r, '其他工时', 'other_hours') || 0) || 0,
+      other_hours: oh,
       remark: String(cell(r, '备注', 'remark') || '').trim(),
     });
   });
@@ -1022,6 +1027,7 @@ router.post('/import', upload.single('file'), (req, res) => {
       return `第 ${p.line} 行：${p.date} / ${p.customer_name}（已归档 work_id=${v.existing.work_id}，字段完全一致）`;
     }).join('\n');
     return res.json({
+      ok: true, result: 'noop',
       created: 0, overwritten: 0, promoted: 0, skip_exact: skipCnt,
       skipped_batch_dup: batchDupCnt,
       noop: true,
@@ -1180,6 +1186,8 @@ router.post('/import', upload.single('file'), (req, res) => {
     lines: log, errors,
   });
   const resp = {
+    ok: true,
+    result: (created > 0 || overwritten > 0 || promoted > 0) ? 'imported' : 'noop',
     created, overwritten, promoted, skip_exact: skippedExact,
     skipped_batch_dup: skippedBatchDup,
     repaired_duplicates: repairedDuplicates,
