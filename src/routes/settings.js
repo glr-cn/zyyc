@@ -21,13 +21,16 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { auth } = require('../middleware/auth');
-const { menuGate, roleGate } = require('../middleware/rbac');
+const { roleGate } = require('../middleware/rbac');
 const expressMap = require('../services/expressMap');
 const expressRegion = require('../services/expressRegion');
 const auditLog = require('../services/auditLog');
 
 router.use(auth);
-router.use(menuGate('settings'));
+// ★ 修复 S4：'settings' 菜单由迁移动态插入，部分库未授权会导致整页 403。
+//   改为与写操作一致的 roleGate 口径（系统设置页仅管理员/超管可访问）。
+const readGate = roleGate('管理员', '超级管理员');
+router.use(readGate);
 
 const writeGate = roleGate('管理员', '超级管理员');
 

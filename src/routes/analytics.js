@@ -164,8 +164,10 @@ function monthRange() {
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   return { from: ymd(start), to: ymd(end) };
 }
-// 经营看板数据源（RBAC：需「看板」菜单授权；与「工时汇总」分开控制）
-router.get('/dashboard', menuGate('dashboard'), (req, res) => {
+// 经营看板数据源（RBAC：需「工时汇总」菜单授权；与「工时汇总」分开控制）
+// ★ 修复 S5：原 menuGate('dashboard') 的 path 是主菜单容器、不在 role_menus 授权内，
+//   改为可授权的子菜单 dash_wh_summary（工时汇总），保持旧测试脚本可访问。
+router.get('/dashboard', menuGate('dash_wh_summary'), (req, res) => {
   const { from, to } = monthRange();
   const rows = fetchRows(req);
   const inMonth = rows.filter((r) => r.date >= from && r.date <= to);

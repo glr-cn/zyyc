@@ -161,7 +161,7 @@ router.get('/warehouse-sort/:warehouse', (req, res) => {
   res.json({ warehouse: wh, data: rows });
 });
 
-router.put('/warehouse-sort/:warehouse', roleGate(['管理员', '超级管理员']), (req, res) => {
+router.put('/warehouse-sort/:warehouse', roleGate('管理员', '超级管理员'), (req, res) => {
   const wh = req.params.warehouse;
   if (!WAREHOUSES.includes(wh)) return res.status(400).json({ error: '仓库参数非法' });
   const items = Array.isArray(req.body) ? req.body : (req.body.items || []);

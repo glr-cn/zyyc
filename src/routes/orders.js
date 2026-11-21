@@ -40,7 +40,8 @@ const REQUIRED_NAMES = TEMPLATE_FIELDS.filter((f) => f.required).map((f) => f.na
 
 router.use(auth);
 router.use(readonlyGate);
-router.use(menuGate('orders'));
+// ★ 修复 S1/S2：原 router.use(menuGate('orders')) 的 path='orders' 在 menu_seed.sql 中不存在，
+//   导致所有非 super_admin 用户访问订单模块全部 403。改为下方按路由精确授权。
 
 // ============================================================================
 // 偏远地区方案管理（region_plans + region_plan_overrides）
@@ -109,7 +110,7 @@ function effectiveClass(planId, province, city) {
 }
 
 // --- GET /api/orders/region-plans — 列出所有方案及其覆盖条数 ---
-router.get('/region-plans', (req, res) => {
+router.get('/region-plans', menuGate('order_import'), (req, res) => {
   const plans = db.prepare(`
     SELECT rp.*,
            (SELECT COUNT(*) FROM region_plan_overrides rpo WHERE rpo.plan_id = rp.id) AS override_count
@@ -120,7 +121,7 @@ router.get('/region-plans', (req, res) => {
 });
 
 // --- POST /api/orders/region-plans — 新建方案 ---
-router.post('/region-plans', (req, res) => {
+router.post('/region-plans', menuGate('order_import'), (req, res) => {
   const name = String(req.body.name || '').trim();
   const description = String(req.body.description || '').trim();
   if (!name) return res.status(400).json({ error: '方案名称不能为空' });
@@ -135,7 +136,7 @@ router.post('/region-plans', (req, res) => {
 });
 
 // --- PUT /api/orders/region-plans/:id — 更新方案（含覆盖规则）---
-router.put('/region-plans/:id', (req, res) => {
+router.put('/region-plans/:id', menuGate('order_import'), (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: '无效方案 ID' });
   const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
@@ -174,7 +175,7 @@ router.put('/region-plans/:id', (req, res) => {
 });
 
 // --- POST /api/orders/region-plans/:id/default — 设为默认方案 ---
-router.post('/region-plans/:id/default', (req, res) => {
+router.post('/region-plans/:id/default', menuGate('order_import'), (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: '无效方案 ID' });
   const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
@@ -188,7 +189,7 @@ router.post('/region-plans/:id/default', (req, res) => {
 });
 
 // --- DELETE /api/orders/region-plans/:id — 删除方案（默认方案不可删）---
-router.delete('/region-plans/:id', (req, res) => {
+router.delete('/region-plans/:id', menuGate('order_import'), (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: '无效方案 ID' });
   const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
@@ -200,7 +201,7 @@ router.delete('/region-plans/:id', (req, res) => {
 });
 
 // --- GET /api/orders/region-plans/:id/overrides — 取某个方案的覆盖列表 ---
-router.get('/region-plans/:id/overrides', (req, res) => {
+router.get('/region-plans/:id/overrides', menuGate('order_import'), (req, res) => {
   const id = parseInt(req.params.id, 10);
   const plan = db.prepare('SELECT * FROM region_plans WHERE id=?').get(id);
   if (!plan) return res.status(404).json({ error: '方案不存在' });
@@ -212,7 +213,7 @@ router.get('/region-plans/:id/overrides', (req, res) => {
 });
 
 // --- GET /api/orders/region-plans/default — 取当前默认方案 ---
-router.get('/region-plans/default', (req, res) => {
+router.get('/region-plans/default', menuGate('order_import'), (req, res) => {
   const plan = db.prepare('SELECT * FROM region_plans WHERE is_default=1').get();
   res.json({ plan });
 });
@@ -221,7 +222,7 @@ router.get('/region-plans/default', (req, res) => {
 // 固定返回最新 20 条，每条解析出 filename/platform/timestamp/success/failed
 const IMPORT_HISTORY_LIMIT = 20;
 
-router.get('/import-history', auth, menuGate('orders_import'), (req, res) => {
+router.get('/import-history', auth, menuGate('order_import'), (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT log_id, operated_at, user_name, target_id, content
@@ -252,7 +253,7 @@ router.get('/import-history', auth, menuGate('orders_import'), (req, res) => {
 });
 
 // 订单列表（搜索 + 分页，供核对/后续使用）+ 行级隔离（业务员仅自己）
-router.get('/', (req, res) => {
+router.get('/', menuGate('order_dashboard'), (req, res) => {
   const q = (req.query.q || '').trim();
   const page = Math.max(1, parseInt(req.query.page || '1', 10));
   const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
@@ -371,7 +372,7 @@ router.get('/query/export', auth, menuGate('order_dashboard'), (req, res) => {
 
 // ---------- GET /api/orders/template ----------
 // 生成带样式的订单导入 xlsx 模板：Sheet1=数据录入页（必填列红色加粗）、Sheet2=填写说明
-router.get('/template', (req, res) => {
+router.get('/template', menuGate('order_import'), (req, res) => {
   try {
     // 构建主 sheet（含样式）
     const headers = TEMPLATE_FIELDS.map((f) => f.name);
@@ -549,7 +550,7 @@ router.get('/stats/waybill/export', auth, menuGate('order_dashboard'), (req, res
 });
 
 // GET /api/orders/platforms — 8 平台 WMS 选择器 + 统一列名（前端导入页面用）
-router.get('/platforms', auth, menuGate('orders_import'), (req, res) => {
+router.get('/platforms', auth, menuGate('order_import'), (req, res) => {
   res.json({
     platforms: WMS_PLATFORMS,
     unified_columns: UNIFIED_COLUMNS,
@@ -558,7 +559,7 @@ router.get('/platforms', auth, menuGate('orders_import'), (req, res) => {
 
 // POST /api/orders/import — 批量导入（8 平台统一入口 + 自动地区分类）
 // multipart fields: file(必填), platform(必填，WMS_PLATFORMS 之一)
-router.post('/import', auth, menuGate('orders_import'), upload.single('file'), (req, res) => {
+router.post('/import', auth, menuGate('order_import'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请上传 Excel 文件' });
   const platform = String(req.body.platform || '').trim();
   if (!platform) return res.status(400).json({ error: '请选择来源平台' });
@@ -581,7 +582,7 @@ router.post('/import', auth, menuGate('orders_import'), upload.single('file'), (
 // POST /api/orders/region-recalc — 地区看板「更新」：按日期段重算地区分类
 // body: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
 // 单事务执行，失败自动回滚；仅更新分类发生变化的订单
-router.post('/region-recalc', auth, menuGate('orders_import'), (req, res) => {
+router.post('/region-recalc', auth, menuGate('order_import'), (req, res) => {
   const start = String((req.body && req.body.start) || '').trim();
   const end = String((req.body && req.body.end) || '').trim();
   const isDate = (s) => {
@@ -619,7 +620,7 @@ router.post('/region-recalc', auth, menuGate('orders_import'), (req, res) => {
 
 // GET /api/orders/dashboard — 地区分类看板聚合（支持 plan 参数）
 // query: start, end, platform, class(大偏远/小偏远/正常), plan(方案 id)
-router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
+router.get('/dashboard', auth, menuGate('order_import'), (req, res) => {
   const start = String(req.query.start || '').trim();
   const end = String(req.query.end || '').trim();
   const platform = String(req.query.platform || '').trim();
