@@ -81,6 +81,8 @@
       document.getElementById('uname').textContent =
         (user.display_name || user.username) + '（' + user.role + '）';
       window.ERP_USER = user;
+      // 用户名可点击 → 修改密码（自助）
+      document.getElementById('uname').addEventListener('click', openChangePwd);
 
       // 权限白名单（有序数组 + Set 双结构：默认页取第一项）
       ERP.PERM_LIST = r.permissions || [];
@@ -125,6 +127,56 @@
         showBootErrorUI(msg);
       }
     });
+
+  // ---------- 自助修改密码（点击右上角用户名） ----------
+  function openChangePwd() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal" style="width:420px;max-width:94vw;">
+        <div class="modal-head"><span>修改密码</span><button class="close" type="button">×</button></div>
+        <div class="modal-body" style="display:block;">
+          <label style="display:block;margin-bottom:12px;">旧密码
+            <input id="cp_old" type="password" autocomplete="current-password" placeholder="请输入当前密码" style="width:100%;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:12px;">新密码
+            <input id="cp_new" type="password" autocomplete="new-password" placeholder="至少 6 位" style="width:100%;margin-top:4px;">
+          </label>
+          <label style="display:block;">确认新密码
+            <input id="cp_new2" type="password" autocomplete="new-password" placeholder="再次输入新密码" style="width:100%;margin-top:4px;">
+          </label>
+          <div id="cp_err" class="err" style="margin-top:10px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="cp_save" class="primary" type="button">确定修改</button>
+          <button class="close" type="button">取消</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelectorAll('.close').forEach((b) => (b.onclick = () => modal.remove()));
+    const errEl = modal.querySelector('#cp_err');
+    modal.querySelector('#cp_save').onclick = async () => {
+      const old_password = modal.querySelector('#cp_old').value;
+      const new_password = modal.querySelector('#cp_new').value;
+      const new2 = modal.querySelector('#cp_new2').value;
+      if (!old_password || !new_password) { errEl.textContent = '请填写旧密码和新密码'; return; }
+      if (new_password !== new2) { errEl.textContent = '两次输入的新密码不一致'; return; }
+      if (new_password.length < 6) { errEl.textContent = '新密码至少 6 位'; return; }
+      const btn = modal.querySelector('#cp_save');
+      btn.disabled = true;
+      try {
+        await API.put('/auth/change-password', { old_password, new_password });
+        modal.remove();
+        alert('密码修改成功，请用新密码重新登录');
+        API.clear();
+        location.href = 'login.html';
+      } catch (e) {
+        errEl.textContent = e.message || '修改失败';
+        btn.disabled = false;
+      }
+    };
+    modal.querySelector('#cp_old').focus();
+  }
 
   document.getElementById('logout').addEventListener('click', () => {
     API.clear();

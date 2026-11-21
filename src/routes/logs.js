@@ -22,7 +22,9 @@ const MODULE_BY_SCOPE = {
   log_system: '系统/权限',
   log_all: null,
 };
-const ACTIONS = ['新增', '修改', '删除', '导入', '历史未知操作'];
+// 与 v_audit_logs 视图的中文操作类型一一对应（含数据库导出）
+// 前 5 项是界面上可勾选的筛选值；后 4 项仅作为 API 参数放行（视图已映射，未来可加入筛选）
+const ACTIONS = ['新增', '修改', '删除', '导入', '历史未知操作', '导出', '提交归档', '撤回', '归档'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function scopeGuard(req, res) {

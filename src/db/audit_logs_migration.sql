@@ -143,11 +143,14 @@ SELECT
       ELSE '历史未知操作'
     END
   END AS module,
-  CASE a.action
+  -- 操作类型中文映射：覆盖全部受控英文枚举 + 历史中文别名。
+  -- 注意：旧版本漏了 export（数据库导出）和「导出」别名，导致导出日志显示“历史未知操作”。
+  CASE lower(a.action)
     WHEN 'create' THEN '新增'
     WHEN 'update' THEN '修改'
     WHEN 'delete' THEN '删除'
     WHEN 'import' THEN '导入'
+    WHEN 'export' THEN '导出'
     WHEN 'submit' THEN '提交归档'
     WHEN 'withdraw' THEN '撤回'
     WHEN 'archive' THEN '归档'
@@ -155,7 +158,9 @@ SELECT
     WHEN '修改' THEN '修改'
     WHEN '删除' THEN '删除'
     WHEN '导入' THEN '导入'
+    WHEN '导出' THEN '导出'
     WHEN '提交' THEN '提交归档'
+    WHEN '提交归档' THEN '提交归档'
     WHEN '撤回' THEN '撤回'
     WHEN '归档' THEN '归档'
     ELSE '历史未知操作'
