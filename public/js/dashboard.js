@@ -112,7 +112,7 @@ function dashboardPage(host) {
       });
       state.data = r;
       $('dbPeriodLabel').textContent =
-        `本期：${r.periodLabel}   上期：${r.prevPeriodLabel}`;
+        `本期：${curPeriodText()}   上期：${prevPeriodText()}`;
       // ★ 各分组独立 try-catch：一处渲染异常不拖垮其他三个
       safeRender('shipping',  renderShipping,  r.shippingList);
       safeRender('receiving', renderReceiving, r.receivingList);
@@ -125,6 +125,32 @@ function dashboardPage(host) {
         $('db-' + k).innerHTML = `<div class="db-err">加载失败：${ex.message || ex}</div>`;
       });
     }
+  }
+
+  // ★ 周期显示：day 模式选多日时，后端 periodLabel 只返回起始日（见 computePeriods），
+  //   导致 Excel 标题/看板顶部只显示单个日期。这里按当前选择拼出完整周期（起 ~ 止），
+  //   供看板顶部、Excel 标题/文件名、复制图片标题统一使用。
+  function fmtDay(dt) {
+    return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+  }
+  function isMultiDay() {
+    return state.periodType === 'day' && !!state.startDate && !!state.endDate && state.startDate !== state.endDate;
+  }
+  function curPeriodText() {
+    const d = state.data || {};
+    return isMultiDay() ? (state.startDate + ' ~ ' + state.endDate) : (d.periodLabel || state.startDate || _todayIso);
+  }
+  function prevPeriodText() {
+    const d = state.data || {};
+    if (!isMultiDay()) return d.prevPeriodLabel || '';
+    // 与后端 computePeriods 的 day 口径一致：上期 = 本期整体向前平移「跨度+1」天
+    const dayMs = 86400000;
+    const s = new Date(state.startDate + 'T00:00:00');
+    const e = new Date(state.endDate + 'T00:00:00');
+    const span = Math.max(0, Math.round((e - s) / dayMs));
+    const ps = new Date(s); ps.setDate(s.getDate() - span - 1);
+    const pe = new Date(e); pe.setDate(e.getDate() - span - 1);
+    return fmtDay(ps) + ' ~ ' + fmtDay(pe);
   }
 
   // ============ 渲染工具 ============
@@ -463,8 +489,9 @@ function dashboardPage(host) {
     const intHeader  = ['序号','项目名称','本期数量','上期数量','数量环比','本期工时','上期工时','工时环比','本期时效','上期时效','时效环比','其他工时','单均成本(元)'];
     const logHeader  = ['序号','项目名称','工时单价(元/小时)','本期工时','上期工时','工时环比','发货总单量','后勤单均成本(元/单)'];
 
+    const periodText = curPeriodText();
     const aoaSheet = (header, rows) => [
-      [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${d.periodLabel}）`],
+      [`佐雍云仓数据中心 · 经营看板（${state.warehouse} · ${periodText}）`],
       header,
       ...rows,
     ];
@@ -523,7 +550,7 @@ function dashboardPage(host) {
     fmtSheet(aoaRecv, '收货组', 25, 12);
     fmtSheet(aoaInt,  '库内组', 25, 12);
     fmtSheet(aoaLog,  '后勤组', 20, 12);
-    XLSX.writeFile(wb, '佐雍云仓数据中心_经营看板_' + (d.periodLabel || _todayIso) + '.xlsx');
+    XLSX.writeFile(wb, '佐雍云仓数据中心_经营看板_' + (periodText || _todayIso).replace(/[\\/:*?"<>|~ ]/g, '_') + '.xlsx');
 
     btn.disabled = false; btn.textContent = '导出 Excel';
     toast('Excel 已导出', 'ok');
@@ -555,18 +582,8 @@ function dashboardPage(host) {
       if (!window.htmlToImage) throw new Error('html-to-image 库未加载');
       if (!state.data) { toast('请先刷新数据再截图', 'warn'); return; }
 
-      // 1) 构造动态标题
-      const d = state.data;
-      let periodText;
-      if (state.periodType === 'day') {
-        periodText = state.startDate;
-      } else if (state.periodType === 'week') {
-        // 用 d.periodLabel 里已有的周 label，没有就拼 start~end
-        periodText = d.periodLabel && /第\d+周/.test(d.periodLabel) ? d.periodLabel
-                   : (state.startDate + ' ~ ' + state.endDate);
-      } else {
-        periodText = d.periodLabel || state.startDate.slice(0, 7);
-      }
+      // 1) 构造动态标题（day 多日选择时显示完整周期，与 Excel 标题一致）
+      const periodText = curPeriodText();
 
       const title = document.createElement('div');
       title.style.cssText =
