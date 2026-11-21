@@ -47,7 +47,9 @@ function parseFilters(q) {
     q: String(q.q || '').trim(), shentongOnly: String(q.shentongOnly || '1') !== '0',
   };
   const where = [], args = [];
-  if (f.shentongOnly) { where.push('is_shentong=1'); }
+  // ★ 单号查询时忽略 is_shentong 过滤：单号唯一，无需再按快递公司过滤；
+  //   且保留它会诱导优化器选 idx_oih_st_date 而非 idx_oih_waybill（实测 1.5s vs 0ms）。
+  if (f.shentongOnly && !f.q) { where.push('is_shentong=1'); }
   if (f.start) { where.push('order_date>=?'); args.push(f.start); }
   if (f.end) { where.push('order_date<=?'); args.push(f.end); }
   if (f.platform && f.platform !== '全部') { where.push('platform=?'); args.push(f.platform); }
@@ -55,29 +57,43 @@ function parseFilters(q) {
   if (f.region && f.region !== '全部') { where.push('region_class=?'); args.push(f.region); }
   if (f.owner && f.owner !== '全部') { where.push('owner_name LIKE ?'); args.push('%' + f.owner + '%'); }
   if (f.q) {
-    // 单号优先（支持多个：逗号/空格分隔），忽略日期条件
+    // 单号优先（支持多个：逗号/空格分隔），忽略日期条件。
+    // ★ 性能关键：单号是完整数字时走「精确匹配/=ybill」命中 idx_oih_waybill 索引，
+    //   绝不用 LIKE '%xxx%'（230万行全表扫描会卡死 FaaS）。仅当含非数字模糊词才降级 LIKE。
     const nos = f.q.split(/[,，、\s;；]+/).filter(Boolean).slice(0, 500);
     if (nos.length > 1) { where.push(`waybill_no IN (${nos.map(() => '?').join(',')})`); args.push(...nos); }
-    else { where.push('waybill_no LIKE ?'); args.push('%' + f.q + '%'); }
+    else if (/^\d{8,}$/.test(f.q)) { where.push('waybill_no=?'); args.push(f.q); }
+    else { where.push('waybill_no LIKE ?'); args.push(f.q + '%'); } // 前缀匹配可用索引
   }
   return { f, where, args, sqlWhere: where.length ? 'WHERE ' + where.join(' AND ') : '' };
 }
 
 // ----------------------------------------------------------------------------
 // GET /api/order-import-hub/meta — 平台/快递公司/货主等筛选项
+// ★ 性能：筛选项（platform/carrier/owner）对 230万行做 DISTINCT 很慢，缓存 5 分钟；
+//   导入/删除数据时调用 invalidateMeta() 立即失效。批次列表轻量，每次实时查。
 // ----------------------------------------------------------------------------
+let _metaCache = { at: 0, platforms: [], carriers: [], owners: [] };
+const META_TTL = 5 * 60 * 1000;
+function invalidateMeta() { _metaCache.at = 0; try { invalidateDashCache(); } catch (e) {} }
+
 router.get('/meta', auth, gate, (req, res) => {
   try {
-    const platforms = db.prepare('SELECT DISTINCT platform FROM oih_rows WHERE platform IS NOT NULL ORDER BY platform').all().map((r) => r.platform);
-    const carriers = db.prepare('SELECT DISTINCT carrier FROM oih_rows WHERE carrier IS NOT NULL ORDER BY carrier').all().map((r) => r.carrier);
-    const owners = db.prepare('SELECT DISTINCT owner_name FROM oih_rows WHERE owner_name IS NOT NULL AND owner_name!=\'\' ORDER BY owner_name LIMIT 2000').all().map((r) => r.owner_name);
+    if (Date.now() - _metaCache.at > META_TTL) {
+      _metaCache = {
+        at: Date.now(),
+        platforms: db.prepare('SELECT DISTINCT platform FROM oih_rows WHERE platform IS NOT NULL ORDER BY platform').all().map((r) => r.platform),
+        carriers: db.prepare('SELECT DISTINCT carrier FROM oih_rows WHERE carrier IS NOT NULL ORDER BY carrier').all().map((r) => r.carrier),
+        owners: db.prepare('SELECT DISTINCT owner_name FROM oih_rows WHERE owner_name IS NOT NULL AND owner_name!=\'\' ORDER BY owner_name LIMIT 2000').all().map((r) => r.owner_name),
+      };
+    }
     const batches = db.prepare(`
       SELECT b.*,
         (SELECT COUNT(*) FROM oih_rejects r WHERE r.batch_id=b.batch_id AND r.reason_type='duplicate') AS reject_duplicate,
         (SELECT COUNT(*) FROM oih_rejects r WHERE r.batch_id=b.batch_id AND r.reason_type!='duplicate') AS reject_failed
       FROM oih_batches b ORDER BY b.batch_id DESC LIMIT 50
     `).all();
-    res.json({ platforms, carriers, owners, batches, allPlatforms: hub.PLATFORM_KEYS });
+    res.json({ platforms: _metaCache.platforms, carriers: _metaCache.carriers, owners: _metaCache.owners, batches, allPlatforms: hub.PLATFORM_KEYS });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -435,6 +451,7 @@ router.post('/stream/finish', auth, gate, (req, res) => {
   const rej = db.prepare("SELECT reason_type,COUNT(*) c FROM oih_rejects WHERE batch_id=? GROUP BY reason_type").all(batchId);
   const filtered = (rej.find((r) => r.reason_type === 'filtered') || {}).c || 0;
   db.prepare("UPDATE oih_batches SET status='done',finished_at=datetime('now','localtime') WHERE batch_id=?").run(batchId);
+  invalidateMeta(); // 新数据入库 → 筛选项缓存失效
   // 清理去重表（数据已入库，释放空间）
   db.prepare('DELETE FROM oih_dedup WHERE batch_id=?').run(batchId);
   res.json({
@@ -456,6 +473,7 @@ router.post('/stream/abort', auth, gate, (req, res) => {
   db.prepare('DELETE FROM oih_dedup WHERE batch_id=?').run(batchId);
   db.prepare('DELETE FROM oih_batches WHERE batch_id=?').run(batchId);
   db.exec('COMMIT');
+  invalidateMeta();
   res.json({ ok: true });
 });
 
@@ -482,9 +500,28 @@ router.get('/query', auth, gate, (req, res) => {
 
 // ----------------------------------------------------------------------------
 // GET /api/order-import-hub/dashboard — 地区分析（保持原【各地区累计分布】数据契约）
+// ★ 性能（2026-11-21）：230万行实时聚合在 FaaS 慢盘要 29s/504 超时。
+//   地区数据在两次导入之间不变 → 结果缓存进 oih_dash_cache（DB 共享，多实例命中），
+//   导入/删除时 invalidateDashCache() 清空。缓存未命中才查库并回填。
 // ----------------------------------------------------------------------------
+function invalidateDashCache() {
+  try { db.prepare('DELETE FROM oih_dash_cache').run(); } catch (e) {}
+}
 router.get('/dashboard', auth, gate, (req, res) => {
   try {
+    // 缓存 key 只用影响结果的筛选参数，与分页等无关参数无关
+    const cacheKey = JSON.stringify({
+      start: req.query.start || '', end: req.query.end || '',
+      platform: req.query.platform || '', carrier: req.query.carrier || '',
+      region: req.query.region || '', owner: req.query.owner || '',
+      shentongOnly: String(req.query.shentongOnly ?? '1') !== '0',
+    });
+    const hit = db.prepare('SELECT data FROM oih_dash_cache WHERE cache_key=?').get(cacheKey);
+    if (hit) {
+      res.json(JSON.parse(hit.data));
+      return;
+    }
+
     const { sqlWhere, args } = parseFilters(req.query);
     const total = db.prepare(`SELECT COUNT(*) c FROM oih_rows ${sqlWhere}`).get(...args).c;
     const byClassRows = db.prepare(`
@@ -493,10 +530,12 @@ router.get('/dashboard', auth, gate, (req, res) => {
     const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0, '其他': 0 };
     byClassRows.forEach((r) => { byClass[r.region_class] = r.c; });
 
+    // ★ 性能：去掉 SQL 层的 ORDER BY c DESC（会对230万行分组结果做磁盘排序）。
+    //   省份最多几十个，取回后在内存排序，快得多。
     const provRows = db.prepare(`
       SELECT region_class, to_province AS province, COUNT(*) c
       FROM oih_rows ${sqlWhere}
-      GROUP BY region_class, to_province ORDER BY c DESC
+      GROUP BY region_class, to_province
     `).all(...args);
     const byClassProvince = { '大偏远': [], '小偏远': [], '正常': [] };
     provRows.forEach((r) => {
@@ -506,29 +545,17 @@ router.get('/dashboard', auth, gate, (req, res) => {
         pct: total ? +(r.c * 100 / total).toFixed(2) : 0,
       });
     });
+    for (const k of Object.keys(byClassProvince)) byClassProvince[k].sort((a, b) => b.count - a.count);
 
-    const platforms = db.prepare(`SELECT DISTINCT platform FROM oih_rows ${sqlWhere} ORDER BY platform`).all(...args).map((r) => r.platform);
-    // carrier 过滤单独拼条件，避免 sqlWhere 为空时出现 "WHERE ... AND" 语法错误
-    const carrierWhere = sqlWhere ? sqlWhere + ' AND carrier IS NOT NULL' : 'WHERE carrier IS NOT NULL';
-    const carriers = db.prepare(`SELECT DISTINCT carrier FROM oih_rows ${carrierWhere} ORDER BY carrier`).all(...args).map((r) => r.carrier);
-
-    const details = db.prepare(`
-      SELECT waybill_no,platform,owner_name,shop_name,carrier,order_date,
-        to_province,to_city,to_district,region_class,quantity
-      FROM oih_rows ${sqlWhere}
-      ORDER BY order_date DESC, row_id DESC LIMIT 500
-    `).all(...args);
-
-    res.json({
+    const result = {
       total,
       remote_total: (byClass['大偏远'] || 0) + (byClass['小偏远'] || 0),
       by_class: byClass,
       by_class_province: byClassProvince,
-      platform_list: platforms,
-      carrier_list: carriers,
-      details,
       carrier_scope: { filtered: false, carriers: [] },
-    });
+    };
+    try { db.prepare('INSERT OR REPLACE INTO oih_dash_cache (cache_key,data) VALUES (?,?)').run(cacheKey, JSON.stringify(result)); } catch (e) {}
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -632,6 +659,7 @@ router.delete('/batch/:id', auth, gate, (req, res) => {
     const r3 = db.prepare('DELETE FROM oih_rejects WHERE batch_id=?').run(id);
     const r2 = db.prepare('DELETE FROM oih_batches WHERE batch_id=?').run(id);
     db.exec('COMMIT');
+    invalidateMeta();
     res.json({ ok: true, deletedRows: r1.changes, deletedRejects: r3.changes, deletedBatches: r2.changes });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) { /* ignore */ }
@@ -647,6 +675,7 @@ router.delete('/all', auth, gate, (req, res) => {
     const r3 = db.prepare('DELETE FROM oih_rejects').run();
     const r2 = db.prepare('DELETE FROM oih_batches').run();
     db.exec('COMMIT');
+    invalidateMeta();
     res.json({ ok: true, deletedRows: r1.changes, deletedRejects: r3.changes, deletedBatches: r2.changes });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) { /* ignore */ }
