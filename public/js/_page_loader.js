@@ -70,7 +70,7 @@
 
   // 版本号：配合 Express 静态资源 Cache-Control: public, max-age=86400, immutable
   // 版本不变 → 浏览器 24h disk cache；版本变 → URL 变浏览器自动下载
-  const BUILD_VERSION = 'v=41';  // 2026-11-21 → 订单导入：未导入数据原因明细（查看/下载）
+  const BUILD_VERSION = 'v=42';  // 2026-11-21 → 查询表去掉数量/收件人列 + 分页跳转输入框
 
   // 返回 Promise：该 page 对应的 JS 文件已注入并执行完毕
   ERP.ensurePageScript = function (pageId) {

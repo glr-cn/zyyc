@@ -129,7 +129,7 @@ function importBuffer(buf, fileName, operator, t0) {
       for (let rowIdx = 0; rowIdx < sheet.rows.length; rowIdx++) {
         const arr = sheet.rows[rowIdx];
         const excelRow = rowIdx + 2; // 表头占第 1 行
-        const get = (field) => (col[field] != null ? hub.cellText(arr[col[field]]) : '');
+        const get = (field) => hub.getField(col, arr, field);
         const waybill = get('waybill_no');
         const ownerName = get('owner_name');
         const rawCarrier = get('express_company');
@@ -371,15 +371,14 @@ router.get('/export', auth, gate, (req, res) => {
     const { sqlWhere, args } = parseFilters(req.query);
     const rows = db.prepare(`
       SELECT waybill_no,platform,sheet_name,owner_name,shop_name,carrier,order_date,
-        to_province,to_city,to_district,region_class,quantity,receiver_name,receiver_address
+        to_province,to_city,to_district,region_class,receiver_address
       FROM oih_rows ${sqlWhere} ORDER BY order_date DESC, row_id DESC LIMIT 100000
     `).all(...args);
     const xlsx = require('xlsx');
-    const aoa = [['快递单号', '平台', '来源Sheet', '货主', '店铺', '快递公司', '日期', '省', '市', '区县', '地区分类', '数量', '收件人', '收件地址']];
+    const aoa = [['快递单号', '平台', '来源Sheet', '货主', '店铺', '快递公司', '日期', '省', '市', '区县', '地区分类', '收件地址']];
     rows.forEach((r) => aoa.push([
       r.waybill_no, r.platform, r.sheet_name, r.owner_name, r.shop_name, r.carrier,
-      r.order_date, r.to_province, r.to_city, r.to_district, r.region_class,
-      r.quantity, r.receiver_name, r.receiver_address,
+      r.order_date, r.to_province, r.to_city, r.to_district, r.region_class, r.receiver_address,
     ]));
     const ws = xlsx.utils.aoa_to_sheet(aoa);
     ws['!cols'] = aoa[0].map(() => ({ wch: 16 }));

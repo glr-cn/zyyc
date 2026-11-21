@@ -449,8 +449,6 @@
             <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:center;">
               <span style="padding:2px 8px;border-radius:3px;background:${c.bg};color:${c.text};border:1px solid ${c.border};font-size:12px;">${esc(r.region_class || '其他')}</span>
             </td>
-            <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;text-align:right;">${r.quantity}</td>
-            <td style="padding:6px;border:1px solid #ebeef5;font-size:12px;">${esc(r.receiver_name || '-')}</td>
           </tr>`;
         }).join('');
         const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -462,7 +460,6 @@
               <th style="padding:7px;border:1px solid #ebeef5;">店铺</th><th style="padding:7px;border:1px solid #ebeef5;">平台</th>
               <th style="padding:7px;border:1px solid #ebeef5;">快递公司</th><th style="padding:7px;border:1px solid #ebeef5;">日期</th>
               <th style="padding:7px;border:1px solid #ebeef5;">收件地区</th><th style="padding:7px;border:1px solid #ebeef5;">分类</th>
-              <th style="padding:7px;border:1px solid #ebeef5;">数量</th><th style="padding:7px;border:1px solid #ebeef5;">收件人</th>
             </tr></thead><tbody>${body}</tbody></table>
           </div>
           <div style="margin-top:10px;display:flex;align-items:center;gap:10px;font-size:13px;color:#606266;justify-content:flex-end;">
@@ -473,10 +470,23 @@
             <button id="oihPrev" style="padding:4px 12px;border:1px solid #dcdfe6;border-radius:4px;background:#fff;cursor:pointer;" ${page <= 1 ? 'disabled' : ''}>上一页</button>
             <span>第 ${page} / ${pages} 页</span>
             <button id="oihNext" style="padding:4px 12px;border:1px solid #dcdfe6;border-radius:4px;background:#fff;cursor:pointer;" ${page >= pages ? 'disabled' : ''}>下一页</button>
+            <span style="margin-left:6px;">跳至</span>
+            <input id="oihJumpPage" type="number" min="1" max="${pages}" value="${page}" style="width:60px;padding:4px 6px;border:1px solid #dcdfe6;border-radius:4px;text-align:center;">
+            <span>页</span>
+            <button id="oihJumpBtn" style="padding:4px 12px;border:1px solid #409eff;border-radius:4px;background:#409eff;color:#fff;cursor:pointer;">确定</button>
           </div>`;
         $('#oihPageSize').onchange = (e) => { pageSize = Number(e.target.value); page = 1; doQuery(); };
         $('#oihPrev').onclick = () => { if (page > 1) { page--; doQuery(); } };
         $('#oihNext').onclick = () => { if (page < pages) { page++; doQuery(); } };
+        function jumpPage() {
+          const target = Number($('#oihJumpPage').value);
+          if (!Number.isInteger(target) || target < 1 || target > pages) {
+            toast(`请输入 1 到 ${pages} 之间的页码`, 'error'); return;
+          }
+          if (target !== page) { page = target; doQuery(); }
+        }
+        $('#oihJumpBtn').onclick = jumpPage;
+        $('#oihJumpPage').onkeydown = (e) => { if (e.key === 'Enter') jumpPage(); };
       }).catch((e) => {
         $('#oihQResult').innerHTML = `<div style="padding:24px;text-align:center;color:#f56c6c;">❌ 查询失败：${esc(e.message)}</div>`;
       });

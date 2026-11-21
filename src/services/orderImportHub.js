@@ -103,26 +103,28 @@ const PLATFORM_FIELD_MAP = {
     quantity: '货品数量',
   },
   '吉客云': {
-    waybill_no: '物流单号', shop_name: '销售渠道',
+    // 货主=销售渠道；本模板无「店铺」列，店铺同样取销售渠道（两字段共享同一列）
+    waybill_no: '物流单号', owner_name: '销售渠道', shop_name: '销售渠道',
     express_company: '物流公司', order_date: '预约时间',
     receiver_address: '地址',
   },
   '快麦': {
-    waybill_no: '运单号', owner_name: '客户店铺', shop_name: '订单所在店铺',
+    waybill_no: '运单号', owner_name: '客户备注', shop_name: '订单所在店铺',
     express_company: '快递公司', order_date: '单号申请时间',
     to_province: '目的地', receiver_address: '目的地',
   },
   '多多打单': {
-    waybill_no: '快递单号', owner_name: '店铺', shop_name: '平台订单号',
+    // 货主统一为固定值「红风」；店铺直接取「店铺」列
+    waybill_no: '快递单号', owner_name: { const: '红风' }, shop_name: '店铺',
     express_company: '快递公司', order_date: '发货时间',
     receiver_address: '收件人地址', quantity: '数量',
   },
   '聚水潭': {
-    waybill_no: '快递单号', owner_name: '使用方公司名称', shop_name: '取号店铺名称',
+    waybill_no: '快递单号', owner_name: '我方备注', shop_name: '取号店铺名称',
     express_company: '快递公司名称', order_date: '创建时间',
   },
   '店管家': {
-    waybill_no: '运单号', owner_name: '使用单号店铺', shop_name: '平台',
+    waybill_no: '运单号', owner_name: '备注', shop_name: '平台',
     order_date: '获取时间', to_province: '省市区', receiver_name: '收件人',
   },
   '风速': {
@@ -174,10 +176,16 @@ function buildColumnMap(headers, platform) {
   const map = {};
 
   // ① 平台专属精确映射（最高优先级）
+  //    - 支持 {const:'固定值'}：字段取固定常量，不占列（如多多打单货主=红风）
+  //    - 允许多个字段共享同一列（如吉客云货主与店铺都取「销售渠道」）
   const specific = platform ? PLATFORM_FIELD_MAP[platform] : null;
   if (specific) {
-    for (const [field, header] of Object.entries(specific)) {
-      const idx = normed.indexOf(normHeader(header));
+    for (const [field, spec] of Object.entries(specific)) {
+      if (spec && typeof spec === 'object' && spec.const != null) {
+        map[field] = { const: String(spec.const) };
+        continue;
+      }
+      const idx = normed.indexOf(normHeader(spec));
       if (idx >= 0) { map[field] = idx; used.add(idx); }
     }
   }
@@ -201,6 +209,14 @@ function buildColumnMap(headers, platform) {
   }
 
   return map;
+}
+
+// 按列映射从一行数据取字段值：支持数字列索引与 {const:'固定值'} 常量
+function getField(col, arr, field) {
+  const spec = col[field];
+  if (spec == null) return '';
+  if (typeof spec === 'object' && spec.const != null) return String(spec.const);
+  return cellText(arr[spec]);
 }
 
 // ----------------------------------------------------------------------------
@@ -321,7 +337,7 @@ function cellNumber(v) {
 
 module.exports = {
   PLATFORM_KEYS, PLATFORM_ALIASES, FIELD_ALIASES,
-  detectPlatform, buildColumnMap, normalizeCarrier, isShentong,
+  detectPlatform, buildColumnMap, getField, normalizeCarrier, isShentong,
   resolveRegion, classify, readWorkbook, cellText, cellDate, cellNumber, normHeader,
   PLATFORM_FIELD_MAP, parseAddressRegion,
 };
