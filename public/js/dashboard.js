@@ -535,6 +535,19 @@ function dashboardPage(host) {
     //（克隆节点在自己的 SVG 里正常落在画布内，实测非空白；page 上被内容遮挡不可见）。
     hideRoot.style.cssText = 'position:fixed;left:0;top:0;z-index:-10000;pointer-events:none;background:#ffffff;';
     try {
+      // html-to-image 已改为按需懒加载（原静态 CDN 标签在 4adf373 性能优化中被移除），
+      // 这里必须像 exportExcel 主动 ensureXlsx 一样主动加载，否则新页面首次点击必然失败。
+      if (!window.htmlToImage) {
+        if (!(window.ERP && window.ERP.ensureHtmlToImage)) {
+          throw new Error('图片组件不可用，请刷新页面重试');
+        }
+        toast('正在加载图片组件…');
+        try {
+          await window.ERP.ensureHtmlToImage();
+        } catch (e) {
+          throw new Error('图片组件加载失败，请检查网络后重试');
+        }
+      }
       if (!window.htmlToImage) throw new Error('html-to-image 库未加载');
       if (!state.data) { toast('请先刷新数据再截图', 'warn'); return; }
 
