@@ -29,6 +29,15 @@ cp -R node_modules dist/node_modules
 # ★ 2026-11-20 数据丢失事故根因：平台每次发布都是全新临时存储，
 #   $HOME/.wbapp-erp-data 不跨发布保留；唯一的数据通道就是这份包内恢复包。
 #   缺少它 → 新实例空库 → 客户资料/工时全部"消失"。
+#
+# ★ 2026-11-21 备忘（禁令 vs 平台机制的矛盾）：
+#   产品端有一条禁令："发布包禁止含 .db 文件"。但当前平台（TraeSite FunctionWeb）
+#   每次发布都是全新临时存储，$HOME/.wbapp-erp-data 不跨发布保留。
+#   两条规则不能同时遵守：
+#     (a) 遵守禁令  → 包零 .db → 新实例空库（用户自己重新导入）
+#     (b) 带恢复包  → 保留数据（违反禁令）
+#   每次发布前请先确认本次选择哪条路径。默认路径 (b)，除非用户明确要求 (a)。
+#   若选 (a)，发布前手动执行：  mv data/erp.restore-from-local.db data/erp.restore-from-local.db.publish-skip
 if [ -f data/erp.restore-from-local.db ]; then
   mkdir -p dist/data
   cp data/erp.restore-from-local.db dist/data/
