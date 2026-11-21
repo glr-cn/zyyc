@@ -73,7 +73,7 @@ window.ERP_PAGES.analytics = function (host) {
     return `<tr>
       <td>${escapeHtml(r.period)}</td><td>${escapeHtml(r.warehouse)}</td><td>${escapeHtml(r.work_type)}</td>
       <td>${escapeHtml(r.customer_name)}</td>
-      <td class="num">${num(r.ship_qty)}</td><td class="num">${num(r.cartons)}</td>
+      <td class="num">${r.ship_qty == null ? '-' : Math.round(Number(r.ship_qty))}</td><td class="num">${num(r.cartons)}</td>
       <td class="num">${num(r.main)}</td><td class="num">${num(r.other)}</td><td class="num">${num(r.shared)}</td>
       <td class="num">${num(r.total)}</td><td class="num">${num(r.efficiency)}</td>
       <td class="num">${r.unit_cost == null ? '—' : num(r.unit_cost)}</td>

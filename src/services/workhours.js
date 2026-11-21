@@ -64,9 +64,39 @@ const TYPE_CONFIG = {
 function workTypeKey(name) { return TYPE_KEY[name]; }
 function configOf(name) { return TYPE_CONFIG[TYPE_KEY[name]]; }
 
+// ---------------------------------------------------------------------------
+// 发货单量（ship_orders）整数化
+// ---------------------------------------------------------------------------
+// 业务约束：单位为「单」，不允许小数；有效范围为 1 ~ 1,000,000 的整数。
+// 空值（null/''）保留「无单量仅备注」场景，但一旦填值必须是合法正整数。
+const SHIP_MIN = 1;
+const SHIP_MAX = 1000000;
+
+// 表单/接口入参校验：不合法返回 error，合法返回值（不做四舍五入——非整数直接拒绝）
+function normalizeShipOrders(input) {
+  if (input == null || String(input).trim() === '') return { value: null, error: null };
+  const n = Number(String(input).trim());
+  if (!Number.isFinite(n)) return { value: null, error: '发货单量必须为数字' };
+  if (!Number.isInteger(n)) return { value: null, error: '发货单量必须为整数，不支持小数' };
+  if (n < SHIP_MIN) return { value: null, error: '发货单量必须大于 0（无单量请留空）' };
+  if (n > SHIP_MAX) return { value: null, error: `发货单量不能超过 ${SHIP_MAX}` };
+  return { value: n, error: null };
+}
+
+// 四舍五入为整数（用于导入 Excel、历史数据等非表单场景；不做合法性拒绝）
+function roundShipOrders(input) {
+  if (input == null || String(input).trim() === '') return null;
+  const n = Number(input);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n); // 四舍五入，禁止截断
+}
+
 // 计算派生字段（统一 round3 入库/返回），返回同一对象
 function calcRow(name, raw) {
   const cfg = configOf(name);
+  // ★ 发货单量强制整数化：任何浮点残留（历史数据/导入/计算）统一四舍五入，
+  //   保证存储、派生计算（时效/单均成本）与接口返回都不含小数位。
+  if (name === '发货') raw.ship_orders = roundShipOrders(raw.ship_orders);
   raw.main_hours = round3(raw.main_hours);
   raw.other_hours = round3(raw.other_hours);
   raw.shared_hours = round3(raw.shared_hours);
@@ -139,7 +169,10 @@ function validateByType(name, b, db, opts = {}) {
       return '客户「' + cust.customer_name + '」不属于' + b.warehouse + '，禁止跨仓录入';
     // 放宽校验：ship_orders / main_hours / remark 三者任意有值即允许保存（支持"无单量仅备注"场景）；
     // 只有三者全空/全0 才算脏数据并拦截。
-    const ship = Number(b.ship_orders) || 0;
+    // 发货单量：填了就必须是合法正整数（1 ~ SHIP_MAX），空值允许（仅备注场景）
+    const shipCheck = normalizeShipOrders(b.ship_orders);
+    if (shipCheck.error) return shipCheck.error;
+    const ship = shipCheck.value || 0;
     const mh = Number(b.main_hours) || 0;
     const rk = (b.remark || '').trim();
     if (!(ship > 0) && !(mh > 0) && !rk) return '发货单量、主工时、备注至少填写一项';
@@ -268,4 +301,5 @@ module.exports = {
   TYPE_CONFIG, TYPE_KEY, KEY_LABEL, workTypeKey, configOf,
   calcRow, validateByType, attachTrend, resolveCustomer,
   resolveGapScope, parseNum, isSameHoursRow,
+  SHIP_MIN, SHIP_MAX, normalizeShipOrders, roundShipOrders,
 };

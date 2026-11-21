@@ -166,6 +166,38 @@ test('脏数据修复：同维度 archived + pending 并存 → 覆盖后仅剩 
   assert.equal(rows[0].ship_orders, 100);
 });
 
+test('发货单量整数化：导入小数按四舍五入入库（1260.6 → 1261）', () => {
+  reset();
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', 1260.6, 10, 0, '']]));
+  assert.equal(r.code, 200);
+  assert.equal(r.body.created, 1);
+  const row = rowsOf()[0];
+  assert.equal(row.ship_orders, 1261, '1260.6 必须四舍五入为 1261（禁止截断为 1260）');
+  assert.ok(Number.isInteger(row.ship_orders), '入库值必须是整数');
+});
+
+test('发货单量整数化：0 / 负数 / 超上限 → 全部拦截并计入 errors，不写库', () => {
+  reset();
+  const r = runImport(makeXlsx([
+    ['2026-11-20', '货主A', '单', 0, 0, 0, ''],          // 0 → 非法
+    ['2026-11-20', '货主A', '单', -5, 0, 0, ''],         // 负数 → 非法
+    ['2026-11-20', '货主A', '单', 1000001, 0, 0, ''],    // 超上限 → 非法
+  ]));
+  assert.equal(r.body.created, 0);
+  assert.equal(rowsOf().length, 0, '非法行不得写入');
+  assert.equal(r.body.errors.length, 3);
+  assert.match(r.body.errors[0].error, /必须大于 0/);
+  assert.match(r.body.errors[2].error, /不能超过/);
+});
+
+test('发货单量整数化：留空 + 仅备注 → 存 null（不存 0）', () => {
+  reset();
+  const r = runImport(makeXlsx([['2026-11-20', '货主A', '单', '', 0, 0, '无单量，仅备注']]));
+  assert.equal(r.body.created, 1);
+  const row = rowsOf()[0];
+  assert.equal(row.ship_orders, null, '空单量必须为 null，不能落库为 0');
+});
+
 test('多行混合：新增 + 提交草稿 + 跳过 + 覆盖 在同一事务内完成', () => {
   reset();
   sharedDb.exec(`INSERT INTO customers (customer_id, company_name, warehouse) VALUES (2, '货主B', '龙湖仓'), (3, '货主C', '龙湖仓')`);

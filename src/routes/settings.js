@@ -1,14 +1,20 @@
 // ============================================================================
 // settings.js · 系统设置路由（2026-11-20）
 // ----------------------------------------------------------------------------
-// 目前承载「物流映射配置」：快递公司编码 ↔ 名称的可视化维护。
+// 1) 物流映射设置：快递公司编码（表格编码）↔ 名称的可视化维护。
 //   GET    /api/settings/express-map            读取映射 + 默认值（供页面渲染）
 //   POST   /api/settings/express-map            新增一条 {code,name}
 //   PUT    /api/settings/express-map/:code      编辑（允许改编码与名称）
 //   DELETE /api/settings/express-map/:code      删除一条
 //   POST   /api/settings/express-map/reset      恢复内置默认映射
+// 2) 偏远地区设置：以快递公司为维度配置 大偏远 / 小偏远 / 正常 区域。
+//   GET    /api/settings/region-rules/carriers  快递公司列表（含配置条数）
+//   GET    /api/settings/region-rules/:carrier  某快递公司的区域配置
+//   PUT    /api/settings/region-rules/:carrier  全量保存 {大偏远:[],小偏远:[],正常:[]}
+//   DELETE /api/settings/region-rules/:carrier  清空某快递公司配置
+//   GET    /api/settings/region-tree            省/市/区级联数据源
 // 读：菜单权限 settings；写：管理员/超级管理员（roleGate 二次校验，防绕过前端）
-// 配置实时生效：导入与统计每次请求都重新读取，无缓存。
+// 配置实时生效：导入与统计每次请求都重新读取，无缓存；保存规则后重算历史订单分类。
 // ============================================================================
 
 const express = require('express');
@@ -17,6 +23,7 @@ const db = require('../db');
 const { auth } = require('../middleware/auth');
 const { menuGate, roleGate } = require('../middleware/rbac');
 const expressMap = require('../services/expressMap');
+const expressRegion = require('../services/expressRegion');
 const auditLog = require('../services/auditLog');
 
 router.use(auth);
@@ -104,6 +111,83 @@ router.post('/express-map/reset', writeGate, (req, res) => {
       targetId: 'express_map', content: { op: 'express_map_reset' },
     });
     payload(res, items);
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// ============================================================================
+// 偏远地区设置
+// ============================================================================
+
+// 快递公司下拉：物流映射中的公司 + 已配置规则的公司
+router.get('/region-rules/carriers', (req, res) => {
+  try {
+    const names = expressMap.getItems(db).map((x) => x.name);
+    res.json({ carriers: expressRegion.carriers(db, names) });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// 省/市/区级联数据源
+router.get('/region-tree', (req, res) => {
+  try {
+    res.json({ provinces: expressRegion.regionTree(db) });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// 某快递公司的区域配置
+router.get('/region-rules/:carrier', (req, res) => {
+  try {
+    res.json(expressRegion.listRules(db, req.params.carrier));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// 保存（全量替换），实时生效
+router.put('/region-rules/:carrier', writeGate, (req, res) => {
+  try {
+    const carrier = req.params.carrier;
+    const body = req.body || {};
+    const result = expressRegion.saveRules(db, carrier, {
+      '大偏远': body['大偏远'],
+      '小偏远': body['小偏远'],
+      '正常': body['正常'],
+    });
+    auditLog.writeLog(req, {
+      table: 'express_region_rules', module: '系统设置', action: 'update',
+      targetId: carrier,
+      content: {
+        op: 'region_rules_save', carrier,
+        count: result.count,
+        counts: {
+          '大偏远': result.groups['大偏远'].length,
+          '小偏远': result.groups['小偏远'].length,
+          '正常': result.groups['正常'].length,
+        },
+        recalced: result.recalced,
+      },
+    });
+    res.json(result);
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// 清空某快递公司配置（清空后回退系统内置规则）
+router.delete('/region-rules/:carrier', writeGate, (req, res) => {
+  try {
+    const result = expressRegion.clearRules(db, req.params.carrier);
+    auditLog.writeLog(req, {
+      table: 'express_region_rules', module: '系统设置', action: 'delete',
+      targetId: req.params.carrier,
+      content: { op: 'region_rules_clear', carrier: req.params.carrier, recalced: result.recalced },
+    });
+    res.json(result);
   } catch (e) {
     fail(res, e);
   }

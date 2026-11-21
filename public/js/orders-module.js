@@ -37,7 +37,6 @@
     const tabs = wrap.querySelectorAll('.od-tab');
     const panels = wrap.querySelectorAll('.od-panel');
     let p_import_mounted = false, p_dash_mounted = false, p_query_mounted = false;
-    let currentPlanId = null;
 
     function switchTab(tabName) {
       tabs.forEach((t) => {
@@ -54,11 +53,6 @@
     }
     tabs.forEach((t) => { t.onclick = () => switchTab(t.dataset.tab); });
     switchTab(defaultTab);
-
-    // 暴露切换接口给配置面板的新建方案回调
-    wrap._refreshDashboard = () => refreshDashboard();
-    wrap._getPlanId = () => currentPlanId;
-    wrap._setPlanId = (v) => { currentPlanId = v; };
   }
 
   // =========================================================================
@@ -672,11 +666,9 @@
   }
 
   // =========================================================================
-  // Tab: 地区看板（辅助 · 保留偏远地区分类视图与方案配置）
+  // Tab: 地区看板（偏远地区分类视图）
   // =========================================================================
   let _dashCache = null;
-  let _plansCache = [];
-  let _currentPlanId = null;
 
   function mountDashboard(panel) {
     panel.innerHTML = '';
@@ -687,9 +679,9 @@
     const card = document.createElement('div');
     card.style.cssText = CARD_CSS;
     card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px;flex-wrap:wrap;">
         <h3 style="margin:0;font-size:16px;color:#303133;">📊 申通地区分类看板</h3>
-        <button id="dashConfigBtn" style="${BTN_PRIMARY};padding:6px 16px;font-size:13px;">⚙️ 偏远地区配置</button>
+        <span id="dashScopeNote" style="font-size:12px;color:#909399;"></span>
       </div>
 
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;align-items:center;">
@@ -699,11 +691,9 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
           平台 <select id="dashPlatform" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;"><option value="全部">全部</option></select>
         </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#606266;">
-          方案 <select id="dashPlan" style="padding:5px 8px;border:1px solid #dcdfe6;border-radius:4px;min-width:200px;"></select>
-        </label>
+        <button id="dashUpdate" style="background:#e6a23c;color:#fff;border:none;border-radius:4px;padding:8px 20px;font-size:14px;cursor:pointer;font-weight:600;">🔄 更新</button>
         <button id="dashQuery" style="${BTN_PRIMARY}">🔍 查询</button>
-        <button id="dashReset" style="${BTN_GHOST}">🔄 重置</button>
+        <button id="dashReset" style="${BTN_GHOST}">↺ 重置</button>
         <button id="dashExport" style="${BTN_GHOST}">⬇ 导出</button>
       </div>
 
@@ -748,25 +738,14 @@
       (r?.platforms || []).forEach((p) => { const o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); });
     }).catch(() => {});
 
-    // --- 方案下拉 ---
-    loadPlansIntoSelect(card.querySelector('#dashPlan'), () => refreshDashboard());
-
     card.querySelector('#dashQuery').onclick = refreshDashboard;
     card.querySelector('#dashReset').onclick = () => {
       card.querySelector('#dashMonth').value = thisMonth;
       card.querySelector('#dashPlatform').value = '全部';
       refreshDashboard();
     };
-    card.querySelector('#dashConfigBtn').onclick = () => openPlanConfigModal({
-      onSaved: () => {
-        loadPlansIntoSelect(card.querySelector('#dashPlan'), () => refreshDashboard());
-        refreshDashboard();
-      }
-    });
+    card.querySelector('#dashUpdate').onclick = openRegionUpdateModal;
     card.querySelector('#dashExport').onclick = () => exportDashboard();
-
-    // 方案切换立即触发查询
-    card.querySelector('#dashPlan').onchange = refreshDashboard;
 
     refreshDashboard();
   }
@@ -897,23 +876,6 @@
     load();
   }
 
-  function loadPlansIntoSelect(selectEl, onChangeCb) {
-    API.get('/orders/region-plans').then((data) => {
-      _plansCache = data.plans || [];
-      selectEl.innerHTML = '';
-      _plansCache.forEach((p) => {
-        const o = document.createElement('option'); o.value = p.id;
-        o.textContent = (p.is_default ? '★ ' : '') + p.name + (p.override_count ? `（${p.override_count}条覆盖）` : '');
-        selectEl.appendChild(o);
-      });
-      // 默认选中默认方案
-      const def = _plansCache.find((p) => p.is_default);
-      if (def) selectEl.value = def.id;
-      _currentPlanId = selectEl.value;
-      if (onChangeCb) onChangeCb();
-    }).catch(() => {});
-  }
-
   function refreshDashboard() {
     const panel = document.querySelector('.od-panel[data-panel="dashboard"]');
     if (!panel) return;
@@ -922,8 +884,6 @@
 
     const month = qs('#dashMonth')?.value || ''; // YYYY-MM
     const platform = qs('#dashPlatform')?.value || '全部';
-    const planId = qs('#dashPlan')?.value || '';
-    _currentPlanId = planId;
 
     let start = '', end = '';
     if (month) {
@@ -937,7 +897,6 @@
     if (start) params.set('start', start);
     if (end) params.set('end', end);
     if (platform && platform !== '全部') params.set('platform', platform);
-    if (planId) params.set('plan', planId);
 
     qs('#dashCards').innerHTML = '<div style="color:#909399;padding:20px;text-align:center;">⏳ 加载中...</div>';
     qs('#dashProvinceBlocks').innerHTML = '';
@@ -957,15 +916,27 @@
     const provinceWrap = card.querySelector('#dashProvinceBlocks');
 
     const { by_class, total, remote_total, by_class_province } = data;
+
+    // 统计范围提示：仅展示已配置偏远规则的快递公司
+    const scopeEl = card.querySelector('#dashScopeNote');
+    if (scopeEl) {
+      const scope = data.carrier_scope || {};
+      scopeEl.textContent = scope.filtered
+        ? '仅统计已配置偏远规则的快递公司：' + (scope.carriers || []).join('、')
+        : '尚未配置偏远规则，当前展示全部快递公司';
+    }
     const pct = (n) => total ? ((n * 100) / total).toFixed(1) + '%' : '0%';
     const CLASS_COLOR = {
       '大偏远': { bg: '#fef0f0', text: '#f56c6c', border: '#f56c6c', bar: '#f56c6c', label: '🔴 大偏远' },
       '小偏远': { bg: '#fdf6ec', text: '#e6a23c', border: '#e6a23c', bar: '#e6a23c', label: '🟠 小偏远' },
       '正常':   { bg: '#f0f9eb', text: '#67c23a', border: '#67c23a', bar: '#409eff', label: '🔵 正常' },
+      '其他':   { bg: '#f4f4f5', text: '#909399', border: '#909399', bar: '#909399', label: '⚪ 其他' },
     };
 
     // --- 顶部 KPI 卡片 ---
-    const classCards = ['大偏远', '小偏远', '正常'].map((c) => {
+    const classList = ['大偏远', '小偏远', '正常'];
+    if ((by_class['其他'] || 0) > 0) classList.push('其他');
+    const classCards = classList.map((c) => {
       const color = CLASS_COLOR[c];
       return `<div style="flex:1;min-width:180px;padding:16px;border-radius:8px;background:${color.bg};border-left:4px solid ${color.border};">
         <div style="color:${color.text};font-size:13px;font-weight:600;margin-bottom:6px;">${color.label}</div>
@@ -1047,16 +1018,23 @@
       '大偏远': { bg:'#fef0f0', text:'#f56c6c', border:'#f56c6c' },
       '小偏远': { bg:'#fdf6ec', text:'#e6a23c', border:'#e6a23c' },
       '正常':   { bg:'#f0f9eb', text:'#67c23a', border:'#67c23a' },
+      '其他':   { bg:'#f4f4f5', text:'#909399', border:'#d3d4d6' },
     })[cls] || { bg:'#f0f9eb', text:'#67c23a', border:'#67c23a' };
   }
 
-  function exportDashboard() {
+  async function exportDashboard() {
     if (!_dashCache) return;
+    // ★ 懒加载 SheetJS：点导出时才拉取
+    if (!window.XLSX) {
+      if (!(window.ERP && window.ERP.ensureXlsx)) { alert('导出组件不可用，请刷新页面重试'); return; }
+      try { await window.ERP.ensureXlsx(); } catch (e) { alert('导出组件加载失败，请检查网络后重试'); return; }
+    }
     const xlsx = window.XLSX; if (!xlsx) { alert('导出组件未加载'); return; }
     const d = _dashCache;
     const summary = [
       ['总订单数', d.total||0], ['偏远合计', d.remote_total||0],
       ['大偏远', d.by_class['大偏远']||0], ['小偏远', d.by_class['小偏远']||0], ['正常', d.by_class['正常']||0],
+      ...(d.by_class['其他'] ? [['其他', d.by_class['其他']]] : []),
       ['查询月份', document.querySelector('#dashMonth')?.value || ''],
     ];
     const provAoA = [['地区分类','省份','订单数','占比'], [], ['大偏远'], [], ['小偏远'], [], ['正常']];
@@ -1083,193 +1061,147 @@
   }
 
   // =========================================================================
-  // 偏远地区方案配置弹层
+  // 地区看板「更新」：按日期段重算地区分类
   // =========================================================================
-  function openPlanConfigModal({ onSaved }) {
-    API.get('/orders/region-plans').then((data) => {
-      showPlanModal(data.plans || [], onSaved);
-    }).catch((e) => alert('加载方案失败: ' + e.message));
-  }
+  function openRegionUpdateModal() {
+    const old = document.getElementById('__dashUpdateModal');
+    if (old) old.remove();
 
-  function showPlanModal(plans, onSaved) {
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const now = new Date();
+    const today = now.getFullYear() + '-' + pad2(now.getMonth() + 1) + '-' + pad2(now.getDate());
+    const monthVal = document.querySelector('#dashMonth')?.value || '';
+    let defaultStart = today.slice(0, 7) + '-01';
+    let defaultEnd = today;
+    if (monthVal) {
+      defaultStart = monthVal + '-01';
+      const [y, m] = monthVal.split('-').map(Number);
+      defaultEnd = monthVal + '-' + pad2(new Date(y, m, 0).getDate());
+    }
+    if (defaultStart > today) defaultStart = today;
+    if (defaultEnd > today) defaultEnd = today;
+    if (defaultEnd < defaultStart) defaultEnd = defaultStart;
+
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.id = '__dashUpdateModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:#fff;border-radius:10px;width:960px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(0,0,0,.15);">
-        <div style="padding:16px 20px;border-bottom:1px solid #ebeef5;display:flex;justify-content:space-between;align-items:center;">
-          <h3 style="margin:0;font-size:16px;color:#303133;">⚙️ 偏远地区方案配置</h3>
-          <button id="pmClose" style="border:none;background:transparent;font-size:22px;cursor:pointer;color:#909399;">×</button>
+      <div style="background:#fff;border-radius:10px;width:100%;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,.2);">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ebeef5;">
+          <div style="font-size:16px;font-weight:700;color:#303133;">🔄 更新地区分类</div>
+          <button id="ruClose" style="background:none;border:none;font-size:22px;color:#909399;cursor:pointer;line-height:1;">×</button>
         </div>
-        <div style="padding:16px 20px;display:flex;gap:16px;flex:1;overflow:hidden;">
-          <!-- 左侧：方案列表 -->
-          <div style="flex:0 0 240px;border-right:1px solid #ebeef5;padding-right:16px;display:flex;flex-direction:column;">
-            <button id="pmNew" style="${BTN_PRIMARY};margin-bottom:12px;font-size:13px;">➕ 新建方案</button>
-            <div id="pmPlanList" style="flex:1;overflow:auto;"></div>
+        <div style="padding:18px 20px;">
+          <div style="font-size:13px;color:#606266;line-height:1.7;margin-bottom:14px;">
+            请选择需要更新的日期范围。系统将按最新的偏远地区设置，重新计算该周期内全部订单的地区分类，并同步刷新看板统计。
           </div>
-          <!-- 右侧：编辑区 -->
-          <div id="pmEditor" style="flex:1;overflow:auto;"></div>
+          <div style="display:flex;gap:12px;">
+            <label style="flex:1;display:flex;flex-direction:column;gap:6px;font-size:12px;color:#606266;">
+              开始日期
+              <input id="ruStart" type="date" max="${today}" value="${defaultStart}" style="padding:7px 10px;border:1px solid #dcdfe6;border-radius:4px;font-size:13px;box-sizing:border-box;">
+            </label>
+            <label style="flex:1;display:flex;flex-direction:column;gap:6px;font-size:12px;color:#606266;">
+              结束日期
+              <input id="ruEnd" type="date" max="${today}" value="${defaultEnd}" style="padding:7px 10px;border:1px solid #dcdfe6;border-radius:4px;font-size:13px;box-sizing:border-box;">
+            </label>
+          </div>
+          <div id="ruRulesInfo" style="margin-top:12px;padding:8px 12px;border-radius:4px;font-size:12px;background:#f4f4f5;color:#909399;line-height:1.6;">⏳ 正在读取已配置的偏远地区规则...</div>
+          <div id="ruError" style="display:none;margin-top:12px;padding:8px 12px;background:#fef0f0;color:#f56c6c;border-radius:4px;font-size:13px;"></div>
         </div>
-      </div>
-    `;
+        <div style="padding:12px 20px;border-top:1px solid #ebeef5;display:flex;justify-content:flex-end;gap:10px;">
+          <button id="ruCancel" style="${BTN_GHOST}">取消</button>
+          <button id="ruSubmit" style="${BTN_PRIMARY}">确认更新</button>
+        </div>
+      </div>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('#pmClose').onclick = () => { overlay.remove(); };
 
-    const listEl = overlay.querySelector('#pmPlanList');
-    const editorEl = overlay.querySelector('#pmEditor');
-    let selectedPlanId = null;
+    const startEl = overlay.querySelector('#ruStart');
+    const endEl = overlay.querySelector('#ruEnd');
+    const errEl = overlay.querySelector('#ruError');
+    const submitBtn = overlay.querySelector('#ruSubmit');
+    const cancelBtn = overlay.querySelector('#ruCancel');
+    const rulesInfoEl = overlay.querySelector('#ruRulesInfo');
+    let submitting = false;
 
-    function renderPlanList() {
-      listEl.innerHTML = plans.map((p) => `
-        <div data-id="${p.id}" class="pm-plan-item" style="padding:10px;border-radius:6px;cursor:pointer;margin-bottom:6px;border:1px solid transparent;font-size:13px;${selectedPlanId === p.id ? 'border-color:#409eff;background:#ecf5ff;' : 'border-color:#ebeef5;'}">
-          <div style="font-weight:600;color:#303133;">${p.is_default ? '★ ' : ''}${escapeHtml(p.name)}</div>
-          <div style="color:#909399;font-size:12px;margin-top:2px;">覆盖 ${p.override_count||0} 条规则</div>
-        </div>
-      `).join('') || '<div style="color:#909399;font-size:13px;text-align:center;padding:20px;">暂无方案</div>';
-      listEl.querySelectorAll('.pm-plan-item').forEach((el) => {
-        el.onclick = () => { selectedPlanId = parseInt(el.dataset.id, 10); renderPlanList(); loadEditor(selectedPlanId); };
-      });
-    }
-
-    function loadEditor(id) {
-      const plan = plans.find((p) => p.id === id);
-      if (!plan) { editorEl.innerHTML = `<div style="color:#909399;padding:20px;text-align:center;font-size:13px;">从左侧选择一个方案，或新建方案开始编辑</div>`; return; }
-
-      API.get(`/orders/region-plans/${id}/overrides`).then((data) => {
-        renderEditor(data.plan, data.overrides || []);
-      }).catch((e) => { editorEl.innerHTML = `❌ ${e.message}`; });
-    }
-
-    function renderEditor(plan, overrides) {
-      const overridesList = [...overrides];
-      const saveableCls = ['大偏远', '小偏远', '正常'];
-
-      const html = `
-        <div style="margin-bottom:16px;">
-          <label style="display:block;font-size:13px;color:#606266;margin-bottom:4px;">方案名称</label>
-          <input id="pmEdName" value="${escapeHtml(plan.name)}" style="width:100%;padding:8px;border:1px solid #dcdfe6;border-radius:4px;font-size:14px;">
-        </div>
-        <div style="margin-bottom:16px;">
-          <label style="display:block;font-size:13px;color:#606266;margin-bottom:4px;">方案描述（选填）</label>
-          <textarea id="pmEdDesc" rows="2" style="width:100%;padding:8px;border:1px solid #dcdfe6;border-radius:4px;font-size:13px;">${escapeHtml(plan.description || '')}</textarea>
-        </div>
-        <div style="display:flex;gap:10px;margin-bottom:16px;">
-          ${plan.is_default
-            ? '<span style="color:#e6a23c;font-size:12px;padding:3px 10px;background:#fdf6ec;border-radius:3px;">★ 默认方案</span>'
-            : `<button id="pmSetDef" style="${BTN_GHOST};padding:4px 12px;font-size:12px;">设为默认</button>
-               <button id="pmDelete" style="background:#fff;color:#f56c6c;border:1px solid #f56c6c;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;">删除方案</button>`}
-        </div>
-
-        <div style="margin-top:16px;border-top:1px solid #ebeef5;padding-top:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <div style="font-size:14px;font-weight:600;color:#303133;">📍 省份覆盖规则</div>
-            <button id="pmAddRow" style="${BTN_GHOST};padding:4px 12px;font-size:12px;">➕ 新增规则</button>
-          </div>
-          <div style="color:#909399;font-size:12px;margin-bottom:10px;">
-            💡 为方案添加的覆盖规则会优先于系统内置的 shentong_region_class。未覆盖的省份/城市继续使用默认判定。
-          </div>
-          <div id="pmOverridesWrap"></div>
-        </div>
-
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #ebeef5;">
-          <button id="pmCancel" style="${BTN_GHOST}">取消</button>
-          <button id="pmSave" style="${BTN_PRIMARY}">💾 保存方案</button>
-        </div>
-      `;
-      editorEl.innerHTML = html;
-
-      function renderOverrideRows() {
-        const wrap = editorEl.querySelector('#pmOverridesWrap');
-        if (!overridesList.length) {
-          wrap.innerHTML = `<div style="color:#909399;padding:16px;text-align:center;border:1px dashed #dcdfe6;border-radius:6px;font-size:13px;">暂无覆盖规则，点击「➕ 新增规则」添加</div>`; return;
-        }
-        wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead style="background:#f5f7fa;"><tr>
-            <th style="padding:6px;border:1px solid #ebeef5;text-align:left;">省份</th>
-            <th style="padding:6px;border:1px solid #ebeef5;text-align:left;">城市（可空=全省）</th>
-            <th style="padding:6px;border:1px solid #ebeef5;text-align:left;">分类</th>
-            <th style="padding:6px;border:1px solid #ebeef5;width:60px;"></th>
-          </tr></thead>
-          <tbody>${overridesList.map((o, idx) => `
-            <tr data-idx="${idx}">
-              <td style="padding:4px;border:1px solid #ebeef5;"><input class="ov-prov" value="${escapeHtml(o.province)}" style="width:100%;padding:4px;border:1px solid #dcdfe6;border-radius:3px;font-size:13px;"></td>
-              <td style="padding:4px;border:1px solid #ebeef5;"><input class="ov-city" value="${escapeHtml(o.city||'')}" placeholder="不填=全省" style="width:100%;padding:4px;border:1px solid #dcdfe6;border-radius:3px;font-size:13px;"></td>
-              <td style="padding:4px;border:1px solid #ebeef5;">
-                <select class="ov-cls" style="width:100%;padding:4px;border:1px solid #dcdfe6;border-radius:3px;font-size:13px;">
-                  ${saveableCls.map((c) => `<option value="${c}" ${o.region_class===c?'selected':''}>${c}</option>`).join('')}
-                </select>
-              </td>
-              <td style="padding:4px;border:1px solid #ebeef5;text-align:center;">
-                <button class="ov-del" data-idx="${idx}" style="border:none;background:transparent;color:#f56c6c;cursor:pointer;font-size:13px;">🗑️</button>
-              </td>
-            </tr>
-          `).join('')}</tbody>
-        </table>`;
-        wrap.querySelectorAll('.ov-del').forEach((b) => {
-          b.onclick = () => { overridesList.splice(parseInt(b.dataset.idx,10),1); renderOverrideRows(); };
-        });
+    // 展示当前已保存的偏远地区规则，避免「没配置规则却以为更新没生效」
+    API.get('/settings/region-rules/carriers').then((r) => {
+      const configured = (r.carriers || []).filter((c) => c.hasConfig);
+      if (!configured.length) {
+        rulesInfoEl.style.background = '#fdf6ec';
+        rulesInfoEl.style.color = '#e6a23c';
+        rulesInfoEl.innerHTML = '⚠️ 当前尚未保存任何偏远地区规则，更新不会改变分类结果。请先到 <b>基础资料 → 系统设置 → 偏远地区设置</b> 配置并点击「保存配置」。';
+        return;
       }
-      renderOverrideRows();
+      const names = configured.map((c) => `${c.carrier}（${c.count} 个区域）`).join('、');
+      rulesInfoEl.innerHTML = `✅ 将按以下快递公司的规则重算：${names}`;
+    }).catch(() => {
+      rulesInfoEl.style.display = 'none';
+    });
 
-      editorEl.querySelector('#pmAddRow').onclick = () => {
-        overridesList.push({ province: '', city: '', region_class: '正常' });
-        renderOverrideRows();
-      };
-      editorEl.querySelector('#pmCancel').onclick = () => { overlay.remove(); };
-      editorEl.querySelector('#pmSetDef')?.addEventListener('click', () => {
-        API.post(`/orders/region-plans/${plan.id}/default`).then(() => {
-          plans.forEach((p) => p.is_default = p.id === plan.id);
-          renderPlanList(); loadEditor(plan.id);
-        }).catch((e) => alert(e.message));
-      });
-      editorEl.querySelector('#pmDelete')?.addEventListener('click', () => {
-        if (!confirm(`确认删除方案「${plan.name}」？（默认方案不可删除）`)) return;
-        API.del(`/orders/region-plans/${plan.id}`).then(() => {
-          plans = plans.filter((p) => p.id !== plan.id);
-          selectedPlanId = null;
-          renderPlanList();
-          editorEl.innerHTML = `<div style="color:#909399;padding:20px;text-align:center;font-size:13px;">方案已删除</div>`;
-          if (onSaved) onSaved();
-        }).catch((e) => alert(e.message));
-      });
+    const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    const clearErr = () => { errEl.style.display = 'none'; };
 
-      editorEl.querySelector('#pmSave').onclick = () => {
-        const name = editorEl.querySelector('#pmEdName').value.trim();
-        const description = editorEl.querySelector('#pmEdDesc').value.trim();
-        const rows = editorEl.querySelectorAll('#pmOverridesWrap tbody tr');
-        const newOverrides = [];
-        rows.forEach((tr) => {
-          const prov = tr.querySelector('.ov-prov').value.trim();
-          const city = tr.querySelector('.ov-city').value.trim() || null;
-          const cls = tr.querySelector('.ov-cls').value;
-          if (prov) newOverrides.push({ province: prov, city, region_class: cls });
-        });
-        if (!name) { alert('方案名称不能为空'); return; }
-        API.put(`/orders/region-plans/${plan.id}`, { name, description, overrides: newOverrides }).then(() => {
-          // 刷新本地 plans
-          const defCnt = newOverrides.length;
-          const inList = plans.find((p) => p.id === plan.id);
-          if (inList) { inList.name = name; inList.description = description; inList.override_count = defCnt; }
-          renderPlanList();
-          alert('✅ 保存成功');
-          if (onSaved) onSaved();
-        }).catch((e) => alert('保存失败: ' + e.message));
-      };
+    function validate() {
+      const start = startEl.value;
+      const end = endEl.value;
+      if (!start || !end) return '请选择完整的开始日期和结束日期';
+      if (end < start) return '结束日期不能早于开始日期';
+      if (end > today) return '不能选择未来日期';
+      return '';
     }
 
-    overlay.querySelector('#pmNew').onclick = () => {
-      const name = prompt('请输入新方案名称：');
-      if (!name) return;
-      API.post('/orders/region-plans', { name, description: '' }).then((data) => {
-        plans.push({ id: data.id, name, is_default: 0, description: '', override_count: 0 });
-        selectedPlanId = data.id; renderPlanList(); loadEditor(data.id);
-      }).catch((e) => alert(e.message));
+    function close() {
+      if (submitting) return;
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    submitBtn.onclick = () => {
+      if (submitting) return;
+      clearErr();
+      const err = validate();
+      if (err) return showErr(err);
+
+      submitting = true;
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = '⏳ 更新中...';
+      submitBtn.style.opacity = '0.7';
+      startEl.disabled = true;
+      endEl.disabled = true;
+
+      API.post('/orders/region-recalc', { start: startEl.value, end: endEl.value })
+        .then((r) => {
+          overlay.remove();
+          document.removeEventListener('keydown', onKey);
+          const msg = r.total
+            ? '更新完成：共 ' + r.total + ' 单，其中 ' + r.updated + ' 单分类发生变化'
+            : '所选日期段内暂无订单';
+          if (window.ERP && window.ERP.toast) window.ERP.toast(msg, 'success');
+          else alert(msg);
+          refreshDashboard();
+        })
+        .catch((e) => {
+          submitting = false;
+          submitBtn.disabled = false;
+          cancelBtn.disabled = false;
+          submitBtn.textContent = '确认更新';
+          submitBtn.style.opacity = '1';
+          startEl.disabled = false;
+          endEl.disabled = false;
+          showErr('更新失败：' + (e.message || '请稍后重试'));
+        });
     };
 
-    // 默认选中第一个
-    const def = plans.find((p) => p.is_default) || plans[0];
-    if (def) { selectedPlanId = def.id; renderPlanList(); loadEditor(def.id); }
-    else renderPlanList();
+    overlay.querySelector('#ruClose').onclick = close;
+    cancelBtn.onclick = close;
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    document.addEventListener('keydown', onKey);
+    startEl.focus();
   }
+
+
 
   // ---------- 注册 ----------
   window.ERP_PAGES = window.ERP_PAGES || {};

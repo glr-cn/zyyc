@@ -203,6 +203,9 @@ function runMigrations() {
     require('./migrateAddOrderMenus').run(c, { verbose: true });
     require('./migrateOrderQueryMenu').run(c, { verbose: true });
     require('./migrateExpressWaybill').run(c, { verbose: true });
+    require('./migrateExpressRegion').run(c, { verbose: true });
+    // 发货单量整数化（四舍五入 + 派生字段重算；无小数时零改动）
+    require('./migrateShipOrdersInt').run(c, { verbose: true });
 
     // customers 异常预警
     try {

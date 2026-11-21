@@ -178,7 +178,23 @@ if (IS_DEV) {
     immutable: true,
     etag: true,
     lastModified: true,
-    setHeaders: function (res) {
+    setHeaders: function (res, filePath) {
+      // ★ 页面脚本加载器本身必须实时校验：它内部带 BUILD_VERSION，
+      //   若被长期缓存，后续所有版本更新都会失效
+      if (/_page_loader\.js$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        res.setHeader('Surrogate-Control', 'no-store');
+        return;
+      }
+      // ★ HTML 入口不缓存：否则发布后用户浏览器仍加载旧 app.html，
+      //   进而继续请求旧版本的 _page_loader.js / 页面脚本，看不到新功能
+      if (/\.html?$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+        return;
+      }
       res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, immutable');
       res.setHeader('Surrogate-Control', 'max-age=604800, stale-while-revalidate=86400');
       res.setHeader('X-Accel-Expires', '604800');  // 兼容 Nginx 代理层

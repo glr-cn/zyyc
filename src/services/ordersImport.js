@@ -15,6 +15,7 @@ const round3 = require('../utils/round');
 const { readRows, pick, parseDate } = require('../utils/excel');
 const auditLog = require('./auditLog');
 const expressMap = require('./expressMap');
+const expressRegion = require('./expressRegion');
 
 // ★ 本地今天（不受时区影响）—— 替代 new Date().toISOString().slice(0,10) 取 UTC 日期
 function localToday() {
@@ -185,7 +186,8 @@ const WMS_PLATFORMS = Object.keys(PLATFORM_COL_MAP);
 
 // ----------------------------------------------------------------------------
 // 2. 地区分类查询（import 时就算好写入 orders.region_class）
-// ----------------------------------------------------------------------------
+//    ★ 2026-11-20：优先按「快递公司」的偏远地区设置判定（大偏远 → 小偏远 → 正常），
+//      该公司未配置任何规则时回退系统内置 shentong 规则，保证历史行为不变。
 function classifyRegion(db, province, city) {
   if (!province) return '正常';
   // ① 精确命中 (省, 市)
@@ -261,6 +263,9 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
 
   // ★ 电子面单类型解析器（一次读取映射，循环内复用；编码 STO→申通快递，未知原样保留）
   const resolveWaybill = expressMap.createResolver(db);
+  // ★ 偏远地区规则解析器（按快递公司隔离；未配置的公司返回 null → 回退内置规则）
+  let resolveRegion = null;
+  try { resolveRegion = expressRegion.createResolver(db); } catch (e) { /* ignore */ }
 
   rows.forEach((rawRow, i) => {
     const excelRow = i + 2;
@@ -330,7 +335,10 @@ function processImport({ db, req, fileBuf, platform, manualColumnMap }) {
     if (!date) date = localToday();
 
     // 地区分类（就写 orders.region_class，不上报给前端）
-    const regionClass = classifyRegion(db, toProvince, toCity);
+    // 优先按快递公司偏远地区设置；未配置该快递公司时回退内置 shentong 规则
+    const regionClass = (resolveRegion && waybillType
+      ? resolveRegion(waybillType, toProvince, toCity, toDistrict)
+      : null) || classifyRegion(db, toProvince, toCity);
 
     successItems.push({
       excelRow, customerName, ownerName: finalOwner, orderNo,

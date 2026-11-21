@@ -16,6 +16,7 @@ const {
   processImport,
 } = require('../services/ordersImport');
 const ordersQuery = require('../services/ordersQuery');
+const expressRegion = require('../services/expressRegion');
 const auditLog = require('../services/auditLog');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -577,6 +578,45 @@ router.post('/import', auth, menuGate('orders_import'), upload.single('file'), (
   }
 });
 
+// POST /api/orders/region-recalc — 地区看板「更新」：按日期段重算地区分类
+// body: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
+// 单事务执行，失败自动回滚；仅更新分类发生变化的订单
+router.post('/region-recalc', auth, menuGate('orders_import'), (req, res) => {
+  const start = String((req.body && req.body.start) || '').trim();
+  const end = String((req.body && req.body.end) || '').trim();
+  const isDate = (s) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(s + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return false;
+    const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return ymd === s;
+  };
+  if (!isDate(start) || !isDate(end)) {
+    return res.status(400).json({ error: '请选择完整的开始日期和结束日期' });
+  }
+  if (end < start) {
+    return res.status(400).json({ error: '结束日期不能早于开始日期' });
+  }
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (end > today) {
+    return res.status(400).json({ error: '不能选择未来日期' });
+  }
+
+  try {
+    const r = expressRegion.recalcOrdersByRange(db, start, end);
+    auditLog.writeLog(req, {
+      table: 'orders', module: '地区看板', action: 'update',
+      targetId: `${start}~${end}`,
+      content: { op: 'region_recalc', start, end, total: r.total, updated: r.updated },
+    });
+    res.json({ ok: true, start, end, total: r.total, updated: r.updated });
+  } catch (e) {
+    console.error('[orders/region-recalc] 异常:', e);
+    res.status(500).json({ error: e.message || '更新失败，请稍后重试' });
+  }
+});
+
 // GET /api/orders/dashboard — 地区分类看板聚合（支持 plan 参数）
 // query: start, end, platform, class(大偏远/小偏远/正常), plan(方案 id)
 router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
@@ -591,6 +631,19 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
   if (start) { where.push('o.order_date >= ?'); params.push(start); }
   if (end)   { where.push('o.order_date <= ?'); params.push(end); }
   if (platform && platform !== '全部') { where.push('o.wms_platform = ?'); params.push(platform); }
+
+  // ★ 仅统计「已配置偏远地区规则」的快递公司；未配置规则的公司不参与地区看板
+  //   （避免同一省份因不同公司走不同规则而同时出现在多个分类）
+  let carrierScope = { filtered: false, carriers: [] };
+  try {
+    carrierScope.carriers = db.prepare(
+      'SELECT DISTINCT carrier FROM express_region_rules ORDER BY carrier'
+    ).all().map((r) => r.carrier);
+    if (carrierScope.carriers.length) {
+      carrierScope.filtered = true;
+      where.push('o.waybill_type IN (SELECT carrier FROM express_region_rules)');
+    }
+  } catch (e) { /* 规则表不存在时不过滤 */ }
   // 注意：class 过滤不写死 o.region_class，改由 effective_class CTE 处理
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
@@ -612,6 +665,7 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
         COALESCE(
           plan_exact.region_class,
           plan_prov.region_class,
+          CASE WHEN o.region_class IN ('大偏远','小偏远','正常','其他') THEN o.region_class END,
           st_exact.region_class,
           st_prov.region_class,
           '正常'
@@ -630,9 +684,10 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
   if (cls && ['大偏远', '小偏远', '正常'].includes(cls)) sqlParams.push(cls);
 
   try {
-    // 地区分类 × 平台聚合
+    // 地区分类 × 平台聚合（effectiveSQL 内层返回明细，此处显式 COUNT 聚合）
     const agg = db.prepare(`
-      ${effectiveSQL.includes('WHERE') ? effectiveSQL : effectiveSQL + ' WHERE 1=1'}
+      SELECT effective_class, wms_platform, COUNT(*) AS cnt
+      FROM (${effectiveSQL})
       GROUP BY effective_class, wms_platform
     `).all(...sqlParams);
 
@@ -642,7 +697,9 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
       FROM (
         WITH effective AS (
           SELECT o.*, o.to_province AS province,
-            COALESCE(plan_exact.region_class, plan_prov.region_class, st_exact.region_class, st_prov.region_class, '正常') AS effective_class
+            COALESCE(plan_exact.region_class, plan_prov.region_class,
+              CASE WHEN o.region_class IN ('大偏远','小偏远','正常','其他') THEN o.region_class END,
+              st_exact.region_class, st_prov.region_class, '正常') AS effective_class
           FROM orders o
           ${planExactJoin}
           ${planProvJoin}
@@ -662,7 +719,9 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
         SELECT o.order_id, o.order_no, o.owner_name, o.ship_quantity, o.unit,
                o.order_date, o.payment_status, o.wms_platform,
                o.to_province, o.to_city, c.company_name AS customer_name,
-               COALESCE(plan_exact.region_class, plan_prov.region_class, st_exact.region_class, st_prov.region_class, '正常') AS effective_class
+               COALESCE(plan_exact.region_class, plan_prov.region_class,
+                 CASE WHEN o.region_class IN ('大偏远','小偏远','正常','其他') THEN o.region_class END,
+                 st_exact.region_class, st_prov.region_class, '正常') AS effective_class
         FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
         ${planExactJoin}
         ${planProvJoin}
@@ -676,12 +735,12 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
       LIMIT 500
     `).all(...sqlParams);
 
-    // 汇总（3 类）
-    const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0 };
+    // 汇总（3 类 + 其他：快递公司正常区域配置为白名单时，未覆盖地区记「其他」）
+    const byClass = { '大偏远': 0, '小偏远': 0, '正常': 0, '其他': 0 };
     for (const r of agg) {
       if (byClass[r.effective_class] != null) byClass[r.effective_class] += r.cnt;
     }
-    const total = byClass['大偏远'] + byClass['小偏远'] + byClass['正常'];
+    const total = byClass['大偏远'] + byClass['小偏远'] + byClass['正常'] + byClass['其他'];
     const remoteTotal = byClass['大偏远'] + byClass['小偏远'];
 
     // 省份按地区分类聚合整理
@@ -704,6 +763,7 @@ router.get('/dashboard', auth, menuGate('orders_import'), (req, res) => {
       total,
       remote_total: remoteTotal,
       by_class: byClass,
+      carrier_scope: carrierScope,
       platform_list: WMS_PLATFORMS,
       platform_breakdown: agg,
       by_class_province: byClassProvince,

@@ -262,3 +262,19 @@ CREATE TABLE IF NOT EXISTS smart_quote_records (
 
 CREATE INDEX IF NOT EXISTS idx_sqr_batch ON smart_quote_records(batch_id);
 CREATE INDEX IF NOT EXISTS idx_sqr_so    ON smart_quote_records(so_no);
+
+-- 偏远地区设置：以快递公司为维度的大偏远 / 小偏远 / 正常区域
+--   * city/district 为空串表示「全省 / 全市」
+--   * 同一快递公司下，同一区域只能属于一个分类（服务层校验）
+CREATE TABLE IF NOT EXISTS express_region_rules (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  carrier      TEXT NOT NULL,
+  region_class TEXT NOT NULL CHECK(region_class IN ('大偏远','小偏远','正常')),
+  province     TEXT NOT NULL,
+  city         TEXT NOT NULL DEFAULT '',
+  district     TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE (carrier, region_class, province, city, district)
+);
+
+CREATE INDEX IF NOT EXISTS idx_express_region_carrier ON express_region_rules(carrier, region_class);

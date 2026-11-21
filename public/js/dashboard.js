@@ -437,9 +437,20 @@ function dashboardPage(host) {
     return (n > 0 ? '↑ ' : '↓ ') + Math.abs(n).toFixed(2) + '%';
   }
 
-  function exportExcel() {
+  async function exportExcel() {
     if (!state.data) { toast('请先刷新数据再导出', 'warn'); return; }
-    if (!window.XLSX) { toast('Excel 导出库未加载', 'err'); return; }
+    // ★ 懒加载 SheetJS：点导出时才拉取（首屏不加载 430KB 依赖）
+    if (!window.XLSX) {
+      if (!(window.ERP && window.ERP.ensureXlsx)) { toast('导出组件不可用，请刷新页面重试', 'err'); return; }
+      toast('正在加载导出组件…');
+      try {
+        await window.ERP.ensureXlsx();
+      } catch (e) {
+        toast('导出组件加载失败，请检查网络后重试', 'err');
+        return;
+      }
+      if (!window.XLSX) { toast('Excel 导出库未加载', 'err'); return; }
+    }
     const btn = $('dbExportXlsx');
     btn.disabled = true; btn.textContent = '导出中…';
 

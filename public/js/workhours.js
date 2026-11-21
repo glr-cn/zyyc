@@ -726,7 +726,7 @@ function createWorkhoursPage(warehouse) {
           <td>${r.line}</td>
           <td>${escapeHtml(r.date)}</td>
           <td>${escapeHtml(r.customer_name)}</td>
-          <td>${r.ship_orders}</td>
+          <td>${r.ship_orders == null || r.ship_orders === '' ? '-' : Math.round(Number(r.ship_orders))}</td>
           <td>${r.main_hours}</td>
           <td>${exTxt ? '<span class="cust-tag cust-tag-warn">' + (act === 'promote_pending' ? '未归档' : '归档') + '</span> ' + escapeHtml(exTxt) : '—'}</td>
           <td><span class="imp-action-tag ${cls}">${tag}</span></td>
@@ -1072,11 +1072,18 @@ function createWorkhoursPage(warehouse) {
       if (sel) sel.onchange = (e) => { state.pageSize = Number(e.target.value); state.page = 1; load(); };
     }
 
-    function trendCell(val, t) {
-      if (!t) return `<td class="num">${num(val)}</td>`;
+    function trendCell(val, t, fmt) {
+      const f = fmt || num;
+      if (!t) return `<td class="num">${f(val)}</td>`;
       const arrow = t.deltaPct == null ? '<span class="trend flat">—</span>'
         : `<span class="trend ${t.dir}">${t.dir === 'up' ? '▲' : t.dir === 'down' ? '▼' : '—'}${Math.abs(t.deltaPct).toFixed(1)}%</span>`;
-      return `<td class="num">${num(val)} ${arrow}</td>`;
+      return `<td class="num">${f(val)} ${arrow}</td>`;
+    }
+    // 发货单量整型格式化（禁止出现小数位）
+    function intFmt(x) {
+      if (x == null || x === '') return '-';
+      const n = Number(x);
+      return Number.isFinite(n) ? String(Math.round(n)) : '-';
     }
 
     // 缺口行单/件/箱单位下拉（行内编辑用）：sel 为空时给一个「—」占位，保持真正未选状态
@@ -1194,7 +1201,7 @@ function createWorkhoursPage(warehouse) {
           }
           if (col.key === 'other_hours') return `<td class="wh-input-cell"><input data-if="other_hours" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.other_hours)}" placeholder="请输入其他工时"></td>`;
           // —— 发货专属
-          if (col.key === 'ship_orders') return `<td class="wh-input-cell"><input data-if="ship_orders" class="wh-cell-num" type="number" step="0.001" min="0" value="${numVal(r.ship_orders)}" placeholder="请输入单量"></td>`;
+          if (col.key === 'ship_orders') return `<td class="wh-input-cell"><input data-if="ship_orders" class="wh-cell-num" type="number" step="1" min="1" max="1000000" value="${numVal(r.ship_orders)}" placeholder="请输入单量（整数）"></td>`;
           // —— 收货专属
           if (col.key === 'cartons')  {
             const ph = state.workType === '收货' ? '* 箱数（必填）' : '箱数';
@@ -1226,10 +1233,15 @@ function createWorkhoursPage(warehouse) {
           if (col.key === 'doc_cost' || col.key === 'unit_cost') return '<td class="muted">-</td>';
           return '<td class="muted">—</td>';
         }
-        if (col.trend && trend) return trendCell(r[col.key], trend[col.key]);
+        if (col.trend && trend) return trendCell(r[col.key], trend[col.key], col.key === 'ship_orders' ? intFmt : num);
         if (col.key === 'submitter') return `<td>${escapeHtml(r.submitter || '-')}</td>`;
         // 作业量可空：未录入显示 "-"，避免误显示 0.000
         if (col.key === 'workload') return `<td class="num">${r.workload != null ? num(r.workload) : '<span class="muted">-</span>'}</td>`;
+        // 发货单量：强制整数展示（历史数据/接口即使带小数也不显示小数位）
+        if (col.key === 'ship_orders') {
+          const sv = r.ship_orders;
+          return `<td class="num" data-out="ship_orders">${(sv == null || sv === '') ? '<span class="muted">-</span>' : Math.round(Number(sv))}</td>`;
+        }
         if (col.num) return `<td class="num">${num(r[col.key])}</td>`;
         if (col.key === 'customer_name') {
           const name = escapeHtml(r.customer_name == null ? '' : r.customer_name);
@@ -1547,9 +1559,20 @@ function createWorkhoursPage(warehouse) {
             }
           }
         } else if (type === '发货') {
-          const ship = Number(val('ship_orders')) || 0;
-          ok = (ship > 0) || (main > 0) || !!remark;
-          if (!ok) hint = '请至少填写发货单量、主工时或备注中的一项';
+          // ★ 发货单量：整数 + 范围校验（1 ~ 1,000,000），任何小数/0/负数/超上限一律拦截
+          const shipRaw = String(val('ship_orders')).trim();
+          const ship = Number(shipRaw) || 0;
+          let shipInvalid = '';
+          if (shipRaw !== '') {
+            if (!Number.isFinite(ship) || !Number.isInteger(ship)) shipInvalid = '发货单量必须为整数，不支持小数';
+            else if (ship < 1) shipInvalid = '发货单量必须大于 0（无单量请留空）';
+            else if (ship > 1000000) shipInvalid = '发货单量不能超过 1,000,000';
+          }
+          if (shipInvalid) { ok = false; hint = shipInvalid; }
+          else {
+            ok = (ship > 0) || (main > 0) || !!remark;
+            if (!ok) hint = '请至少填写发货单量、主工时或备注中的一项';
+          }
         }
         if (!ok) {
           if (explicit) { errAlert('校验未通过', hint); return false; }
@@ -1642,6 +1665,33 @@ function createWorkhoursPage(warehouse) {
         // 确保任何重渲染都不会丢失用户已填数据
         e.addEventListener('input', () => { syncBack(); recalc(); });
         e.addEventListener('change', () => { syncBack(); recalc(); });
+        // ★ 发货单量：实时整数校验（输入/失焦即时标红 + 明确提示；非法值阻止失焦自动保存）
+        if (type === '发货' && e.dataset && e.dataset.if === 'ship_orders') {
+          let lastWarned = '';
+          const checkShip = (showToast) => {
+            const raw = String(e.value || '').trim();
+            let msg = '';
+            if (raw !== '') {
+              const n = Number(raw);
+              if (!Number.isFinite(n) || !Number.isInteger(n)) msg = '发货单量必须为整数，不支持小数';
+              else if (n < 1) msg = '发货单量必须大于 0（无单量请留空）';
+              else if (n > 1000000) msg = '发货单量不能超过 1,000,000';
+            }
+            setCustomerInvalid(e, !!msg);
+            e.title = msg;
+            if (msg) tr.dataset.skipBlurSave = '1';
+            else if (tr.dataset.skipBlurSave === '1') delete tr.dataset.skipBlurSave;
+            if (msg && showToast && lastWarned !== raw) {
+              lastWarned = raw;
+              errAlert('发货单量校验失败', msg);
+            }
+            return !msg;
+          };
+          e.addEventListener('input', () => checkShip(false));
+          e.addEventListener('change', () => checkShip(true));
+          e.addEventListener('blur', () => checkShip(true));
+          checkShip(false);
+        }
         // ★ Bug#1 修复：收货 customer_name_cid 是 datalist input，value 存 label（客户名）。
         //   input 事件 → 遍历 datalist options 精确匹配 option.value（label），取 option.data-cid 写 dataset。
         //   写完 dataset 后再 syncBack 回写 state.lastRows。
@@ -1735,7 +1785,7 @@ function createWorkhoursPage(warehouse) {
         }
       }
       fields.push(`<label>日期*<input id="f_date" type="date" value="${escapeAttr(cur.date || preset.date || todayStr())}"></label>`);
-      if (workType === '发货') fields.push(`<label>发货单量*<input id="f_ship" type="number" step="0.001" min="0" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
+      if (workType === '发货') fields.push(`<label>发货单量*<input id="f_ship" type="number" step="1" min="1" max="1000000" value="${cur.ship_orders != null ? cur.ship_orders : ''}"></label>`);
       if (workType === '收货') {
         fields.push(`<label>箱数<input id="f_cartons" type="number" step="0.001" min="0" value="${cur.cartons != null ? cur.cartons : 0}"></label>`);
         fields.push(`<label>吨<input id="f_tons" type="number" step="0.001" min="0" value="${cur.tons != null ? cur.tons : 0}"></label>`);
@@ -1808,6 +1858,30 @@ function createWorkhoursPage(warehouse) {
         modal.querySelector('#f_extra').innerHTML = extra;
       }
       ['#f_main', '#f_other', '#f_ship', '#f_cartons'].forEach((sel) => { const el = modal.querySelector(sel); if (el) el.oninput = preview; });
+      // ★ 发货单量：弹窗内实时整数校验（标红 + 错误文案），非法值阻止保存
+      const shipInput = modal.querySelector('#f_ship');
+      const shipErrMsg = () => {
+        if (!shipInput) return '';
+        const raw = String(shipInput.value || '').trim();
+        if (raw === '') return '';
+        const n = Number(raw);
+        if (!Number.isFinite(n) || !Number.isInteger(n)) return '发货单量必须为整数，不支持小数';
+        if (n < 1) return '发货单量必须大于 0（无单量请留空）';
+        if (n > 1000000) return '发货单量不能超过 1,000,000';
+        return '';
+      };
+      if (shipInput) {
+        const check = () => {
+          const msg = shipErrMsg();
+          shipInput.classList.toggle('wh-cell-invalid', !!msg);
+          shipInput.title = msg;
+          const errEl = modal.querySelector('#f_err');
+          if (errEl && msg) errEl.textContent = msg;
+          else if (errEl && !msg && errEl.textContent && errEl.textContent.indexOf('发货单量') === 0) errEl.textContent = '';
+        };
+        shipInput.addEventListener('input', check);
+        shipInput.addEventListener('blur', check);
+      }
       preview();
 
       // ★ 修复：readonly「查看」模式下 saveBtn 已被移除，必须判空再绑定（否则点击查看即抛 TypeError）
@@ -1833,7 +1907,17 @@ function createWorkhoursPage(warehouse) {
           const wlEl = modal.querySelector('#f_workload');
           payload.workload = wlEl && String(wlEl.value).trim() !== '' ? Number(wlEl.value) : null;
         }
-        if (workType === '发货') payload.ship_orders = modal.querySelector('#f_ship').value;
+        if (workType === '发货') {
+          const shipMsg = shipErrMsg();
+          if (shipMsg) {
+            const ee = modal.querySelector('#f_err');
+            if (ee) ee.textContent = shipMsg;
+            errAlert('发货单量校验失败', shipMsg);
+            return;
+          }
+          const raw = String(modal.querySelector('#f_ship').value || '').trim();
+          payload.ship_orders = raw === '' ? null : Number(raw);
+        }
         if (workType === '收货') {
           payload.cartons = modal.querySelector('#f_cartons').value;
           payload.tons = modal.querySelector('#f_tons').value;
