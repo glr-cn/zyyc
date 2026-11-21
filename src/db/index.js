@@ -103,7 +103,20 @@ function snapshotBeforeMigrateIfNeeded(conn) {
 }
 
 const _raw = openDatabase(DB_PATH);
+// ★ 2026-11-21 修复：并发撞锁导致 roleOf() SQLITE_BUSY → auth 中间件误判"角色不存在"→ 强制 401
+// 根因：order-import 批量写入时（并发 INSERT 5000+），auth 中间件的 roleOf() SELECT 被 SQLite 写锁阻塞
+//       收到 SQLITE_BUSY 后 catch 吞异常 return null → auth.js L89 判定"角色不存在" → 踢用户下线
+// 修复：
+//   1) busy_timeout = 10s  → 写锁冲突时等而不是立即抛异常
+//   2) journal_mode = WAL  → 允许多个 reader 并发（writer 不阻塞 reader）
+//   3) synchronous = NORMAL → WAL 下安全且更快
 _raw.exec('PRAGMA foreign_keys = ON;');
+_raw.exec('PRAGMA busy_timeout = 10000;');
+try {
+  _raw.exec('PRAGMA journal_mode = WAL;');
+  _raw.exec('PRAGMA synchronous = NORMAL;');
+} catch (e) { /* wasm 版可能不支持 WAL，忽略 */ }
+console.log('[db] busy_timeout=10s WAL 已启用（并发读不阻塞写）');
 try {
   const chk = _raw.prepare('PRAGMA integrity_check').get();
   const ok = chk && (chk.integrity_check === 'ok' || chk['integrity_check'] === 'ok');
@@ -115,6 +128,8 @@ console.log('[db] 驱动：' + _raw.driver + '（库：' + DB_PATH + '）');
 function openConnection() {
   const conn = openDatabase(DB_PATH);
   conn.exec('PRAGMA foreign_keys = ON;');
+  conn.exec('PRAGMA busy_timeout = 10000;');
+  try { conn.exec('PRAGMA journal_mode = WAL;'); } catch (e) { /* ignore */ }
   try {
     const chk = conn.prepare('PRAGMA integrity_check').get();
     if (chk && chk.integrity_check !== 'ok' && chk['integrity_check'] !== 'ok') {

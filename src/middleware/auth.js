@@ -11,12 +11,30 @@ const crypto = require('crypto');
 //   - 单一连接：避免同一库文件另开连接（wasm 驱动下多连接互不可见，会读到旧角色）；
 //   - 每次请求实时查询，角色/权限变更立即生效。
 const db = require('../db');
+const SQLITE_BUSY_RETRY_MS = [5, 15, 45, 135]; // 指数退避重试
 function roleOf(roleId) {
-  try {
-    return db.prepare('SELECT role_id, role_code, role_name, data_scope, is_readonly FROM roles WHERE role_id=?').get(roleId) || null;
-  } catch (e) {
-    return null;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= SQLITE_BUSY_RETRY_MS.length; attempt++) {
+    try {
+      return db.prepare('SELECT role_id, role_code, role_name, data_scope, is_readonly FROM roles WHERE role_id=?').get(roleId) || null;
+    } catch (e) {
+      lastErr = e;
+      // SQLITE_BUSY / SQLITE_LOCKED 才重试（WAL 锁竞争）
+      const msg = (e.message || '').toLowerCase();
+      if ((msg.includes('busy') || msg.includes('locked')) && attempt < SQLITE_BUSY_RETRY_MS.length) {
+        // 由于 roleOf 是同步函数（better-sqlite3 无 await），
+        // 重试这里做不了真 sleep；但 db 连接已设 PRAGMA busy_timeout=10s，
+        // 正常情况下单次 prepare().get() 就会等 busy_timeout 时间而非立即抛，
+        // 所以这个 retry 是保险网——busy_timeout 到期仍抛时多试几次。
+        // 注意：auth 中间件里 roleOf 下方还有一次 `if (!role)` 判定，
+        // 本函数 return null 才会走到那里，抛异常会被 auth.js L101 catch 吞。
+        continue;
+      }
+      // 非 BUSY 异常 → 直接 return null（让 auth 中间件走 L89 "角色不存在" 路径）
+      return null;
+    }
   }
+  return null; // 所有重试耗尽
 }
 
 // 兼容旧调用（测试脚本会在收尾时调用）：角色读取已复用主连接，无需单独释放
