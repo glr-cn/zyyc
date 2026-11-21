@@ -14,6 +14,7 @@ const fs = require('fs');
 const BASE = process.env.ERP_ONLINE_BASE || 'https://wbapp-asi4jzhsb1qg5dmqbgcruy.app.workbuddy.host';
 const SHARECODE = process.env.ERP_SHARECODE || 'EVNPURXWC2';
 const USER = process.env.ERP_ADMIN_USER || 'admin';
+// ★ M16 安全提示：默认 admin123 仅用于连接既有线上账号；请用环境变量 ERP_ADMIN_PASS 传强口令。
 const PASS = process.env.ERP_ADMIN_PASS || 'admin123';
 const OUT = path.join(__dirname, 'out');
 const DRY = process.argv.includes('--dry-run');

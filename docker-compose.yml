@@ -9,6 +9,8 @@ services:
       PORT: "3000"
       ERP_DB_PATH: /data/erp.db
       # 必须固定，否则每次重建容器会导致所有登录态失效
+      # ★ M16 安全警告：下方为占位默认值，正式部署前必须替换为长随机串
+      #   （如 openssl rand -hex 48），否则攻击者可伪造任意 JWT。
       ERP_JWT_SECRET: "please-change-me-to-a-long-random-string"
     volumes:
       - erp-data:/data

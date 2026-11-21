@@ -37,6 +37,7 @@ function arg(name, def) {
 }
 const BASE = (arg('base', process.env.ERP_BASE_URL || 'https://zyyc26.traesite.cn')).replace(/\/$/, '');
 const USER = arg('user', process.env.ERP_USER || 'admin');
+// ★ M16 安全提示：默认 admin123 仅用于连接既有线上账号；请用 --pass 或 ERP_PASS 传强口令。
 const PASS = arg('pass', process.env.ERP_PASS || 'admin123');
 
 const root = path.join(__dirname, '..');

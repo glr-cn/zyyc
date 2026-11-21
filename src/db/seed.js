@@ -51,8 +51,16 @@ function runSeed(db) {
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
     try {
       const bcrypt = require('bcryptjs');
+      // ★ 修复 M16（保守）：自举密码优先取环境变量 ERP_BOOTSTRAP_PASS；
+      //   未设置时仍用 admin123 保证全新库可启动，但打印醒目改密警告。
+      //   这里不强制随机密码，避免破坏依赖默认口令的首次登录/发布流程。
+      const bootstrapPass = process.env.ERP_BOOTSTRAP_PASS || 'admin123';
+      if (bootstrapPass === 'admin123') {
+        console.warn('[seed] ⚠️ 安全警告：首个管理员使用默认口令 admin123，请登录后立即改密；');
+        console.warn('[seed]    或在启动前设置环境变量 ERP_BOOTSTRAP_PASS 指定强口令。');
+      }
       db.prepare('INSERT INTO users (username,password_hash,display_name,role_id) VALUES (?,?,?,?)')
-        .run('admin', bcrypt.hashSync('admin123', 10), 'admin', superRole.role_id);
+        .run('admin', bcrypt.hashSync(bootstrapPass, 10), 'admin', superRole.role_id);
     } catch (e) {
       console.warn('[seed] 创建首个管理员失败（bcryptjs 未安装？）：', e.message);
     }

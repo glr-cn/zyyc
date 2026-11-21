@@ -62,6 +62,8 @@ const OPT = {
   skipTests: process.argv.includes('--skip-tests'),
   dryRun: process.argv.includes('--dry-run'),
   user: arg('user', process.env.ERP_ADMIN_USER || 'admin'),
+  // ★ M16 安全提示：默认 admin123 仅用于连接既有线上账号；请务必通过
+  //   --pass 或环境变量 ERP_ADMIN_PASS 显式传入强口令，且确保线上 admin 已改密。
   pass: arg('pass', process.env.ERP_ADMIN_PASS || 'admin123'),
 };
 
@@ -202,7 +204,9 @@ function fatal(msg) {
   const rb = spawnSync('robocopy', [
     ROOT, stage, '/E', '/NFL', '/NDL', '/NJH', '/NJS',
     '/XD', 'node_modules', '.git', 'dist', 'data', 'logs', '.workbuddy',
-    '/XF', '.env',
+    // ★ 修复 S12：排除密钥/数据库等敏感文件，避免打包进发布产物导致泄露。
+    //   data/ 目录已被 /XD 排除，这里再排除散落在根目录的密钥与备份文件。
+    '/XF', '.env', 'jwt.secret', '*.db', '*.db-wal', '*.db-shm', '*.db-journal', '*.bak', '*.snapshot',
   ], { encoding: 'utf8', timeout: 300000 });
   if (rb.status >= 8) fatal(`G5 robocopy 失败（exit=${rb.status}）`);
   fs.mkdirSync(path.join(stage, 'data'), { recursive: true });

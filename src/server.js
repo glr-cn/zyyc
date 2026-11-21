@@ -86,11 +86,18 @@ app.use(helmet({
 app.use(cors(IS_DEV
   ? { origin: true, credentials: true }  // dev: 允许任何 localhost 端口
   : {
-      origin: [
-        'https://wbapp-asi4jzhsb1qg5dmqbgcruy.app.workbuddy.host',
-        'https://*.workbuddy.host',
-        'https://*.traesite.cn',           // ★ TraeSite 新平台（2026-11-20 新增）
-      ],
+      // ★ 修复 M35：cors 包把 'https://*.xxx' 当字面字符串匹配，通配符从不生效，
+      //   导致所有真实子域（如 zyyc26.traesite.cn）拿不到 ACAO 头。改用正则动态校验。
+      //   允许任意级子域；非白名单来源返回 false（不设 CORS 头，由浏览器拦截），
+      //   不用 Error 以免把健康检查等同域/无来源请求误伤成 500。
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, true); // 同域 / curl / 健康检查等无 Origin 请求
+        const allowed =
+          origin === 'https://wbapp-asi4jzhsb1qg5dmqbgcruy.app.workbuddy.host' ||
+          /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workbuddy\.host$/i.test(origin) ||
+          /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.traesite\.cn$/i.test(origin);
+        return cb(null, allowed);
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-ERP-Token'],  // ★ X-ERP-Token 加入白名单

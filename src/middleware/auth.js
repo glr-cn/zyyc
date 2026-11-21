@@ -84,15 +84,18 @@ function auth(req, res, next) {
     const payload = jwt.verify(token, SECRET);
     // 按 role_id 实时刷新角色字段：管理员改权限/改角色后无需用户重登
     const role = roleOf(payload.role_id);
+    // ★ 修复 S10：角色被删/查库异常时原逻辑降级为 data_scope='all'+非只读，等于越权提权。
+    //   改为直接拒绝令牌，要求重新登录，杜绝无角色令牌获得全局数据权限。
+    if (!role) return res.status(401).json({ error: '角色不存在或已失效，请重新登录' });
     req.user = {
       user_id: payload.user_id,
       username: payload.username,
       display_name: payload.display_name,
       role_id: payload.role_id,
-      role: role ? role.role_name : (payload.role || ''),
-      role_code: role ? role.role_code : '',
-      data_scope: role ? role.data_scope : 'all',
-      is_readonly: role ? role.is_readonly : 0,
+      role: role.role_name,
+      role_code: role.role_code,
+      data_scope: role.data_scope,
+      is_readonly: role.is_readonly,
     };
     next();
   } catch (e) {
