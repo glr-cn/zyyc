@@ -36,7 +36,7 @@ function markApplied(db) {
     .run(FINGERPRINT_NAME);
 }
 
-// orders 表完整 schema（来自 schema.sql + migrateOrdersRegion 扩的 4 列 + migrateCustomersRemoveUnique 扩的 4 列）
+// orders 表完整 schema（来自 schema.sql 11 列 + migrateOrdersRegion 追加 4 列 = 15 列）
 // 去掉所有 FOREIGN KEY 约束（REFERENCES ... 子句）
 const ORDERS_SCHEMA = `
 CREATE TABLE orders (
@@ -48,6 +48,7 @@ CREATE TABLE orders (
   unit              TEXT,
   order_date        TEXT NOT NULL,
   payment_status    TEXT,
+  waybill_type      TEXT,
   owner_user_id     INTEGER,
   wms_platform      TEXT,
   to_province       TEXT,
@@ -61,12 +62,28 @@ function run(db, { verbose = false } = {}) {
   if (isApplied(db)) { log('已迁移过，跳过'); return { skipped: true }; }
   if (!tableExists(db, 'orders')) { markApplied(db); return { skipped: true, reason: 'no_orders' }; }
 
+  const beforeCount = db.prepare('SELECT COUNT(*) c FROM orders').get().c;
+
+  // 空库防御：如果 orders 是空表，且现有列数与 ORDERS_SCHEMA 不一致
+  // （典型场景：schema.sql 建的 11 列 vs ORDERS_SCHEMA 硬编码 14 列），
+  // 直接标记已应用。空表本来就没 FK 要移除，也不需要重建。
+  // 真正的 FK 约束会在 schema.sql 里被后续的 ALTER TABLE ... DROP CONSTRAINT
+  // 或者 migrateOrdersRegion 追加列后再由下一次重建时去掉。
+  if (beforeCount === 0) {
+    const have = db.prepare("SELECT GROUP_CONCAT(name,',') AS cols FROM pragma_table_info('orders')").get().cols;
+    const wantCols = ORDERS_SCHEMA.match(/^\s+\w+/gm).map(s => s.trim()).join(',');
+    if (have !== wantCols) {
+      log('空库防御：orders 列数/顺序与 ORDERS_SCHEMA 不一致，直接标记已应用');
+      markApplied(db);
+      return { skipped: true, reason: 'empty_mismatch' };
+    }
+  }
+
   // 前置防御：如果 orders 已经没 FK 了（比如迁移脚本已跑 fingerprint 丢了），直接标记
   const fks = db.prepare("SELECT * FROM pragma_foreign_key_list('orders')").all();
   if (!fks.length) { log('orders 已无 FK，直接标记'); markApplied(db); return { skipped: true, reason: 'no_fks' }; }
 
   log('迁移前 FK 数:', fks.length, fks.map(f => f.from + '→' + f.table).join(', '));
-  const beforeCount = db.prepare('SELECT COUNT(*) c FROM orders').get().c;
   log('迁移前行数:', beforeCount);
 
   db.exec('BEGIN');

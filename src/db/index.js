@@ -171,6 +171,26 @@ _conn.exec(schema);
 // ============================================================================
 function runMigrations() {
   const c = _conn;
+  // ★ 种子必须在 try-catch 外执行：哪怕中间某个迁移崩了（如 migrateOrdersRemoveFk
+  //   对空库列数不匹配时），admin 角色和 users 种子也不能被跳过——那会让登录页全部失效
+  try {
+    // 角色种子（仅首次）
+    const roleCount = c.prepare('SELECT COUNT(*) AS c FROM roles').get().c;
+    if (roleCount === 0) {
+      const insert = c.prepare('INSERT INTO roles (role_code, role_name, description, data_scope, is_readonly, is_system, sort) VALUES (?,?,?,?,?,?,?)');
+      insert.run('admin', '管理员', '系统管理', 'all', 0, 1, 1);
+      insert.run('operator', '业务员', '仅本人数据', 'self', 0, 1, 2);
+      insert.run('viewer', '查看者', '只读角色', 'all', 1, 1, 3);
+      console.log('[db-seed] ✅ 角色种子已写入（首次启动）');
+    }
+    // 自举种子（admin 用户 + 菜单树等）
+    require('./seed').runSeed(c);
+  } catch (e) {
+    console.error('[db-seed] ❌ 种子写入失败：', e.message);
+    // 继续跑——迁移脚本即使在没种子的情况下也会 markApplied，
+    // 下次 server 启动时 trySelfHeal / snapshotBeforeMigrateIfNeeded 不依赖种子
+  }
+
   try {
     require('./migrateAuditLogs').run(c);
     require('./migrateCustomerLink').run(c);
@@ -183,22 +203,18 @@ function runMigrations() {
     require('./migrateWscRemoveFk').run(c, { verbose: true });
     require('./migrateRemoveStockMenus').run(c, { verbose: true });
     require('./migrateOrdersRegion').run(c, { verbose: true });
-    require('./migrateOrdersRemoveFk').run(c, { verbose: true });
     require('./migrateInvRemoveFk').run(c, { verbose: true });
+    // ★ ordersRemoveFk 必须在 ordersRegion 之后：
+    //   ordersRegion 给 orders 追加 wms_platform/to_province/to_city/region_class 4 列
+    //   ordersRemoveFk 的 ORDERS_SCHEMA 硬编码完整 15 列来重建 orders_new
+    require('./migrateOrdersRemoveFk').run(c, { verbose: true });
     c.exec(`CREATE INDEX IF NOT EXISTS idx_wh_lookup ON work_hours(warehouse, work_type, customer_id, date, status)`);
     console.log('[db-migrate] 覆盖索引 idx_wh_lookup 已就绪');
 
-    // 角色种子（仅首次）
-    const roleCount = c.prepare('SELECT COUNT(*) AS c FROM roles').get().c;
-    if (roleCount === 0) {
-      const insert = c.prepare('INSERT INTO roles (role_code, role_name, description, data_scope, is_readonly, is_system, sort) VALUES (?,?,?,?,?,?,?)');
-      insert.run('admin', '管理员', '系统管理', 'all', 0, 1, 1);
-      insert.run('operator', '业务员', '仅本人数据', 'self', 0, 1, 2);
-      insert.run('viewer', '查看者', '只读角色', 'all', 1, 1, 3);
-    }
+    // 角色种子 + seed.runSeed 已在上面的独立 try 块里执行（空库自愈的必需前置）
+    // 这里不再重复插入，避免中间迁移崩了就把 admin 种子也吞了
 
-    // 自举种子 + 菜单迁移
-    require('./seed').runSeed(c);
+    // 菜单迁移（依赖上面种子已写入 roles/users/menus 基础表）
     require('./migrateDashboardSubmenus').run(c, { verbose: true });
     require('./migrateAddOrderMenus').run(c, { verbose: true });
     require('./migrateOrderQueryMenu').run(c, { verbose: true });
