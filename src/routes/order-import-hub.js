@@ -101,7 +101,7 @@ function importBuffer(buf, fileName, operator, t0) {
 
   const resolveRule = expressRegion.createResolver(db);
   const legacy = makeLegacy();
-  let inserted = 0, skipped = 0, failed = 0;
+  let inserted = 0, skipped = 0, failed = 0, filtered = 0;
   const sheetStats = [];
   // seen: dedupKey → 首次出现的 {sheet,row,waybill}，用于生成精确的重复原因
   const seen = new Map();
@@ -125,7 +125,8 @@ function importBuffer(buf, fileName, operator, t0) {
     for (const sheet of withData) {
       const platform = hub.detectPlatform(sheet.sheetName, sheet.headers) || sheet.sheetName || '未知';
       const col = hub.buildColumnMap(sheet.headers, platform);
-      let sIns = 0, sSkip = 0, sFail = 0;
+      const rule = hub.PLATFORM_RULES[platform] || {};
+      let sIns = 0, sSkip = 0, sFail = 0, sFilter = 0;
       for (let rowIdx = 0; rowIdx < sheet.rows.length; rowIdx++) {
         const arr = sheet.rows[rowIdx];
         const excelRow = rowIdx + 2; // 表头占第 1 行
@@ -143,19 +144,33 @@ function importBuffer(buf, fileName, operator, t0) {
         let rawJson = '';
         try { rawJson = JSON.stringify(sample); } catch (e) { rawJson = ''; }
 
+        // ① 平台状态过滤（风速类型/吉客云状态/快麦·聚水潭单号状态）
+        if (rule.filter) {
+          const f = rule.filter;
+          const val = hub.rawByHeader(sheet.headers, arr, f.field);
+          if (!f.allow.includes(val)) {
+            sFilter++; filtered++;
+            reject(platform, sheet.sheetName, excelRow, 'filtered',
+              `${f.field}为「${val || '空'}」，仅统计 ${f.allow.join('/')}`, waybill, ownerName, rawJson);
+            continue;
+          }
+        }
+
         if (!waybill && !ownerName) {
           sFail++; failed++;
           reject(platform, sheet.sheetName, excelRow, 'empty',
             '快递单号与货主名称均为空，无法定位订单', waybill, ownerName, rawJson);
           continue;
         }
-        const dedupKey = waybill ? 'W:' + waybill
+        // ② 去重 key：百世附加「订单号」(SO单号)——同单号不同订单号视为新订单
+        const extra = rule.dedupKeyExtra ? hub.rawByHeader(sheet.headers, arr, rule.dedupKeyExtra) : '';
+        const dedupKey = waybill ? 'W:' + waybill + '|' + extra
           : `R:${platform}|${ownerName}|${get('receiver_address')}|${get('order_date')}`;
         if (seen.has(dedupKey)) {
           sSkip++; skipped++;
           const first = seen.get(dedupKey);
           const reason = waybill
-            ? `快递单号「${waybill}」在本批次重复，首次出现于 ${first.sheet} 第 ${first.row} 行`
+            ? `快递单号「${waybill}」${extra ? `（${rule.dedupKeyExtra}=${extra}）` : ''}在本批次重复，首次出现于 ${first.sheet} 第 ${first.row} 行`
             : `同平台/货主/地址/日期组合重复，首次出现于 ${first.sheet} 第 ${first.row} 行`;
           reject(platform, sheet.sheetName, excelRow, 'duplicate', reason, waybill, ownerName, rawJson);
           continue;
@@ -182,7 +197,7 @@ function importBuffer(buf, fileName, operator, t0) {
       sheetStats.push({
         sheet: sheet.sheetName, platform,
         detectedColumns: Object.keys(col).length,
-        total: sheet.rows.length, inserted: sIns, skipped: sSkip, failed: sFail,
+        total: sheet.rows.length, inserted: sIns, skipped: sSkip, failed: sFail, filtered: sFilter,
       });
     }
     db.prepare('UPDATE oih_batches SET inserted_rows=?,skipped_rows=?,failed_rows=?,status=?,finished_at=datetime(\'now\',\'localtime\') WHERE batch_id=?')
@@ -199,7 +214,7 @@ function importBuffer(buf, fileName, operator, t0) {
     ok: true,
     result: {
       batchId, fileName, platformCount: withData.length,
-      total: inserted + skipped + failed, inserted, skipped, failed,
+      total: inserted + skipped + failed + filtered, inserted, skipped, failed, filtered,
       elapsedMs: Date.now() - t0, sheets: sheetStats,
     },
   };
@@ -432,7 +447,7 @@ router.get('/rejects/export', auth, gate, (req, res) => {
       FROM oih_rejects ${sqlWhere} ORDER BY batch_id DESC, reject_id ASC LIMIT 100000
     `).all(...args);
     const xlsx = require('xlsx');
-    const TYPE_LABEL = { duplicate: '重复跳过', empty: '空数据失败', write_error: '写入失败' };
+    const TYPE_LABEL = { duplicate: '重复跳过', filtered: '条件过滤', empty: '空数据失败', write_error: '写入失败' };
     const aoa = [['批次ID', '平台', '来源Sheet', 'Excel行号', '异常类型', '原因', '快递单号', '货主', '原始行数据']];
     rows.forEach((r) => aoa.push([
       r.batch_id, r.platform, r.sheet_name, r.excel_row, TYPE_LABEL[r.reason_type] || r.reason_type,

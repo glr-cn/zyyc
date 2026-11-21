@@ -143,6 +143,25 @@ const SUFFIX_WHITELIST = {
   receiver_address: ['地址', '详情'],
 };
 
+// ----------------------------------------------------------------------------
+// 平台导入判定规则（用户 2026-11-21 追加）
+//   filter: 仅统计指定列值在 allow 列表内的行（其余记为 filtered 跳过）
+//   dedupKeyExtra: 去重时附加的列（百世=订单号/S0单号：同单号不同订单号视为新订单）
+// ----------------------------------------------------------------------------
+const PLATFORM_RULES = {
+  '风速':   { filter: { field: '类型',     allow: ['获取'] } },
+  '吉客云': { filter: { field: '状态',     allow: ['已计费'] } },
+  '快麦':   { filter: { field: '单号状态', allow: ['正常'] } },
+  '聚水潭': { filter: { field: '单号状态', allow: ['正常'] } },
+  '百世':   { dedupKeyExtra: '订单号' },  // SO单号：同快递单号但订单号不同 → 新订单
+};
+
+// 从一行的原始表头中按精确列名取值（用于过滤/去重辅助列，不进入统一 schema）
+function rawByHeader(headers, arr, header) {
+  const idx = headers.findIndex((h) => String(h == null ? '' : h).trim() === header);
+  return idx >= 0 ? cellText(arr[idx]) : '';
+}
+
 // 快递公司规范化：编码 STO→申通快递；名称含「申通」统一为申通快递
 function normalizeCarrier(raw) {
   const s = String(raw == null ? '' : raw).trim();
@@ -339,5 +358,5 @@ module.exports = {
   PLATFORM_KEYS, PLATFORM_ALIASES, FIELD_ALIASES,
   detectPlatform, buildColumnMap, getField, normalizeCarrier, isShentong,
   resolveRegion, classify, readWorkbook, cellText, cellDate, cellNumber, normHeader,
-  PLATFORM_FIELD_MAP, parseAddressRegion,
+  PLATFORM_FIELD_MAP, PLATFORM_RULES, rawByHeader, parseAddressRegion,
 };

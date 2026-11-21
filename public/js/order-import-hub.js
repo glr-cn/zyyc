@@ -27,8 +27,8 @@
   function openRejectsModal(batchId) {
     const old = document.getElementById('__oihRejectsModal');
     if (old) old.remove();
-    const TYPE_LABEL = { duplicate: '重复跳过', empty: '空数据失败', write_error: '写入失败' };
-    const TYPE_COLOR = { duplicate: '#e6a23c', empty: '#f56c6c', write_error: '#909399' };
+    const TYPE_LABEL = { duplicate: '重复跳过', filtered: '条件过滤', empty: '空数据失败', write_error: '写入失败' };
+    const TYPE_COLOR = { duplicate: '#e6a23c', filtered: '#909399', empty: '#f56c6c', write_error: '#c0c4cc' };
     const mask = document.createElement('div');
     mask.id = '__oihRejectsModal';
     mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -44,6 +44,7 @@
         <div style="padding:12px 20px;border-bottom:1px solid #f0f2f5;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <select id="__oihRejType" style="padding:6px 10px;border:1px solid #dcdfe6;border-radius:4px;font-size:13px;">
             <option value="全部">全部原因</option>
+            <option value="filtered">条件过滤</option>
             <option value="duplicate">重复跳过</option>
             <option value="empty">空数据失败</option>
             <option value="write_error">写入失败</option>
@@ -235,16 +236,19 @@
           <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:center;">${s.detectedColumns}</td>
           <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:right;">${s.total.toLocaleString()}</td>
           <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:right;color:#67c23a;">${s.inserted.toLocaleString()}</td>
+          <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:right;color:#909399;">${(s.filtered || 0).toLocaleString()}</td>
           <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:right;color:#e6a23c;">${s.skipped.toLocaleString()}</td>
           <td style="padding:6px 8px;border:1px solid #ebeef5;text-align:right;color:#f56c6c;">${s.failed.toLocaleString()}</td>
         </tr>`).join('');
+      const notImported = (r.skipped || 0) + (r.failed || 0) + (r.filtered || 0);
       result.innerHTML = `
         <div style="padding:12px 16px;background:#f0f9eb;border-left:4px solid #67c23a;border-radius:6px;margin-bottom:12px;">
           ✅ 导入完成：共 <b>${r.total.toLocaleString()}</b> 行，成功 <b style="color:#67c23a;">${r.inserted.toLocaleString()}</b>，
+          过滤(不符合统计条件) <b style="color:#909399;">${r.filtered || 0}</b>，
           跳过(重复) <b style="color:#e6a23c;">${r.skipped.toLocaleString()}</b>，失败 <b style="color:#f56c6c;">${r.failed.toLocaleString()}</b>，
           耗时 ${(r.elapsedMs / 1000).toFixed(1)}s
-          ${(r.skipped + r.failed) > 0 ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #c0c4cc;">
-            ⚠️ 有 ${(r.skipped + r.failed).toLocaleString()} 行未导入，
+          ${notImported > 0 ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #c0c4cc;">
+            ⚠️ 有 ${notImported.toLocaleString()} 行未导入，
             <a href="javascript:;" id="oihViewRejects" style="color:#409eff;font-weight:600;text-decoration:underline;">点击查看未导入原因（可下载明细）</a>
           </div>` : ''}
         </div>
@@ -252,8 +256,8 @@
         <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:#f5f7fa;">
           <th style="padding:7px 8px;border:1px solid #ebeef5;">Sheet</th><th style="padding:7px 8px;border:1px solid #ebeef5;">识别平台</th>
           <th style="padding:7px 8px;border:1px solid #ebeef5;">识别字段数</th><th style="padding:7px 8px;border:1px solid #ebeef5;">总行</th>
-          <th style="padding:7px 8px;border:1px solid #ebeef5;">成功</th><th style="padding:7px 8px;border:1px solid #ebeef5;">跳过</th>
-          <th style="padding:7px 8px;border:1px solid #ebeef5;">失败</th>
+          <th style="padding:7px 8px;border:1px solid #ebeef5;">成功</th><th style="padding:7px 8px;border:1px solid #ebeef5;">过滤</th>
+          <th style="padding:7px 8px;border:1px solid #ebeef5;">跳过</th><th style="padding:7px 8px;border:1px solid #ebeef5;">失败</th>
         </tr></thead><tbody>${sheets}</tbody></table></div>`;
       const viewLink = result.querySelector('#oihViewRejects');
       if (viewLink) viewLink.onclick = () => openRejectsModal(r.batchId);
