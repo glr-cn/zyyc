@@ -2,12 +2,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { execSync } = require('child_process');
 const compression = require('compression');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
-const apicache = require('apicache');
+// ★ C层：apicache 已移除（原配置从未挂载路由，属死代码；业务路由全部禁用应用层缓存）
 const logger = require('./utils/logger');
 const db = require('./db');
 
@@ -26,7 +28,8 @@ const smartQuoteRouter = require('./routes/smart-quote');
 const logsRouter = require('./routes/logs');
 const adminRouter = require('./routes/admin');
 const orderImportHubRouter = require('./routes/order-import-hub');
-const { getBuildInfo, injectToJson, getBuildVersion } = require('./version');
+// ★ C层：移除未使用的 injectToJson 导入（版本注入已在下方 39-49 行内联实现）
+const { getBuildInfo, getBuildVersion } = require('./version');
 
 const app = express();
 
@@ -59,6 +62,15 @@ app.get('/api/version', (req, res) => {
 const IS_DEV = process.env.NODE_ENV === 'development';
 const START_TIME = Date.now();
 process.env.START_TIME = String(START_TIME);
+
+// ★ 修复 S-H3：审计 IP 伪造防护。Express 默认不信任 X-Forwarded-For，req.ip 取真实 TCP 对等端。
+//   仅在明确配置可信代理跳数后，req.ip 才按 XFF 计算（取可信链最右侧客户端 IP）。
+//   默认 1 跳适配「平台网关 → 应用」形态；多层反代可用 ERP_TRUST_PROXY 调整，设为 0 则完全不信任。
+const TRUST_PROXY = process.env.ERP_TRUST_PROXY;
+if (TRUST_PROXY != null) {
+  app.set('trust proxy', Number(TRUST_PROXY));
+  console.log(`[security] trust proxy = ${TRUST_PROXY}（审计 IP 按可信代理链解析）`);
+}
 
 // ===========================================================
 // 【性能优化 1】gzip 压缩中间件
@@ -231,6 +243,9 @@ app.use('/api', (req, res, next) => {
 // ── 注意 ─────────────────────────────────────────────────────
 //   仅开发环境启用；生产环境此端点不存在（404），前端脚本也不会注入
 // ===========================================================
+// ★ 修复 A1：watcher 原声明在 if(IS_DEV) 块内，但 gracefulShutdown（块外）引用它，
+//   非 dev 模式下触发 ReferenceError（被 try/catch 吞掉，dev watcher 也无法正常关闭）。提升为模块作用域。
+let watcher = null;
 if (IS_DEV) {
   const clients = new Set();
   let reloadVersion = 0;  // 每次文件变更 +1，给前端做版本比对
@@ -262,7 +277,6 @@ if (IS_DEV) {
 
   // fs.watch 监控 public/ 目录（前端文件变更）
   const publicDir = STATIC_ROOT;
-  let watcher = null;
   try {
     // Windows 上 recursive 不影响，但 macOS 需要 Node 22+ 才支持；public 是单层目录所以 recursive=false 够用
     watcher = fs.watch(publicDir, { recursive: true }, (eventType, filename) => {
@@ -296,27 +310,8 @@ if (IS_DEV) {
   });
 }
 
-// ===========================================================
-// 【性能优化 5】API 路由级内存缓存 — apicache
-// ── 只缓存 GET 请求（写操作永远不缓存）
-// ── 缓存 key 包含 URL + Authorization（不同用户看到不同数据）
-// ── 开发环境完全禁用缓存（改了后端立刻生效）
-// ── analytics / dashboard / customers 这三类是高频读，缓存 2 分钟
-// ===========================================================
-apicache.options({
-  enabled: !IS_DEV,                    // dev 环境禁缓存
-  statusCodes: { include: [200] },     // 只缓存 200 响应
-  headers: {
-    'Cache-Control': 'public, max-age=120',  // 告诉浏览器也缓存 2 分钟
-  },
-  appendKey: (req, res) => {
-    // 不同 token 的用户数据不同 → 加进缓存 key
-    const token = req.headers.authorization || 'no-auth';
-    return '||' + token;
-  },
-});
-const cache2m = apicache.middleware('2 minutes');
-const cache5m = apicache.middleware('5 minutes');
+// ★ C层：删除 apicache 死配置（原 appendKey 只认 Authorization、漏 X-ERP-Token，
+//   且中间件从未挂载，属纯死代码。业务数据实时性更重要，应用层缓存已彻底禁用）。
 
 // API 路由（公开）
 app.use('/api/auth', authRouter);
@@ -368,6 +363,77 @@ function dbDiag() {
   return out;
 }
 
+// 磁盘使用诊断（探测持久目录所在文件系统的总容量/已用/可用）
+// 跨平台：Linux/macOS 用 df -Pk，Windows 用 PowerShell Get-PSDrive
+// 设计原则：探测失败不影响 health 主流程，disk 字段设为 { error: ... } 降级
+function diskDiag() {
+  const out = {};
+  const target = path.dirname(DB_PATH);  // 数据库所在目录
+  out.target = target;
+  out.homedir = os.homedir();
+  out.platform = os.platform();
+
+  try {
+    let total = 0, used = 0, avail = 0;
+
+    if (os.platform() === 'win32') {
+      // Windows：先从路径取盘符（如 C:\... → C:）
+      const drive = path.parse(target).root.slice(0, 2);  // "C:"
+      const cmd = `powershell -NoProfile -Command "(Get-PSDrive -Name '${drive[0]}').Used; (Get-PSDrive -Name '${drive[0]}').Free"`;
+      const result = execSync(cmd, { encoding: 'utf8', timeout: 3000 }).trim();
+      const parts = result.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        used = parseInt(parts[0], 10);
+        avail = parseInt(parts[1], 10);
+        total = used + avail;
+      }
+    } else {
+      // Linux/macOS：df -Pk 输出单位 KB
+      const cmd = `df -Pk "${target}"`;
+      const result = execSync(cmd, { encoding: 'utf8', timeout: 3000 }).trim();
+      const lines = result.split(/\r?\n/);
+      if (lines.length >= 2) {
+        const cols = lines[1].split(/\s+/);
+        // Filesystem 1024-blocks Used Available Capacity Mounted on
+        total = parseInt(cols[1], 10) * 1024;
+        used = parseInt(cols[2], 10) * 1024;
+        avail = parseInt(cols[3], 10) * 1024;
+      }
+    }
+
+    if (total > 0) {
+      out.totalBytes = total;
+      out.usedBytes = used;
+      out.availBytes = avail;
+      out.usedPercent = Math.round((used / total) * 100);
+      out.totalGB = +(total / 1024 ** 3).toFixed(2);
+      out.usedGB = +(used / 1024 ** 3).toFixed(2);
+      out.availGB = +(avail / 1024 ** 3).toFixed(2);
+    } else {
+      out.error = 'parse_failed';
+    }
+  } catch (e) {
+    out.error = e.message;
+  }
+
+  // 进程内存快照（轻量，无副作用）
+  try {
+    const mem = process.memoryUsage();
+    out.processMemMB = {
+      rss: +(mem.rss / 1024 / 1024).toFixed(1),
+      heapUsed: +(mem.heapUsed / 1024 / 1024).toFixed(1),
+      heapTotal: +(mem.heapTotal / 1024 / 1024).toFixed(1),
+    };
+    out.systemMemGB = {
+      total: +(os.totalmem() / 1024 ** 3).toFixed(2),
+      free: +(os.freemem() / 1024 ** 3).toFixed(2),
+    };
+    out.cpus = os.cpus().length;
+  } catch (e) { /* ignore */ }
+
+  return out;
+}
+
 app.get('/api/health', (req, res) => {
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -385,8 +451,9 @@ app.get('/api/health', (req, res) => {
     db: 'connected',
     env: IS_DEV ? 'development' : 'production',
     uptime: Date.now() - START_TIME,
-    tables, menuLogs, menuVersion: 3,
+    tables, menuLogs, menuVersion: 9,  // ★ 修复 A2：与 auth.js:40 / menu.js:127 的 MENU_SCHEMA_VERSION 保持一致（原陈旧值 3）
     ...dbDiag(),
+    disk: diskDiag(),
   });
 });
 
@@ -399,9 +466,12 @@ app.use((err, req, res, next) => {
   logger.error('api error', { method: req.method, url: req.originalUrl, status, message: err.message });
   console.error(`[error] ${req.method} ${req.originalUrl} -> ${status}:`, err.message);
   if (!res.headersSent) {
-    res.status(status).json({
-      error: (isParse ? '请求体不是合法 JSON：' : '服务器内部错误：') + err.message,
-    });
+    // ★ 修复 S-M8：5xx 不回显内部错误细节（可能含 SQL/路径/堆栈片段），只进服务端日志；
+    //   4xx（含请求体解析失败）保留明确文案便于前端提示。
+    const msg = status >= 500
+      ? '服务器内部错误，请稍后重试或联系管理员'
+      : (isParse ? '请求体不是合法 JSON：' : '请求失败：') + err.message;
+    res.status(status).json({ error: msg });
   }
 });
 
